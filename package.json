@@ -15,5 +15,13 @@
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "nodemonConfig": {
+    "ignore": [
+      "*.json",
+      "*.ini",
+      "conflitos.json",
+      "tabelas-config.json"
+    ]
   }
 }

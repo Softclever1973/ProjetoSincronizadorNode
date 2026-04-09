@@ -205,8 +205,14 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
   }
 
+  // Valida que cada coluna PK contém apenas letras, números e underscore
+  const pks = (Array.isArray(pk) ? pk : [pk]).map(p => String(p).trim());
+  const colunaInvalida = pks.find(p => !/^[A-Za-z_][A-Za-z0-9_]*$/.test(p));
+  if (colunaInvalida) {
+    return res.status(400).json({ message: `Nome de coluna inválido: '${colunaInvalida}'` });
+  }
+
   try {
-    const pks = Array.isArray(pk) ? pk : [pk];
     const rows = await withConnection((db) =>
       query(db,
         `SELECT FIRST ${limit} SKIP ${offset} * FROM ${nomeTabela} ORDER BY ${pks.join(', ')}`,

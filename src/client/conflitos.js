@@ -13,7 +13,9 @@ function lerTodos() {
 }
 
 function salvar(lista) {
-  fs.writeFileSync(ARQUIVO, JSON.stringify(lista, null, 2));
+  const tmp = ARQUIVO + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(lista, null, 2), 'utf8');
+  fs.renameSync(tmp, ARQUIVO);
 }
 
 /**
@@ -79,4 +81,30 @@ function resolverConflito(id, escolha) {
   return lista[idx];
 }
 
-module.exports = { salvarConflito, atualizarOuSalvarConflito, listarPendentes, resolverConflito, lerTodos };
+/**
+ * Persiste múltiplos conflitos de uma vez, otimizando o I/O.
+ */
+function salvarLoteConflitos(lote) {
+  const lista = lerTodos();
+  const IDs = [];
+
+  for (const c of lote) {
+    c.id = `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    c.resolvido = false;
+    c.criadoEm = new Date().toISOString();
+    lista.push(c);
+    IDs.push(c.id);
+  }
+
+  salvar(lista);
+  return IDs;
+}
+
+module.exports = { 
+  salvarConflito, 
+  atualizarOuSalvarConflito, 
+  salvarLoteConflitos,
+  listarPendentes, 
+  resolverConflito, 
+  lerTodos 
+};

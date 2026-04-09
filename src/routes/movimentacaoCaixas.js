@@ -52,11 +52,11 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
       [
         idMovCaixa,
         idLoja,
-        movCaixa.dataMov       || movCaixa.DATA_MOV,
-        movCaixa.tipo          || movCaixa.TIPO,
-        movCaixa.valor         || movCaixa.VALOR,
-        movCaixa.historico     || movCaixa.HISTORICO,
-        movCaixa.idConta       || movCaixa.ID_CONTA,
+        movCaixa.dataMov       ?? movCaixa.DATA_MOV,
+        movCaixa.tipo          ?? movCaixa.TIPO,
+        movCaixa.valor         ?? movCaixa.VALOR,
+        movCaixa.historico     ?? movCaixa.HISTORICO,
+        movCaixa.idConta       ?? movCaixa.ID_CONTA,
       ]
     );
 
