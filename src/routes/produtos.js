@@ -1,0 +1,137 @@
+const express = require('express');
+const router = express.Router();
+const auth = require('../middleware/auth');
+const { withConnection, getConnection, query, closeConnection } = require('../db');
+const { isFilialBloqueada } = require('../middleware/filialBloqueada');
+
+/**
+ * GET /datasnap/rest/TSMProdutos/ProdutosParaAtualizar
+ * Query params: token, idLoja, idUltimaAtualizacaoMatriz
+ *
+ * Equivalente a TSMProdutos.ProdutosParaAtualizar() do Delphi.
+ * Busca até 10 produtos alterados e substitui o preço pelo preço específico da loja.
+ */
+router.get('/ProdutosParaAtualizar', auth, async (req, res) => {
+  const idLoja = parseInt(req.query.idLoja, 10);
+  const idUltimaAtualizacaoMatriz = parseInt(req.query.idUltimaAtualizacaoMatriz, 10) || 0;
+
+  if (!idLoja) {
+    return res.status(400).json({
+      message: 'Ocorreu um erro ao tentar listar os registros para atualizar pois o campo idLoja não foi informado',
+    });
+  }
+
+  const db = await getConnection();
+  try {
+    if (await isFilialBloqueada(idLoja, db)) {
+      return res.status(401).send();
+    }
+
+    const produtos = await query(
+      db,
+      `SELECT FIRST 10 * FROM PRODUTOS
+       WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
+         AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?
+       ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ`,
+      [idUltimaAtualizacaoMatriz]
+    );
+
+    // Substitui preço de venda pelo preço específico da loja (PRODUTOS_PRECOS_LOJAS)
+    // Se a tabela não existir ou não tiver a coluna, segue com o preço padrão
+    for (const produto of produtos) {
+      try {
+        const precoLoja = await query(
+          db,
+          `SELECT PRECO FROM PRODUTOS_PRECOS_LOJAS
+           WHERE ID_PRODUTO = ? AND ID_LOJA = ?`,
+          [produto.ID_PRODUTO, idLoja]
+        );
+
+        if (precoLoja.length > 0) {
+          produto.PRECO_VENDA = precoLoja[0].PRECO;
+        }
+      } catch {
+        // Tabela ou coluna inexistente — usa preço padrão do produto
+      }
+    }
+
+    res.json(produtos);
+  } catch (e) {
+    res.status(400).json({
+      message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
+    });
+  } finally {
+    await closeConnection(db);
+  }
+});
+
+/**
+ * GET /datasnap/rest/TSMProdutos/getCountProdutosParaSincronizar
+ * Query params: token, idLoja, idUltAtt (opcional)
+ *
+ * Equivalente a TSMProdutos.getCountProdutosParaSincronizar() do Delphi.
+ */
+router.get('/getCountProdutosParaSincronizar', auth, async (req, res) => {
+  const idLoja = parseInt(req.query.idLoja, 10);
+
+  if (!idLoja) {
+    return res.status(400).json({
+      message: 'Ocorreu um erro ao tentar listar os registros pois o campo idLoja não foi informado',
+    });
+  }
+
+  try {
+    let sql = 'SELECT COUNT(*) AS TOTAL FROM PRODUTOS WHERE 1=1';
+    const params = [];
+
+    if (req.query.idUltAtt) {
+      sql += ' AND ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?';
+      params.push(parseInt(req.query.idUltAtt, 10));
+    }
+
+    const rows = await withConnection((db) => query(db, sql, params));
+    res.json({ total: rows[0]?.TOTAL ?? 0 });
+  } catch (e) {
+    res.status(400).json({
+      message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
+    });
+  }
+});
+
+/**
+ * GET /datasnap/rest/TSMProdutos/getProdutosSincronizadosByFilial
+ * Query params: token, idLoja, situacao (opcional)
+ *
+ * Equivalente a TSMProdutos.getProdutosSincronizadosByFilial() do Delphi.
+ * Retorna apenas o campo CODIGO dos produtos.
+ */
+router.get('/getProdutosSincronizadosByFilial', auth, async (req, res) => {
+  const idLoja = parseInt(req.query.idLoja, 10);
+
+  if (!idLoja) {
+    return res.status(400).json({
+      message: 'Ocorreu um erro ao tentar listar os registros pois o campo idLoja não foi informado',
+    });
+  }
+
+  try {
+    let sql = `SELECT CODIGO FROM PRODUTOS WHERE CODIGO <> ''`;
+    const params = [];
+
+    if (req.query.situacao) {
+      sql += ' AND SITUACAO = ?';
+      params.push(req.query.situacao);
+    }
+
+    sql += ' ORDER BY ID_PRODUTO DESC';
+
+    const rows = await withConnection((db) => query(db, sql, params));
+    res.json(rows.map((r) => ({ codigo: r.CODIGO })));
+  } catch (e) {
+    res.status(400).json({
+      message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
+    });
+  }
+});
+
+module.exports = router;

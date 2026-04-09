@@ -1,0 +1,20 @@
+# Dependências
+node_modules/
+
+# Configuração local (contém caminhos e credenciais da instalação)
+sirius.ini
+sirius-client.ini
+
+# Estado de sincronização (gerado em runtime, específico por instalação)
+conflitos.json
+tabelas-config.json
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema operacional
+.DS_Store
+Thumbs.db
+
+CLAUDE.md

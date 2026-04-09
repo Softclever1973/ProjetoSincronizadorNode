@@ -1,0 +1,19 @@
+{
+  "name": "projeto-sincronizador-node",
+  "version": "1.0.0",
+  "description": "Servidor de sincronização Firebird matriz/filiais",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "client": "node src/client/index.js",
+    "client:dev": "nodemon src/client/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "node-firebird": "^1.1.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  }
+}
