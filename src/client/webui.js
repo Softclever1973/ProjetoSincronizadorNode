@@ -47,10 +47,20 @@ const COLUNAS_IGNORADAS_AUDITORIA = new Set([
   'DATA_INCLUSAO_SIRIUS',
   'DATA_ALTERACAO_SIRIUS',
   'ULTIMA_ALTERACAO',
+  'DATA_PRECO_VENDA',
+  'DATA_ULTIMA_ATUAL_IMP_ENTRADA',
+  'DATA_PRECO_CUSTO',
 ]);
 
 function isColunaIgnorada(coluna) {
   return COLUNAS_IGNORADAS_AUDITORIA.has((coluna ?? '').toUpperCase());
+}
+
+function normalizarBlobs(row) {
+  if (!row || typeof row !== 'object') return row;
+  return Object.fromEntries(
+    Object.entries(row).map(([k, v]) => [k, typeof v === 'function' ? null : v])
+  );
 }
 
 function getJSON(url) {
@@ -113,8 +123,10 @@ function html(body) {
     button { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
     .btn-local    { background: #3498db; color: white; }
     .btn-servidor { background: #e67e22; color: white; }
+    .btn-mesclar  { background: #8e44ad; color: white; }
     .btn-local:hover    { background: #2980b9; }
     .btn-servidor:hover { background: #d35400; }
+    .btn-mesclar:hover  { background: #6c3483; }
     .empty { text-align: center; padding: 48px; color: #888; }
     .resolvido { opacity: 0.5; }
     .resolvido .conflito-header { background: #d4edda; }
@@ -183,6 +195,38 @@ function html(body) {
         btn.disabled = false;
       }
     }
+
+    async function resolverMesclado(conflitoid) {
+      const campos = {};
+      document.querySelectorAll('[name^="campo-' + conflitoid + '-"]').forEach(function(r) {
+        if (r.checked) {
+          var col = r.name.replace('campo-' + conflitoid + '-', '');
+          campos[col] = r.value;
+        }
+      });
+      const btn = event.target;
+      btn.disabled = true;
+      btn.textContent = 'Aguarde...';
+      try {
+        const r = await fetch('/conflitos/' + conflitoid + '/resolver', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ escolha: 'mesclar', campos })
+        });
+        const data = await r.json();
+        if (data.ok) {
+          location.reload();
+        } else {
+          alert('Erro: ' + (data.message || 'desconhecido'));
+          btn.disabled = false;
+          btn.textContent = 'Aplicar seleção';
+        }
+      } catch(e) {
+        alert('Erro de rede: ' + e.message);
+        btn.disabled = false;
+        btn.textContent = 'Aplicar seleção';
+      }
+    }
   </script>
 </body>
 </html>`;
@@ -234,26 +278,106 @@ function saoIguais(v1, v2) {
   return String(v1) === String(v2);
 }
 
-function renderCampos(versaoLocal, versaoServidor) {
-  const todasColunas = new Set([
+// Padrão de colunas sempre exibidas para identificação rápida do registro
+const COLUNAS_IDENTIFICACAO = /DESCRI|^NOME$|PRECO|VALOR|REFERENCIA|CODIGO|EAN|UNIDADE|MARCA|CATEGORIA|TIPO/i;
+
+/**
+ * Renderiza as tabelas de campos do conflito em seções colapsáveis ordenadas por importância.
+ * Retorna { divergentesTable, localRows, servidorRows, numDivergentes } onde:
+ *   - divergentesTable: tabela única com 4 colunas (campo, valor local, radio escolha, valor servidor)
+ *   - localRows / servidorRows: <tbody> para identificação e outros campos (layout lado a lado)
+ */
+function renderCampos(versaoLocal, versaoServidor, conflitoid) {
+  const todasColunas = [...new Set([
     ...Object.keys(versaoLocal || {}),
     ...Object.keys(versaoServidor || {}),
-  ]);
+  ])];
 
-  let localRows = '';
-  let servidorRows = '';
+  const divergentes   = todasColunas.filter(c => !saoIguais(versaoLocal?.[c], versaoServidor?.[c]));
+  const identificacao = todasColunas.filter(c => COLUNAS_IDENTIFICACAO.test(c) && !divergentes.includes(c));
+  const outros        = todasColunas.filter(c => !divergentes.includes(c) && !identificacao.includes(c));
 
-  for (const col of todasColunas) {
-    const vLocal = versaoLocal?.[col];
-    const vServ  = versaoServidor?.[col];
-    const dif    = !saoIguais(vLocal, vServ);
-    const cls    = dif ? ' class="diff"' : '';
+  const renderLinha = (col, isDif, grupo, startOpen) => {
+    const style = isDif ? ' class="diff"' : '';
+    const hidden = startOpen ? '' : ' style="display:none"';
+    return {
+      local:    `<tr${style} data-group="${grupo}"${hidden}><td>${col}</td><td>${formatDisplay(versaoLocal?.[col])}</td></tr>`,
+      servidor: `<tr${style} data-group="${grupo}"${hidden}><td>${col}</td><td>${formatDisplay(versaoServidor?.[col])}</td></tr>`,
+    };
+  };
 
-    localRows    += `<tr${cls}><td>${col}</td><td>${formatDisplay(vLocal)}</td></tr>`;
-    servidorRows += `<tr${cls}><td>${col}</td><td>${formatDisplay(vServ)}</td></tr>`;
+  // Cada seção tem um ID único compartilhado pelas duas tabelas (local e servidor)
+  const uid = Math.random().toString(36).slice(2, 7);
+
+  function secao(cols, grupo, label, corFundo, corTexto, isDif, startOpen = false) {
+    if (cols.length === 0) return { local: '', servidor: '' };
+
+    const seta = startOpen ? '&#9660;' : '&#9654;';
+    const toggleStyle = `background:${corFundo};font-size:11px;font-weight:bold;color:${corTexto};padding:6px 8px;cursor:pointer;user-select:none;text-transform:uppercase`;
+    const headerRow = `<tr onclick="
+      document.querySelectorAll('[data-group=\\'${grupo}-${uid}\\']').forEach(function(el){
+        el.style.display = el.style.display === '' ? 'none' : '';
+      });
+      this.querySelector('.seta').innerHTML = this.querySelector('.seta').innerHTML === '&#9654;' ? '&#9660;' : '&#9654;';
+    ">
+      <td colspan="2" style="${toggleStyle}">
+        <span class="seta">${seta}</span> ${label} (${cols.length})
+      </td>
+    </tr>`;
+
+    let local = headerRow;
+    let servidor = headerRow;
+
+    for (const col of cols) {
+      const l = renderLinha(col, isDif, `${grupo}-${uid}`, startOpen);
+      local    += l.local;
+      servidor += l.servidor;
+    }
+
+    return { local, servidor };
   }
 
-  return { localRows, servidorRows };
+  // Tabela única de campos divergentes com radio buttons por linha
+  let divergentesTable = '';
+  if (divergentes.length > 0) {
+    const headerStyle = `background:#f8d7da;font-size:11px;font-weight:bold;color:#721c24;padding:6px 8px;text-transform:uppercase;text-align:center`;
+    const rows = divergentes.map(col => {
+      const radioLocal    = `<input type="radio" name="campo-${conflitoid}-${col}" value="local" checked>`;
+      const radioServidor = `<input type="radio" name="campo-${conflitoid}-${col}" value="servidor">`;
+      return `<tr class="diff">
+        <td style="font-weight:bold;color:#555;width:20%">${col}</td>
+        <td style="width:30%">${formatDisplay(versaoLocal?.[col])}</td>
+        <td style="text-align:center;width:20%;white-space:nowrap">
+          <label style="margin-right:8px">${radioLocal} Local</label>
+          <label>${radioServidor} Servidor</label>
+        </td>
+        <td style="width:30%">${formatDisplay(versaoServidor?.[col])}</td>
+      </tr>`;
+    }).join('');
+
+    divergentesTable = `
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px">
+        <thead>
+          <tr>
+            <th style="${headerStyle}">Campo</th>
+            <th style="${headerStyle}">Valor Local</th>
+            <th style="${headerStyle}">Escolha</th>
+            <th style="${headerStyle}">Valor Servidor</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+  }
+
+  const s2 = secao(identificacao, 'iden', 'Identificação',      '#eaf3fb', '#2471a3', false, false);
+  const s3 = secao(outros,        'out',  'Outros campos',      '#f5f5f5', '#666',    false, false);
+
+  return {
+    divergentesTable,
+    localRows:    `<tbody>${s2.local}${s3.local}</tbody>`,
+    servidorRows: `<tbody>${s2.servidor}${s3.servidor}</tbody>`,
+    numDivergentes: divergentes.length,
+  };
 }
 
 function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
@@ -421,7 +545,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         const pkValores = pks.map(p => registroSrv[p]);
         const rows = await dbQuery(db, `SELECT * FROM ${tabelaParam} WHERE ${whereParts}`, pkValores)
           .catch(() => []);
-        if (rows.length > 0) mapLocal.set(getPKValor(registroSrv), rows[0]);
+        if (rows.length > 0) mapLocal.set(getPKValor(registroSrv), normalizarBlobs(rows[0]));
       }
     } finally {
       await closeConnection(db);
@@ -565,7 +689,8 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
           const pkValores = pks.map(p => srv[p]);
           const pkValorConcatenado = pks.map(p => String(srv[p] || '')).join('|');
 
-          const localRows = await dbQuery(db, `SELECT * FROM ${nome} WHERE ${whereParts}`, pkValores).catch(() => []);
+          const localRowsRaw = await dbQuery(db, `SELECT * FROM ${nome} WHERE ${whereParts}`, pkValores).catch(() => []);
+          const localRows = localRowsRaw.map(normalizarBlobs);
           const existeLocal = localRows.length > 0;
 
           // Se idêntico, pula
@@ -697,31 +822,49 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     }
 
     const cards = lista.map(c => {
-      const { localRows, servidorRows } = renderCampos(c.versaoLocal, c.versaoServidor);
+      const { divergentesTable, localRows, servidorRows, numDivergentes } = renderCampos(c.versaoLocal, c.versaoServidor, c.id);
       const resolvido = c.resolvido;
-      const escolha = resolvido ? `Resolvido: manteve <strong>${c.escolha === 'local' ? 'versão local' : 'versão do servidor'}</strong>` : '';
+      const escolhaLabel = c.escolha === 'local' ? 'versão local' : c.escolha === 'servidor' ? 'versão do servidor' : 'mesclado campo a campo';
+      const escolha = resolvido ? `Resolvido: manteve <strong>${escolhaLabel}</strong>` : '';
+      const gridId = `grid-${c.id}`;
 
       return `
         <div class="conflito${resolvido ? ' resolvido' : ''}">
-          <div class="conflito-header">
-            <h2>${c.tabela} — ${c.pk} = ${c.pkValor}</h2>
-            <span>${c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : ''}</span>
-            ${resolvido ? `<span style="margin-left:16px;color:#155724">${escolha}</span>` : ''}
+          <div class="conflito-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center" onclick="
+            var g=document.getElementById('${gridId}');
+            var aberto=g.style.display!=='none';
+            g.style.display=aberto?'none':'';
+            this.querySelector('.toggle-icon').textContent=aberto?'▼ Ver detalhes':'▲ Ocultar';
+          ">
+            <div>
+              <h2>${c.tabela} — ${c.pk} = ${c.pkValor}
+                ${!resolvido ? `<span style="font-size:12px;font-weight:normal;color:#c0392b;margin-left:8px">${numDivergentes} campo(s) diferente(s)</span>` : ''}
+              </h2>
+              <span>${c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : ''}</span>
+              ${resolvido ? `<span style="margin-left:16px;color:#155724">${escolha}</span>` : ''}
+            </div>
+            <span class="toggle-icon" style="font-size:12px;color:#888;white-space:nowrap;padding-left:16px">▲ Ocultar</span>
           </div>
-          <div class="grid">
+          <div class="grid" id="${gridId}">
+            ${numDivergentes > 0 ? `
+            <div style="grid-column:1/-1;padding:16px 16px 0">
+              <h3 style="font-size:13px;font-weight:bold;margin-bottom:10px;text-transform:uppercase;color:#666">Campos Divergentes</h3>
+              ${divergentesTable}
+            </div>` : ''}
             <div class="lado">
               <h3>Versão Local (Filial)</h3>
-              <table><tbody>${localRows}</tbody></table>
+              <table>${localRows}</table>
             </div>
             <div class="lado">
               <h3>Versão do Servidor (Matriz)</h3>
-              <table><tbody>${servidorRows}</tbody></table>
+              <table>${servidorRows}</table>
             </div>
           </div>
           ${!resolvido ? `
           <div class="acoes">
             <button class="btn-local"    onclick="resolver('${c.id}', 'local')">Manter versão local</button>
             <button class="btn-servidor" onclick="resolver('${c.id}', 'servidor')">Manter versão do servidor</button>
+            <button class="btn-mesclar"  onclick="resolverMesclado('${c.id}')">Aplicar seleção campo a campo</button>
           </div>` : ''}
         </div>`;
     }).join('');
@@ -744,10 +887,14 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
 
   app.post('/conflitos/:id/resolver', async (req, res) => {
     const { id } = req.params;
-    const { escolha } = req.body;
+    const { escolha, campos } = req.body;
 
-    if (!['local', 'servidor'].includes(escolha)) {
+    if (!['local', 'servidor', 'mesclar'].includes(escolha)) {
       return res.status(400).json({ ok: false, message: 'escolha inválida' });
+    }
+
+    if (escolha === 'mesclar' && (typeof campos !== 'object' || campos === null)) {
+      return res.status(400).json({ ok: false, message: 'campos obrigatório para escolha mesclar' });
     }
 
     let conflito;
@@ -796,6 +943,45 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         return res.status(500).json({ ok: false, message: `Falha ao aplicar versão do servidor: ${e.message}` });
       } finally {
         await closeConnection(db);
+      }
+    } else if (escolha === 'mesclar') {
+      // Constrói registro mesclado: base local, sobrescreve campos escolhidos do servidor
+      const base = { ...conflito.versaoLocal };
+      for (const [col, origem] of Object.entries(campos)) {
+        if (origem === 'servidor') {
+          base[col] = conflito.versaoServidor?.[col] ?? null;
+        }
+      }
+
+      // 1. Aplica o registro mesclado no banco local (igual ao fluxo 'servidor')
+      const db = await getConnection();
+      try {
+        const computadas = await getColunasComputadas(db, conflito.tabela);
+        const colunas = Object.keys(base).filter(k =>
+          base[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k)
+        );
+        const placeholders = colunas.map(() => '?').join(', ');
+        const valores = colunas.map(c => (base[c] === undefined ? null : base[c]));
+        const pks = Array.isArray(conflito.pk) ? conflito.pk : [conflito.pk];
+        await dbExecute(db,
+          `UPDATE OR INSERT INTO ${conflito.tabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
+          valores
+        );
+      } catch (e) {
+        return res.status(500).json({ ok: false, message: `Falha ao aplicar mesclagem localmente: ${e.message}` });
+      } finally {
+        await closeConnection(db);
+      }
+
+      // 2. Envia o registro mesclado ao servidor forçando (igual ao fluxo 'local')
+      if (!contexto.baseURI || !contexto.idLoja) {
+        return res.status(500).json({ ok: false, message: 'Configuração do servidor não disponível ainda' });
+      }
+      try {
+        await enviarRegistro(contexto.baseURI, contexto.idLoja,
+          conflito.tabela, conflito.pk, base, 0, true);
+      } catch (e) {
+        return res.status(500).json({ ok: false, message: `Falha ao enviar mesclagem ao servidor: ${e.message}` });
       }
     }
 

@@ -68,7 +68,7 @@ function listarPendentes() {
 
 /**
  * Marca um conflito como resolvido com a escolha feita.
- * escolha: 'local' | 'servidor'
+ * escolha: 'local' | 'servidor' | 'mesclar'
  */
 function resolverConflito(id, escolha) {
   const lista = lerTodos();

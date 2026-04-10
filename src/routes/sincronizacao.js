@@ -7,6 +7,13 @@ const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
 
+function normalizarBlobs(row) {
+  if (!row || typeof row !== 'object') return row;
+  return Object.fromEntries(
+    Object.entries(row).map(([k, v]) => [k, typeof v === 'function' ? null : v])
+  );
+}
+
 async function getColunasComputadas(db, nomeTabela) {
   if (cacheComputadas[nomeTabela]) return cacheComputadas[nomeTabela];
   const rows = await query(db,
@@ -219,7 +226,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
         []
       )
     );
-    res.json(rows);
+    res.json(rows.map(normalizarBlobs));
   } catch (e) {
     res.status(400).json({ message: e.message });
   }
