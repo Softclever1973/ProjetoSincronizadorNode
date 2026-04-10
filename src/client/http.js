@@ -1,7 +1,7 @@
 const http = require('http');
 const https = require('https');
 
-const TOKEN = '773a5d8b-d762-4ebd-b632-d1577d78c1f2';
+const TOKEN = process.env.SYNC_TOKEN;
 
 /**
  * Faz um POST JSON para a URL informada e retorna o corpo parseado.

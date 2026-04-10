@@ -1,5 +1,5 @@
-// Token fixo — equivalente ao TAutenticacao.VerificarSeTokenValido() do Delphi
-const TOKEN_VALIDO = '773a5d8b-d762-4ebd-b632-d1577d78c1f2';
+// Token lido do .env — equivalente ao TAutenticacao.VerificarSeTokenValido() do Delphi
+const TOKEN_VALIDO = process.env.SYNC_TOKEN;
 
 function authMiddleware(req, res, next) {
   const token = req.query.token;

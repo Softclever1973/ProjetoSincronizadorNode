@@ -8,7 +8,7 @@ const { getUltimaAtualizacao } = require('./cursor');
 const TABELAS = require('./tabelas');
 const { lerConfig, salvarConfig } = require('./tabelasConfig');
 
-const TOKEN = '773a5d8b-d762-4ebd-b632-d1577d78c1f2';
+const TOKEN = process.env.SYNC_TOKEN;
 
 // Cache de colunas computadas (read-only) por tabela
 const cacheColunasComputadas = {};

@@ -1,3 +1,4 @@
+require('dotenv').config();
 const { getConnection, closeConnection, getParam } = require('./db');
 const { sincronizarTabela } = require('./sync');
 const { empurrarTabela } = require('./push');
