@@ -2,6 +2,7 @@ const express = require('express');
 const http = require('http');
 const https = require('https');
 const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos } = require('./conflitos');
+const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./erros');
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
 const { getUltimaAtualizacao } = require('./cursor');
@@ -139,6 +140,7 @@ function html(body) {
     <a href="/status">Status</a>
     <a href="/auditoria">Auditoria</a>
     <a href="/configuracoes">Configurações</a>
+    <a href="/erros" id="nav-erros">Erros <span id="erros-badge" class="badge" style="display:none;font-size:11px;padding:1px 6px"></span></a>
   </nav>
   ${body}
   <script>
@@ -193,6 +195,56 @@ function html(body) {
       } catch(e) {
         alert('Erro de rede: ' + e.message);
         btn.disabled = false;
+      }
+    }
+
+    // ── Notificações de erro em tempo real (SSE) ─────────────────────────
+    (function () {
+      // Atualiza o badge com a contagem atual ao carregar a página
+      fetch('/api/erros/count')
+        .then(function(r) { return r.json(); })
+        .then(function(d) { atualizarBadgeErros(d.total); })
+        .catch(function() {});
+
+      // Solicita permissão para notificações do SO (apenas uma vez, sem prompt invasivo)
+      if ('Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+
+      var es = new EventSource('/eventos');
+
+      es.addEventListener('novo-erro', function(e) {
+        try {
+          var erro = JSON.parse(e.data);
+
+          // Incrementa o badge
+          var badge = document.getElementById('erros-badge');
+          var atual = badge ? (parseInt(badge.textContent, 10) || 0) : 0;
+          atualizarBadgeErros(atual + 1);
+
+          // Notificação do SO
+          if ('Notification' in window && Notification.permission === 'granted') {
+            new Notification('Erro de Sincronização', {
+              body: (erro.tabela ? '[' + erro.tabela + '] ' : '') + erro.mensagem,
+              tag: 'sync-erro-' + (erro.tabela || 'geral'), // agrupa por tabela (não empilha)
+            });
+          }
+        } catch (_) {}
+      });
+
+      es.onerror = function() {
+        // Conexão SSE perdida — EventSource tenta reconectar automaticamente
+      };
+    })();
+
+    function atualizarBadgeErros(total) {
+      var badge = document.getElementById('erros-badge');
+      if (!badge) return;
+      if (total > 0) {
+        badge.textContent = total;
+        badge.style.display = 'inline';
+      } else {
+        badge.style.display = 'none';
       }
     }
 
@@ -1121,6 +1173,103 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     // ativo = true → arquivo vazio (todos ativos por padrão)
     salvarConfig(config);
     res.json({ ok: true, ativo });
+  });
+
+  // ── SSE: stream de erros em tempo real ──────────────────────────────────
+  app.get('/eventos', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    // Mantém a conexão viva com um comentário a cada 25s (evita timeout de proxies)
+    const keepAlive = setInterval(() => res.write(': ping\n\n'), 25_000);
+
+    const onErro = (erro) => {
+      res.write(`event: novo-erro\ndata: ${JSON.stringify(erro)}\n\n`);
+    };
+
+    errosEmitter.on('novo-erro', onErro);
+
+    req.on('close', () => {
+      clearInterval(keepAlive);
+      errosEmitter.off('novo-erro', onErro);
+    });
+  });
+
+  // ── API: contagem de erros (usada para popular o badge ao carregar a página) ─
+  app.get('/api/erros/count', (_req, res) => {
+    res.json({ total: lerErros().length });
+  });
+
+  // ── ERROS ────────────────────────────────────────────────────────────────
+  app.get('/erros', (_req, res) => {
+    const erros = lerErros();
+
+    if (erros.length === 0) {
+      return res.send(html(`
+        <h1>Erros de Sincronização</h1>
+        <div class="empty">
+          <p>Nenhum erro registrado.</p>
+        </div>
+      `));
+    }
+
+    const corOperacao = { pull: '#3498db', push: '#e67e22', ciclo: '#8e44ad', config: '#c0392b' };
+
+    const linhas = [...erros].reverse().map(e => {
+      const cor = corOperacao[e.operacao] || '#888';
+      const data = e.criadoEm ? new Date(e.criadoEm).toLocaleString('pt-BR') : '—';
+      return `
+        <tr>
+          <td style="white-space:nowrap;color:#888;font-size:12px">${data}</td>
+          <td style="font-family:monospace;font-size:12px">${e.tabela || '<span style="color:#aaa">—</span>'}</td>
+          <td style="text-align:center">
+            <span style="background:${cor};color:white;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:bold">
+              ${e.operacao || '—'}
+            </span>
+          </td>
+          <td style="font-size:13px;word-break:break-word">${e.mensagem}</td>
+        </tr>`;
+    }).join('');
+
+    res.send(html(`
+      <h1>Erros de Sincronização
+        <span class="badge">${erros.length}</span>
+      </h1>
+      <div style="margin-bottom:16px">
+        <button onclick="limpar()"
+          style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+          Limpar todos
+        </button>
+        <span style="font-size:12px;color:#888;margin-left:12px">Últimos ${erros.length} erro(s) — máximo ${200} armazenados.</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px">
+        <thead style="background:#f0f0f0;font-size:11px;text-transform:uppercase;color:#555">
+          <tr>
+            <th style="padding:10px 12px;text-align:left;white-space:nowrap">Data/Hora</th>
+            <th style="padding:10px 12px;text-align:left">Tabela</th>
+            <th style="padding:10px 12px;text-align:center">Operação</th>
+            <th style="padding:10px 12px;text-align:left">Mensagem</th>
+          </tr>
+        </thead>
+        <tbody style="font-size:13px">
+          ${linhas}
+        </tbody>
+      </table>
+      <script>
+        async function limpar() {
+          if (!confirm('Limpar todos os erros?')) return;
+          const r = await fetch('/erros/limpar', { method: 'POST' });
+          if ((await r.json()).ok) location.reload();
+        }
+      </script>
+    `));
+  });
+
+  app.post('/erros/limpar', (_req, res) => {
+    limparErros();
+    res.json({ ok: true });
   });
 
   app.listen(porta, () => {

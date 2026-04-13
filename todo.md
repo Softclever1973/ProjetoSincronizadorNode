@@ -1,2 +1,2 @@
-TODO: Ver o funcionamento do sincronizador com o Andrew
-TODO: Após descobrir como funciona tudo certinho fazer com que tudo sincronize certinho principalmente em relação a chave primaria
+TODO: Fazer algum tipo de notificação quando tiver erro, além de criar uma tabela para salvar os erros
+STATUS: Concluído — veja src/client/erros.js, alterações em index.js e webui.js

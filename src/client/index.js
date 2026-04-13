@@ -6,6 +6,7 @@ const { setup } = require('./setup');
 const { iniciarWebUI } = require('./webui');
 const TABELAS = require('./tabelas');
 const { tabelaAtiva } = require('./tabelasConfig');
+const { salvarErro } = require('./erros');
 
 // Intervalo entre cada ciclo de sincronização (em milissegundos)
 const INTERVALO_MS = 30_000; // 30 segundos
@@ -36,12 +37,16 @@ async function executarCiclo() {
     const idLoja  = parseInt(await getParam(db, 50003), 10);
 
     if (!baseURI) {
-      log('ERRO: Parâmetro 60024 (URL do servidor) não configurado.');
+      const msg = 'Parâmetro 60024 (URL do servidor) não configurado.';
+      log('ERRO: ' + msg);
+      salvarErro({ operacao: 'config', mensagem: msg });
       return;
     }
 
     if (!idLoja) {
-      log('ERRO: Parâmetro 50003 (número da loja) não configurado.');
+      const msg = 'Parâmetro 50003 (número da loja) não configurado.';
+      log('ERRO: ' + msg);
+      salvarErro({ operacao: 'config', mensagem: msg });
       return;
     }
 
@@ -55,7 +60,9 @@ async function executarCiclo() {
       try {
         await sincronizarTabela(db, baseURI, idLoja, tabela, log);
       } catch (e) {
-        log(`[${tabela.nome}] Erro inesperado no pull: ${e.message}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`[${tabela.nome}] Erro inesperado no pull: ${msg}`);
+        salvarErro({ tabela: tabela.nome, operacao: 'pull', mensagem: msg });
       }
     }
 
@@ -64,13 +71,17 @@ async function executarCiclo() {
       try {
         await empurrarTabela(db, baseURI, idLoja, tabela, log);
       } catch (e) {
-        log(`[${tabela.nome}] Erro inesperado no push: ${e.message}`);
+        const msg = e instanceof Error ? e.message : String(e);
+        log(`[${tabela.nome}] Erro inesperado no push: ${msg}`);
+        salvarErro({ tabela: tabela.nome, operacao: 'push', mensagem: msg });
       }
     }
 
     log('Ciclo concluído.');
   } catch (e) {
-    log(`Erro no ciclo de sincronização: ${e.message}`);
+    const msg = e instanceof Error ? e.message : String(e);
+    log(`Erro no ciclo de sincronização: ${msg}`);
+    salvarErro({ operacao: 'ciclo', mensagem: msg });
   } finally {
     await closeConnection(db);
     rodando = false;

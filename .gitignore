@@ -18,6 +18,7 @@ npm-debug.log*
 Thumbs.db
 
 CLAUDE.md
+GEMINI.md
 
 # Variáveis de ambiente (contém token e segredos)
 .env
