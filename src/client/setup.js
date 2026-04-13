@@ -26,7 +26,21 @@ async function triggerExiste(db, nome) {
  *   - Triggers AFTER INSERT OR UPDATE em cada tabela sincronizada
  */
 async function setup(db, log = console.log) {
-  // 1. Tabela de pendentes de envio ao servidor
+  // 1. Tabela de erros de sincronização
+  if (!(await tabelaExiste(db, 'SYNC_ERROS'))) {
+    await execute(db, `
+      CREATE TABLE SYNC_ERROS (
+        ID           VARCHAR(40)   NOT NULL PRIMARY KEY,
+        TABELA       VARCHAR(50),
+        OPERACAO     VARCHAR(20),
+        MENSAGEM     VARCHAR(2000) NOT NULL,
+        CRIADO_EM    TIMESTAMP     DEFAULT CURRENT_TIMESTAMP NOT NULL
+      )
+    `);
+    log('[SETUP] Tabela SYNC_ERROS criada');
+  }
+
+  // 2. Tabela de pendentes de envio ao servidor
   if (!(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'))) {
     await execute(db, `
       CREATE TABLE SYNC_ALTERACOES_PENDENTES (
@@ -39,7 +53,7 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_ALTERACOES_PENDENTES criada');
   }
 
-  // 2. Tabela que rastreia a última versão recebida do servidor por registro
+  // 3. Tabela que rastreia a última versão recebida do servidor por registro
   //    (usada para detectar conflito na hora do envio)
   if (!(await tabelaExiste(db, 'SYNC_VERSOES_SERVIDOR'))) {
     await execute(db, `
@@ -53,7 +67,7 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_VERSOES_SERVIDOR criada');
   }
 
-  // 3. Triggers em cada tabela para detectar alterações locais
+  // 4. Triggers em cada tabela para detectar alterações locais
   for (const tabela of TABELAS) {
     const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
     const pkExpressao = pks.map(p => `CAST(NEW.${p} AS VARCHAR(100))`).join(" || '|' || ");

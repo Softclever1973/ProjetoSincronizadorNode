@@ -1,5 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const EventEmitter = require('events');
+
+const emitter = new EventEmitter();
 
 const ARQUIVO = path.join(process.cwd(), 'conflitos.json');
 
@@ -28,6 +31,7 @@ function salvarConflito(conflito) {
   conflito.criadoEm = new Date().toISOString();
   lista.push(conflito);
   salvar(lista);
+  emitter.emit('novo-conflito', conflito);
   return conflito.id;
 }
 
@@ -52,6 +56,7 @@ function atualizarOuSalvarConflito(conflito) {
       atualizadoEm: new Date().toISOString(),
     };
     salvar(lista);
+    emitter.emit('novo-conflito', lista[idx]);
     return lista[idx].id;
   }
 
@@ -100,11 +105,12 @@ function salvarLoteConflitos(lote) {
   return IDs;
 }
 
-module.exports = { 
-  salvarConflito, 
-  atualizarOuSalvarConflito, 
+module.exports = {
+  salvarConflito,
+  atualizarOuSalvarConflito,
   salvarLoteConflitos,
-  listarPendentes, 
-  resolverConflito, 
-  lerTodos 
+  listarPendentes,
+  resolverConflito,
+  lerTodos,
+  emitter,
 };

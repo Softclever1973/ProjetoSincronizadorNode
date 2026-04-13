@@ -1,0 +1,67 @@
+<%- include('partials/head', { title: 'Erros' }) %>
+<%- include('partials/nav') %>
+
+<h1>Erros de Sincronização
+  <% if (erros.length > 0) { %>
+    <span class="badge"><%= erros.length %></span>
+  <% } %>
+</h1>
+
+<% if (erros.length === 0) { %>
+  <div class="empty">
+    <p>Nenhum erro registrado.</p>
+  </div>
+<% } else { %>
+
+  <div style="margin-bottom:16px">
+    <button onclick="limpar()"
+      style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+      Limpar todos
+    </button>
+    <span style="font-size:12px;color:#888;margin-left:12px">Últimos <%= erros.length %> erro(s) — máximo 200 armazenados.</span>
+  </div>
+
+  <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px">
+    <thead style="background:#f0f0f0;font-size:11px;text-transform:uppercase;color:#555">
+      <tr>
+        <th style="padding:10px 12px;text-align:left;white-space:nowrap">Data/Hora</th>
+        <th style="padding:10px 12px;text-align:left">Tabela</th>
+        <th style="padding:10px 12px;text-align:center">Operação</th>
+        <th style="padding:10px 12px;text-align:left">Mensagem</th>
+      </tr>
+    </thead>
+    <tbody>
+      <%
+        const corOperacao = { pull: '#3498db', push: '#e67e22', ciclo: '#8e44ad', config: '#c0392b' };
+      %>
+      <% for (const e of [...erros].reverse()) { %>
+        <% const cor = corOperacao[e.operacao] || '#888'; %>
+        <tr>
+          <td style="white-space:nowrap;color:#888;font-size:12px">
+            <%= e.criadoEm ? new Date(e.criadoEm).toLocaleString('pt-BR') : '—' %>
+          </td>
+          <td style="font-family:monospace;font-size:12px">
+            <%= e.tabela || '' %><% if (!e.tabela) { %><span style="color:#aaa">—</span><% } %>
+          </td>
+          <td style="text-align:center">
+            <span style="background:<%= cor %>;color:white;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:bold">
+              <%= e.operacao || '—' %>
+            </span>
+          </td>
+          <td style="font-size:13px;word-break:break-word"><%= e.mensagem %></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+
+  <script>
+    async function limpar() {
+      if (!confirm('Limpar todos os erros?')) return;
+      var r = await fetch('/erros/limpar', { method: 'POST' });
+      if ((await r.json()).ok) location.reload();
+    }
+  </script>
+
+<% } %>
+
+<%- include('partials/scripts') %>

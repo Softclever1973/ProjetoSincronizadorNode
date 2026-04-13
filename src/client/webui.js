@@ -1,7 +1,8 @@
 const express = require('express');
+const path = require('path');
 const http = require('http');
 const https = require('https');
-const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos } = require('./conflitos');
+const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos, emitter: conflitosEmitter } = require('./conflitos');
 const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./erros');
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
@@ -91,198 +92,6 @@ function getJSON(url) {
 }
 
 const PORTA_PADRAO = 3001;
-
-function html(body) {
-  return `<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Conflitos de Sincronização</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 24px; }
-    nav { margin-bottom: 20px; display: flex; gap: 12px; font-size: 13px; }
-    nav a { color: #3498db; text-decoration: none; padding: 4px 10px; border: 1px solid #3498db; border-radius: 4px; }
-    nav a:hover { background: #3498db; color: white; }
-    h1 { color: #333; margin-bottom: 16px; }
-    .badge { display: inline-block; background: #e74c3c; color: white; border-radius: 12px; padding: 2px 10px; font-size: 13px; margin-left: 8px; }
-    .badge.ok { background: #27ae60; }
-    .conflito { background: white; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
-    .conflito-header { background: #f8d7da; padding: 12px 16px; border-bottom: 1px solid #ddd; }
-    .conflito-header h2 { font-size: 15px; color: #721c24; }
-    .conflito-header span { font-size: 12px; color: #555; }
-    .grid { display: grid; grid-template-columns: 1fr 1fr; }
-    .lado { padding: 16px; }
-    .lado:first-child { border-right: 1px solid #eee; }
-    .lado h3 { font-size: 13px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; color: #666; }
-    table { width: 100%; border-collapse: collapse; font-size: 13px; }
-    td { padding: 4px 6px; border-bottom: 1px solid #f0f0f0; vertical-align: top; word-break: break-all; }
-    td:first-child { font-weight: bold; color: #555; width: 40%; }
-    .diff { background: #fff3cd; }
-    .acoes { padding: 12px 16px; background: #fafafa; border-top: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
-    button { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
-    .btn-local    { background: #3498db; color: white; }
-    .btn-servidor { background: #e67e22; color: white; }
-    .btn-mesclar  { background: #8e44ad; color: white; }
-    .btn-local:hover    { background: #2980b9; }
-    .btn-servidor:hover { background: #d35400; }
-    .btn-mesclar:hover  { background: #6c3483; }
-    .empty { text-align: center; padding: 48px; color: #888; }
-    .resolvido { opacity: 0.5; }
-    .resolvido .conflito-header { background: #d4edda; }
-    .resolvido .conflito-header h2 { color: #155724; }
-  </style>
-</head>
-<body>
-  <nav>
-    <a href="/">Conflitos</a>
-    <a href="/status">Status</a>
-    <a href="/auditoria">Auditoria</a>
-    <a href="/configuracoes">Configurações</a>
-    <a href="/erros" id="nav-erros">Erros <span id="erros-badge" class="badge" style="display:none;font-size:11px;padding:1px 6px"></span></a>
-  </nav>
-  ${body}
-  <script>
-    async function corrigir(tabela, offset, escolha = 'matriz') {
-      const btn = event.target;
-      const originalText = btn.textContent;
-      btn.disabled = true;
-      btn.textContent = 'Processando...';
-      try {
-        const r = await fetch('/auditoria/corrigir', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ tabela, offset, escolha })
-        });
-        const data = await r.json();
-        if (data.ok) {
-          if (escolha === 'manual') {
-            window.location.href = '/'; // Redireciona para conflitos
-          } else {
-            btn.textContent = 'Concluído: ' + data.processados + ' registro(s)';
-            setTimeout(() => location.reload(), 1500);
-          }
-        } else {
-          alert('Erro: ' + (data.message || 'desconhecido'));
-          btn.disabled = false;
-          btn.textContent = originalText;
-        }
-      } catch(e) {
-        alert('Erro de rede: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = originalText;
-      }
-    }
-
-    async function resolver(id, escolha) {
-      const btn = event.target;
-      btn.disabled = true;
-      btn.textContent = 'Aguarde...';
-      try {
-        const r = await fetch('/conflitos/' + id + '/resolver', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ escolha })
-        });
-        const data = await r.json();
-        if (data.ok) {
-          location.reload();
-        } else {
-          alert('Erro: ' + (data.message || 'desconhecido'));
-          btn.disabled = false;
-        }
-      } catch(e) {
-        alert('Erro de rede: ' + e.message);
-        btn.disabled = false;
-      }
-    }
-
-    // ── Notificações de erro em tempo real (SSE) ─────────────────────────
-    (function () {
-      // Atualiza o badge com a contagem atual ao carregar a página
-      fetch('/api/erros/count')
-        .then(function(r) { return r.json(); })
-        .then(function(d) { atualizarBadgeErros(d.total); })
-        .catch(function() {});
-
-      // Solicita permissão para notificações do SO (apenas uma vez, sem prompt invasivo)
-      if ('Notification' in window && Notification.permission === 'default') {
-        Notification.requestPermission();
-      }
-
-      var es = new EventSource('/eventos');
-
-      es.addEventListener('novo-erro', function(e) {
-        try {
-          var erro = JSON.parse(e.data);
-
-          // Incrementa o badge
-          var badge = document.getElementById('erros-badge');
-          var atual = badge ? (parseInt(badge.textContent, 10) || 0) : 0;
-          atualizarBadgeErros(atual + 1);
-
-          // Notificação do SO
-          if ('Notification' in window && Notification.permission === 'granted') {
-            new Notification('Erro de Sincronização', {
-              body: (erro.tabela ? '[' + erro.tabela + '] ' : '') + erro.mensagem,
-              tag: 'sync-erro-' + (erro.tabela || 'geral'), // agrupa por tabela (não empilha)
-            });
-          }
-        } catch (_) {}
-      });
-
-      es.onerror = function() {
-        // Conexão SSE perdida — EventSource tenta reconectar automaticamente
-      };
-    })();
-
-    function atualizarBadgeErros(total) {
-      var badge = document.getElementById('erros-badge');
-      if (!badge) return;
-      if (total > 0) {
-        badge.textContent = total;
-        badge.style.display = 'inline';
-      } else {
-        badge.style.display = 'none';
-      }
-    }
-
-    async function resolverMesclado(conflitoid) {
-      const campos = {};
-      document.querySelectorAll('[name^="campo-' + conflitoid + '-"]').forEach(function(r) {
-        if (r.checked) {
-          var col = r.name.replace('campo-' + conflitoid + '-', '');
-          campos[col] = r.value;
-        }
-      });
-      const btn = event.target;
-      btn.disabled = true;
-      btn.textContent = 'Aguarde...';
-      try {
-        const r = await fetch('/conflitos/' + conflitoid + '/resolver', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ escolha: 'mesclar', campos })
-        });
-        const data = await r.json();
-        if (data.ok) {
-          location.reload();
-        } else {
-          alert('Erro: ' + (data.message || 'desconhecido'));
-          btn.disabled = false;
-          btn.textContent = 'Aplicar seleção';
-        }
-      } catch(e) {
-        alert('Erro de rede: ' + e.message);
-        btn.disabled = false;
-        btn.textContent = 'Aplicar seleção';
-      }
-    }
-  </script>
-</body>
-</html>`;
-}
 
 function formatDisplay(v) {
   if (v === null || v === undefined) return '<span style="color:#aaa;font-style:italic">NULL</span>';
@@ -434,15 +243,18 @@ function renderCampos(versaoLocal, versaoServidor, conflitoid) {
 
 function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   const app = express();
+  app.set('view engine', 'ejs');
+  app.set('views', path.join(__dirname, 'views'));
+  app.use(express.static(path.join(__dirname, 'public')));
   app.use(express.json());
 
   // ── STATUS DE SINCRONIZAÇÃO ──────────────────────────────────────────────
   app.get('/status', async (req, res) => {
     if (!contexto.baseURI || !contexto.idLoja) {
-      return res.status(503).send(html(`
-        <h1>Status de Sincronização</h1>
-        <div class="empty"><p>Aguardando primeiro ciclo de sincronização...</p></div>
-      `));
+      return res.status(503).render('status', {
+        tabelas: [], totalOk: 0, totalPendente: 0, totalErro: 0,
+        error: 'Aguardando primeiro ciclo de sincronização...',
+      });
     }
 
     let statusServidor = [];
@@ -450,22 +262,19 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       const url = `${contexto.baseURI}/datasnap/rest/TSMSincronizacao/StatusTabelas?token=${TOKEN}`;
       statusServidor = await getJSON(url);
     } catch (e) {
-      return res.status(502).send(html(`
-        <h1>Status de Sincronização</h1>
-        <div class="empty"><p>Erro ao consultar servidor: ${e.message}</p></div>
-      `));
+      return res.status(502).render('status', {
+        tabelas: [], totalOk: 0, totalPendente: 0, totalErro: 0,
+        error: `Erro ao consultar servidor: ${e.message}`,
+      });
     }
 
     const db = await getConnection();
-    let linhas = '';
+    const tabelas = [];
     let totalOk = 0, totalPendente = 0, totalErro = 0;
 
     try {
       for (const sv of statusServidor) {
-        // Cursor local
-        let cursorLocal = 0;
-        let totalLocal = 0;
-        let pendentesEnvio = 0;
+        let cursorLocal = 0, totalLocal = 0, pendentesEnvio = 0;
         try {
           cursorLocal = await getUltimaAtualizacao(db, sv.tabela);
           const cntLocal = await dbQuery(db, `SELECT COUNT(*) AS TOTAL FROM ${sv.tabela}`);
@@ -477,56 +286,21 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         } catch { /* tabela pode não existir localmente */ }
 
         const sincronizado = !sv.erro && sv.maxId !== null && cursorLocal >= sv.maxId;
-        const statusCor = sv.erro ? '#6c757d' : sincronizado ? '#27ae60' : '#e67e22';
-        const statusTexto = sv.erro ? 'N/D' : sincronizado ? 'OK' : 'Pendente';
+        const statusCor    = sv.erro ? '#6c757d' : sincronizado ? '#27ae60' : '#e67e22';
+        const statusTexto  = sv.erro ? 'N/D'     : sincronizado ? 'OK'      : 'Pendente';
 
         if (sv.erro) totalErro++;
         else if (sincronizado) totalOk++;
         else totalPendente++;
 
-        linhas += `
-          <tr>
-            <td>${sv.tabela}</td>
-            <td style="text-align:right">${sv.total ?? '—'}</td>
-            <td style="text-align:right">${totalLocal || '—'}</td>
-            <td style="text-align:right">${sv.maxId ?? '—'}</td>
-            <td style="text-align:right">${cursorLocal || 0}</td>
-            <td style="text-align:right;color:#e74c3c;font-weight:bold">${pendentesEnvio > 0 ? pendentesEnvio : '—'}</td>
-            <td style="text-align:center;color:${statusCor};font-weight:bold">${statusTexto}</td>
-          </tr>`;
+        tabelas.push({ nome: sv.tabela, totalServidor: sv.total, totalLocal, maxId: sv.maxId,
+                       cursorLocal, pendentesEnvio, statusCor, statusTexto });
       }
     } finally {
       await closeConnection(db);
     }
 
-    res.send(html(`
-      <h1>Status de Sincronização</h1>
-      <p style="margin-bottom:16px;font-size:13px;color:#666">
-        <span style="color:#27ae60;font-weight:bold">${totalOk} OK</span> &nbsp;|&nbsp;
-        <span style="color:#e67e22;font-weight:bold">${totalPendente} pendente(s)</span> &nbsp;|&nbsp;
-        <span style="color:#6c757d">${totalErro} N/D</span>
-        &nbsp;&nbsp;
-        <a href="/status" style="font-size:12px">Atualizar</a>
-        &nbsp;|&nbsp;
-        <a href="/" style="font-size:12px">Ver conflitos</a>
-      </p>
-      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
-        <thead style="background:#f0f0f0;font-size:12px;text-transform:uppercase;color:#555">
-          <tr>
-            <th style="padding:10px 12px;text-align:left">Tabela</th>
-            <th style="padding:10px 12px;text-align:right">Servidor</th>
-            <th style="padding:10px 12px;text-align:right">Local</th>
-            <th style="padding:10px 12px;text-align:right">Max ID Servidor</th>
-            <th style="padding:10px 12px;text-align:right">Cursor Local</th>
-            <th style="padding:10px 12px;text-align:right">A Enviar</th>
-            <th style="padding:10px 12px;text-align:center">Status</th>
-          </tr>
-        </thead>
-        <tbody style="font-size:13px">
-          ${linhas}
-        </tbody>
-      </table>
-    `));
+    res.render('status', { tabelas, totalOk, totalPendente, totalErro, error: null });
   });
 
   // ── AUDITORIA ────────────────────────────────────────────────────────────
@@ -534,175 +308,79 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     const tabelaParam = (req.query.tabela || '').toUpperCase().trim();
     const offset      = parseInt(req.query.offset, 10) || 0;
     const limite      = 200;
+    const tabelaNomes = TABELAS.map(t => t.nome);
+    const base        = { tabelaParam, tabelaNomes, offset, limite, rows: null, error: null,
+                          todasColunas: [], pkLabel: '', totalOk: 0, totalDif: 0, totalAusente: 0,
+                          temDivergencias: false, proxOffset: 0, temProxima: false, formatDisplay };
 
-    // Monta seletor de tabela
-    const opcoes = TABELAS.map(t =>
-      `<option value="${t.nome}" ${t.nome === tabelaParam ? 'selected' : ''}>${t.nome}</option>`
-    ).join('');
-
-    const seletor = `
-      <form method="get" action="/auditoria" style="margin-bottom:20px;display:flex;gap:8px;align-items:center">
-        <select name="tabela" style="padding:7px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px">
-          <option value="">— Selecione uma tabela —</option>
-          ${opcoes}
-        </select>
-        <button type="submit" style="padding:7px 16px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px">Comparar</button>
-      </form>`;
-
-    if (!tabelaParam) {
-      return res.send(html(`<h1>Auditoria de Dados</h1>${seletor}`));
-    }
+    if (!tabelaParam) return res.render('auditoria', base);
 
     if (!contexto.baseURI || !contexto.idLoja) {
-      return res.send(html(`<h1>Auditoria de Dados</h1>${seletor}
-        <div class="empty"><p>Aguardando primeiro ciclo...</p></div>`));
+      return res.render('auditoria', { ...base, error: 'Aguardando primeiro ciclo...' });
     }
 
     const config = TABELAS.find(t => t.nome === tabelaParam);
     if (!config) {
-      return res.send(html(`<h1>Auditoria de Dados</h1>${seletor}
-        <div class="empty"><p>Tabela não encontrada na configuração.</p></div>`));
+      return res.render('auditoria', { ...base, error: 'Tabela não encontrada na configuração.' });
     }
 
-    const pk = config.pk;
+    const pk  = config.pk;
     const pks = Array.isArray(pk) ? pk : [pk];
 
-    // Busca página do servidor
     let registrosServidor = [];
     try {
-      const pkQuery = Array.isArray(pk) ? pk.map(p => `pk=${p}`).join('&') : `pk=${pk}`;
+      const pkQuery = pks.map(p => `pk=${p}`).join('&');
       const url = `${contexto.baseURI}/datasnap/rest/TSMSincronizacao/RegistrosPaginados` +
         `?token=${TOKEN}&nomeTabela=${tabelaParam}&${pkQuery}&offset=${offset}&limit=${limite}`;
       registrosServidor = await getJSON(url);
     } catch (e) {
-      return res.send(html(`<h1>Auditoria — ${tabelaParam}</h1>${seletor}
-        <div class="empty"><p>Erro ao consultar servidor: ${e.message}</p></div>`));
+      return res.render('auditoria', { ...base, error: `Erro ao consultar servidor: ${e.message}` });
     }
 
     if (registrosServidor.length === 0) {
-      return res.send(html(`<h1>Auditoria — ${tabelaParam}</h1>${seletor}
-        <div class="empty"><p>Nenhum registro encontrado no servidor para esta página.</p></div>`));
+      return res.render('auditoria', { ...base, error: 'Nenhum registro encontrado no servidor para esta página.' });
     }
 
-    // Monta mapa servidor por PK (concatenada)
-    const getPKValor = (r) => pks.map(p => String(r[p] || '')).join('|');
+    const getPKValor  = (r) => pks.map(p => String(r[p] || '')).join('|');
     const mapServidor = new Map(registrosServidor.map(r => [getPKValor(r), r]));
 
-    // Busca os mesmos registros no banco local
     const db = await getConnection();
     const mapLocal = new Map();
     try {
       const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
       for (const registroSrv of registrosServidor) {
         const pkValores = pks.map(p => registroSrv[p]);
-        const rows = await dbQuery(db, `SELECT * FROM ${tabelaParam} WHERE ${whereParts}`, pkValores)
-          .catch(() => []);
-        if (rows.length > 0) mapLocal.set(getPKValor(registroSrv), normalizarBlobs(rows[0]));
+        const localRows = await dbQuery(db, `SELECT * FROM ${tabelaParam} WHERE ${whereParts}`, pkValores).catch(() => []);
+        if (localRows.length > 0) mapLocal.set(getPKValor(registroSrv), normalizarBlobs(localRows[0]));
       }
     } finally {
       await closeConnection(db);
     }
 
-    // Determina colunas (excluindo colunas ignoradas para comparação)
-    const todasColunas = [...new Set(registrosServidor.flatMap(r => Object.keys(r)))]
-      .filter(c => !isColunaIgnorada(c));
-
+    const todasColunas = [...new Set(registrosServidor.flatMap(r => Object.keys(r)))].filter(c => !isColunaIgnorada(c));
     let totalOk = 0, totalDif = 0, totalAusente = 0;
-    let linhas = '';
+    const rows = [];
 
     for (const pkValor of mapServidor.keys()) {
       const srv = mapServidor.get(pkValor);
       const loc = mapLocal.get(pkValor);
-
-      if (!loc) {
-        totalAusente++;
-        linhas += `<tr style="background:#fff3cd">
-          <td>${pkValor}</td>
-          <td colspan="${todasColunas.length}" style="color:#856404;font-style:italic">
-            Não existe na filial
-          </td>
-        </tr>`;
-        continue;
-      }
-
+      if (!loc) { totalAusente++; rows.push({ pkValor, srv, loc: null, difColunas: [] }); continue; }
       const difColunas = todasColunas.filter(c => !saoIguais(srv[c], loc[c]));
-
-      if (difColunas.length === 0) {
-        totalOk++;
-      } else {
-        totalDif++;
-      }
-
-      const bgColor = difColunas.length > 0 ? 'background:#f8d7da' : '';
-      const pkStyle = difColunas.length > 0 ? 'font-weight:bold' : '';
-
-      linhas += `<tr style="${bgColor}">
-        <td><strong style="${pkStyle}">${pkValor}</strong></td>
-        ${todasColunas.map(c => {
-          const isDif = difColunas.includes(c);
-          const val = isDif
-            ? `<span title="Servidor: ${String(srv[c] ?? 'NULL')}" style="color:#721c24;font-weight:bold">${formatDisplay(loc[c])}</span>`
-            : `<span style="color:#aaa">${formatDisplay(loc[c])}</span>`;
-          return `<td>${val}</td>`;
-        }).join('')}
-      </tr>`;
+      if (difColunas.length === 0) totalOk++; else totalDif++;
+      rows.push({ pkValor, srv, loc, difColunas });
     }
 
-    const proxOffset = offset + registrosServidor.length;
-    const temProxima = registrosServidor.length === limite;
-
-    const paginacao = `
-      <div style="margin-top:16px;display:flex;gap:8px">
-        ${offset > 0
-          ? `<a href="/auditoria?tabela=${tabelaParam}&offset=${Math.max(0, offset - limite)}"
-               style="padding:6px 14px;background:#eee;border-radius:4px;text-decoration:none;font-size:13px">← Anterior</a>`
-          : ''}
-        ${temProxima
-          ? `<a href="/auditoria?tabela=${tabelaParam}&offset=${proxOffset}"
-               style="padding:6px 14px;background:#eee;border-radius:4px;text-decoration:none;font-size:13px">Próxima →</a>`
-          : ''}
-        <span style="font-size:12px;color:#888;margin-left:8px;align-self:center">
-          Registros ${offset + 1}–${offset + registrosServidor.length}
-        </span>
-      </div>`;
-
-    const temDivergencias = totalDif > 0 || totalAusente > 0;
-
-    res.send(html(`
-      <h1>Auditoria — ${tabelaParam}</h1>
-      ${seletor}
-      <div style="margin-bottom:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-        <span style="font-size:13px;color:#666">
-          <span style="color:#27ae60;font-weight:bold">${totalOk} iguais</span> &nbsp;|&nbsp;
-          <span style="color:#c0392b;font-weight:bold">${totalDif} diferente(s)</span> &nbsp;|&nbsp;
-          <span style="color:#856404;font-weight:bold">${totalAusente} ausente(s) na filial</span>
-        </span>
-        ${temDivergencias ? `
-        <button onclick="corrigir('${tabelaParam}', ${offset}, 'matriz')"
-          style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
-          Aplicar Matriz em Tudo
-        </button>
-        <button onclick="corrigir('${tabelaParam}', ${offset}, 'manual')"
-          style="padding:7px 16px;background:#e67e22;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
-          Resolver um por um (Conflitos)
-        </button>` : ''}
-        <small style="color:#aaa;font-size:11px">Vermelho = filial difere (mouse = valor do servidor)</small>
-      </div>
-      <div style="overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;background:white;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)">
-          <thead style="background:#f0f0f0;text-transform:uppercase;color:#555">
-            <tr>
-              <th style="padding:8px 10px;text-align:left">${pk}</th>
-              ${todasColunas.map(c => `<th style="padding:8px 10px;text-align:left">${c}</th>`).join('')}
-            </tr>
-          </thead>
-          <tbody>
-            ${linhas}
-          </tbody>
-        </table>
-      </div>
-      ${paginacao}
-    `));
+    res.render('auditoria', {
+      tabelaParam, tabelaNomes, offset, limite,
+      rows, todasColunas,
+      pkLabel: pks.join(', '),
+      totalOk, totalDif, totalAusente,
+      temDivergencias: totalDif > 0 || totalAusente > 0,
+      proxOffset: offset + registrosServidor.length,
+      temProxima: registrosServidor.length === limite,
+      formatDisplay,
+      error: null,
+    });
   });
 
   // ── CORRIGIR AUDITORIA ───────────────────────────────────────────────────
@@ -860,81 +538,44 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   // ── CONFLITOS ────────────────────────────────────────────────────────────
   app.get('/', (req, res) => {
     const mostrarResolvidos = req.query.todos === '1';
-    const lista = mostrarResolvidos ? lerTodos() : listarPendentes();
+    const POR_PAGINA = 30;
     const pendentes = listarPendentes();
+    const listaCompleta = (mostrarResolvidos ? lerTodos() : pendentes).slice().reverse();
+    const total = listaCompleta.length;
+    const totalGeral = lerTodos().length;
 
-    if (lista.length === 0) {
-      return res.send(html(`
-        <h1>Conflitos de Sincronização</h1>
-        <div class="empty">
-          <p>Nenhum conflito ${mostrarResolvidos ? '' : 'pendente '}encontrado.</p>
-          ${!mostrarResolvidos ? '<p style="margin-top:8px"><a href="/?todos=1">Ver resolvidos</a></p>' : '<p style="margin-top:8px"><a href="/">Voltar</a></p>'}
-        </div>
-      `));
-    }
+    const totalPaginas = Math.max(1, Math.ceil(total / POR_PAGINA));
+    const pagina = Math.min(Math.max(1, parseInt(req.query.pagina, 10) || 1), totalPaginas);
+    const inicio = (pagina - 1) * POR_PAGINA;
+    const lista  = listaCompleta.slice(inicio, inicio + POR_PAGINA);
 
-    const cards = lista.map(c => {
-      const { divergentesTable, localRows, servidorRows, numDivergentes } = renderCampos(c.versaoLocal, c.versaoServidor, c.id);
-      const resolvido = c.resolvido;
-      const escolhaLabel = c.escolha === 'local' ? 'versão local' : c.escolha === 'servidor' ? 'versão do servidor' : 'mesclado campo a campo';
-      const escolha = resolvido ? `Resolvido: manteve <strong>${escolhaLabel}</strong>` : '';
-      const gridId = `grid-${c.id}`;
+    const base      = mostrarResolvidos ? '/?todos=1' : '/';
+    const linkPagina = p => `${base}${base.includes('?') ? '&' : '?'}pagina=${p}`;
 
-      return `
-        <div class="conflito${resolvido ? ' resolvido' : ''}">
-          <div class="conflito-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center" onclick="
-            var g=document.getElementById('${gridId}');
-            var aberto=g.style.display!=='none';
-            g.style.display=aberto?'none':'';
-            this.querySelector('.toggle-icon').textContent=aberto?'▼ Ver detalhes':'▲ Ocultar';
-          ">
-            <div>
-              <h2>${c.tabela} — ${c.pk} = ${c.pkValor}
-                ${!resolvido ? `<span style="font-size:12px;font-weight:normal;color:#c0392b;margin-left:8px">${numDivergentes} campo(s) diferente(s)</span>` : ''}
-              </h2>
-              <span>${c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : ''}</span>
-              ${resolvido ? `<span style="margin-left:16px;color:#155724">${escolha}</span>` : ''}
-            </div>
-            <span class="toggle-icon" style="font-size:12px;color:#888;white-space:nowrap;padding-left:16px">▲ Ocultar</span>
-          </div>
-          <div class="grid" id="${gridId}">
-            ${numDivergentes > 0 ? `
-            <div style="grid-column:1/-1;padding:16px 16px 0">
-              <h3 style="font-size:13px;font-weight:bold;margin-bottom:10px;text-transform:uppercase;color:#666">Campos Divergentes</h3>
-              ${divergentesTable}
-            </div>` : ''}
-            <div class="lado">
-              <h3>Versão Local (Filial)</h3>
-              <table>${localRows}</table>
-            </div>
-            <div class="lado">
-              <h3>Versão do Servidor (Matriz)</h3>
-              <table>${servidorRows}</table>
-            </div>
-          </div>
-          ${!resolvido ? `
-          <div class="acoes">
-            <button class="btn-local"    onclick="resolver('${c.id}', 'local')">Manter versão local</button>
-            <button class="btn-servidor" onclick="resolver('${c.id}', 'servidor')">Manter versão do servidor</button>
-            <button class="btn-mesclar"  onclick="resolverMesclado('${c.id}')">Aplicar seleção campo a campo</button>
-          </div>` : ''}
-        </div>`;
-    }).join('');
+    const paginacaoHTML = (() => {
+      if (totalPaginas <= 1) return '';
+      const fim = Math.min(inicio + POR_PAGINA, total);
+      const partes = [];
+      if (pagina > 1) partes.push(`<a href="${linkPagina(pagina - 1)}" style="padding:4px 10px;border:1px solid #3498db;border-radius:4px;color:#3498db;text-decoration:none">← Anterior</a>`);
+      const de = Math.max(1, pagina - 2), ate = Math.min(totalPaginas, pagina + 2);
+      if (de > 1) partes.push(`<span style="color:#aaa">…</span>`);
+      for (let p = de; p <= ate; p++) {
+        partes.push(p === pagina
+          ? `<span style="padding:4px 10px;border:1px solid #3498db;border-radius:4px;background:#3498db;color:white;font-weight:bold">${p}</span>`
+          : `<a href="${linkPagina(p)}" style="padding:4px 10px;border:1px solid #ccc;border-radius:4px;color:#555;text-decoration:none">${p}</a>`);
+      }
+      if (ate < totalPaginas) partes.push(`<span style="color:#aaa">…</span>`);
+      if (pagina < totalPaginas) partes.push(`<a href="${linkPagina(pagina + 1)}" style="padding:4px 10px;border:1px solid #3498db;border-radius:4px;color:#3498db;text-decoration:none">Próxima →</a>`);
+      return `<div style="display:flex;align-items:center;gap:6px;margin-top:20px;flex-wrap:wrap">${partes.join('')}<span style="margin-left:8px;font-size:12px;color:#888">${inicio + 1}–${fim} de ${total}</span></div>`;
+    })();
 
-    res.send(html(`
-      <h1>Conflitos de Sincronização
-        ${pendentes.length > 0
-          ? `<span class="badge">${pendentes.length} pendente(s)</span>`
-          : '<span class="badge ok">0 pendentes</span>'}
-      </h1>
-      <p style="margin-bottom:16px;font-size:13px;color:#666">
-        Campos destacados em amarelo diferem entre as versões.
-        ${!mostrarResolvidos && lista.length !== lerTodos().length
-          ? `<a href="/?todos=1" style="margin-left:8px">Ver todos (incluindo resolvidos)</a>`
-          : mostrarResolvidos ? `<a href="/" style="margin-left:8px">Ocultar resolvidos</a>` : ''}
-      </p>
-      ${cards}
-    `));
+    const conflitos = lista.map(c => ({ ...c, rendered: renderCampos(c.versaoLocal, c.versaoServidor, c.id) }));
+
+    res.render('conflitos', {
+      conflitos, numPendentes: pendentes.length,
+      total, totalGeral, pagina, totalPaginas, inicio,
+      mostrarResolvidos, paginacaoHTML,
+    });
   });
 
   app.post('/conflitos/:id/resolver', async (req, res) => {
@@ -1043,104 +684,17 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   // ── CONFIGURAÇÕES DE TABELAS ─────────────────────────────────────────────
   app.get('/configuracoes', (_req, res) => {
     const config = lerConfig();
-
-    // Agrupa tabelas por campo 'grupo'
     const grupos = {};
     for (const t of TABELAS) {
       const g = t.grupo || 'Outras';
       if (!grupos[g]) grupos[g] = [];
       grupos[g].push(t);
     }
-
-    const totalAtivas = TABELAS.filter(t => config[t.nome] !== false).length;
-
-    const secoes = Object.entries(grupos).map(([grupo, tabelas]) => {
-      const linhas = tabelas.map(t => {
-        const ativo = config[t.nome] !== false;
-        return `
-          <tr>
-            <td style="padding:8px 12px;font-size:13px;font-family:monospace">${t.nome}</td>
-            <td style="padding:8px 12px;font-size:12px;color:#888">${Array.isArray(t.pk) ? t.pk.join(', ') : t.pk}</td>
-            <td style="padding:8px 12px;text-align:center">
-              <label class="toggle-switch">
-                <input type="checkbox" ${ativo ? 'checked' : ''} onchange="toggleTabela('${t.nome}', this.checked)">
-                <span class="slider"></span>
-              </label>
-            </td>
-            <td style="padding:8px 12px;font-size:12px" id="status-${t.nome}">
-              <span style="color:${ativo ? '#27ae60' : '#e74c3c'};font-weight:bold">${ativo ? 'Ativa' : 'Inativa'}</span>
-            </td>
-          </tr>`;
-      }).join('');
-
-      return `
-        <div style="margin-bottom:24px">
-          <h2 style="font-size:14px;text-transform:uppercase;color:#555;margin-bottom:8px;letter-spacing:1px">${grupo}</h2>
-          <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
-            <thead style="background:#f0f0f0;font-size:11px;text-transform:uppercase;color:#777">
-              <tr>
-                <th style="padding:8px 12px;text-align:left">Tabela</th>
-                <th style="padding:8px 12px;text-align:left">Chave Primária</th>
-                <th style="padding:8px 12px;text-align:center;width:80px">Sincronizar</th>
-                <th style="padding:8px 12px;text-align:left;width:80px">Status</th>
-              </tr>
-            </thead>
-            <tbody>${linhas}</tbody>
-          </table>
-        </div>`;
-    }).join('');
-
-    res.send(html(`
-      <style>
-        .toggle-switch { position:relative; display:inline-block; width:42px; height:22px; }
-        .toggle-switch input { opacity:0; width:0; height:0; }
-        .slider { position:absolute; cursor:pointer; inset:0; background:#ccc; border-radius:22px; transition:.3s; }
-        .slider:before { position:absolute; content:""; height:16px; width:16px; left:3px; bottom:3px; background:white; border-radius:50%; transition:.3s; }
-        input:checked + .slider { background:#27ae60; }
-        input:checked + .slider:before { transform:translateX(20px); }
-      </style>
-      <h1>Configurações de Tabelas</h1>
-      <p style="margin-bottom:16px;font-size:13px;color:#666">
-        Tabelas inativas são ignoradas nos ciclos de pull e push.
-        A alteração tem efeito no próximo ciclo (sem necessidade de reiniciar).
-        &nbsp;<strong style="color:#333">${totalAtivas}/${TABELAS.length}</strong> ativas.
-      </p>
-      <div style="margin-bottom:20px;display:flex;gap:8px">
-        <button onclick="toggleTodos(true)"  style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Ativar todas</button>
-        <button onclick="toggleTodos(false)" style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Desativar todas</button>
-      </div>
-      ${secoes}
-      <script>
-        async function toggleTabela(tabela, ativo) {
-          const el = document.getElementById('status-' + tabela);
-          if (el) el.innerHTML = '<span style="color:#888">Salvando...</span>';
-          try {
-            const r = await fetch('/configuracoes/toggle', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ tabela, ativo })
-            });
-            const d = await r.json();
-            if (d.ok && el) {
-              el.innerHTML = '<span style="color:' + (ativo ? '#27ae60' : '#e74c3c') + ';font-weight:bold">' + (ativo ? 'Ativa' : 'Inativa') + '</span>';
-            } else if (el) {
-              el.innerHTML = '<span style="color:#e74c3c">Erro</span>';
-            }
-          } catch(e) {
-            if (el) el.innerHTML = '<span style="color:#e74c3c">Erro de rede</span>';
-          }
-        }
-
-        async function toggleTodos(ativo) {
-          const r = await fetch('/configuracoes/toggle-todos', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ativo })
-          });
-          if ((await r.json()).ok) location.reload();
-        }
-      </script>
-    `));
+    res.render('configuracoes', {
+      grupos, config,
+      totalAtivas: TABELAS.filter(t => config[t.nome] !== false).length,
+      totalTabelas: TABELAS.length,
+    });
   });
 
   app.post('/configuracoes/toggle', (req, res) => {
@@ -1189,87 +743,51 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       res.write(`event: novo-erro\ndata: ${JSON.stringify(erro)}\n\n`);
     };
 
+    const onConflito = (conflito) => {
+      res.write(`event: novo-conflito\ndata: ${JSON.stringify(conflito)}\n\n`);
+    };
+
     errosEmitter.on('novo-erro', onErro);
+    conflitosEmitter.on('novo-conflito', onConflito);
 
     req.on('close', () => {
       clearInterval(keepAlive);
       errosEmitter.off('novo-erro', onErro);
+      conflitosEmitter.off('novo-conflito', onConflito);
     });
   });
 
-  // ── API: contagem de erros (usada para popular o badge ao carregar a página) ─
-  app.get('/api/erros/count', (_req, res) => {
-    res.json({ total: lerErros().length });
+  // ── API: contagens para badges ───────────────────────────────────────────
+  app.get('/api/conflitos/count', (_req, res) => {
+    res.json({ total: listarPendentes().length });
+  });
+
+  app.get('/api/erros/count', async (_req, res) => {
+    try {
+      const erros = await lerErros();
+      res.json({ total: erros.length });
+    } catch (e) {
+      res.status(500).json({ total: 0, error: e.message });
+    }
   });
 
   // ── ERROS ────────────────────────────────────────────────────────────────
-  app.get('/erros', (_req, res) => {
-    const erros = lerErros();
-
-    if (erros.length === 0) {
-      return res.send(html(`
-        <h1>Erros de Sincronização</h1>
-        <div class="empty">
-          <p>Nenhum erro registrado.</p>
-        </div>
-      `));
+  app.get('/erros', async (_req, res) => {
+    try {
+      const erros = await lerErros();
+      res.render('erros', { erros });
+    } catch (e) {
+      res.status(500).render('erros', { erros: [] });
     }
-
-    const corOperacao = { pull: '#3498db', push: '#e67e22', ciclo: '#8e44ad', config: '#c0392b' };
-
-    const linhas = [...erros].reverse().map(e => {
-      const cor = corOperacao[e.operacao] || '#888';
-      const data = e.criadoEm ? new Date(e.criadoEm).toLocaleString('pt-BR') : '—';
-      return `
-        <tr>
-          <td style="white-space:nowrap;color:#888;font-size:12px">${data}</td>
-          <td style="font-family:monospace;font-size:12px">${e.tabela || '<span style="color:#aaa">—</span>'}</td>
-          <td style="text-align:center">
-            <span style="background:${cor};color:white;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:bold">
-              ${e.operacao || '—'}
-            </span>
-          </td>
-          <td style="font-size:13px;word-break:break-word">${e.mensagem}</td>
-        </tr>`;
-    }).join('');
-
-    res.send(html(`
-      <h1>Erros de Sincronização
-        <span class="badge">${erros.length}</span>
-      </h1>
-      <div style="margin-bottom:16px">
-        <button onclick="limpar()"
-          style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
-          Limpar todos
-        </button>
-        <span style="font-size:12px;color:#888;margin-left:12px">Últimos ${erros.length} erro(s) — máximo ${200} armazenados.</span>
-      </div>
-      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1);font-size:13px">
-        <thead style="background:#f0f0f0;font-size:11px;text-transform:uppercase;color:#555">
-          <tr>
-            <th style="padding:10px 12px;text-align:left;white-space:nowrap">Data/Hora</th>
-            <th style="padding:10px 12px;text-align:left">Tabela</th>
-            <th style="padding:10px 12px;text-align:center">Operação</th>
-            <th style="padding:10px 12px;text-align:left">Mensagem</th>
-          </tr>
-        </thead>
-        <tbody style="font-size:13px">
-          ${linhas}
-        </tbody>
-      </table>
-      <script>
-        async function limpar() {
-          if (!confirm('Limpar todos os erros?')) return;
-          const r = await fetch('/erros/limpar', { method: 'POST' });
-          if ((await r.json()).ok) location.reload();
-        }
-      </script>
-    `));
   });
 
-  app.post('/erros/limpar', (_req, res) => {
-    limparErros();
-    res.json({ ok: true });
+  app.post('/erros/limpar', async (_req, res) => {
+    try {
+      await limparErros();
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, error: e.message });
+    }
   });
 
   app.listen(porta, () => {

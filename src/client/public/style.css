@@ -1,0 +1,40 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 24px; }
+nav { margin-bottom: 20px; display: flex; gap: 12px; font-size: 13px; flex-wrap: wrap; }
+nav a { color: #3498db; text-decoration: none; padding: 4px 10px; border: 1px solid #3498db; border-radius: 4px; }
+nav a:hover { background: #3498db; color: white; }
+h1 { color: #333; margin-bottom: 16px; }
+.badge { display: inline-block; background: #e74c3c; color: white; border-radius: 12px; padding: 2px 10px; font-size: 13px; margin-left: 8px; }
+.badge.ok { background: #27ae60; }
+.conflito { background: white; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
+.conflito-header { background: #f8d7da; padding: 12px 16px; border-bottom: 1px solid #ddd; }
+.conflito-header h2 { font-size: 15px; color: #721c24; }
+.conflito-header span { font-size: 12px; color: #555; }
+.grid { display: grid; grid-template-columns: 1fr 1fr; }
+.lado { padding: 16px; }
+.lado:first-child { border-right: 1px solid #eee; }
+.lado h3 { font-size: 13px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; color: #666; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+td { padding: 4px 6px; border-bottom: 1px solid #f0f0f0; vertical-align: top; word-break: break-all; }
+td:first-child { font-weight: bold; color: #555; width: 40%; }
+.diff { background: #fff3cd; }
+.acoes { padding: 12px 16px; background: #fafafa; border-top: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
+button { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
+.btn-local    { background: #3498db; color: white; }
+.btn-servidor { background: #e67e22; color: white; }
+.btn-mesclar  { background: #8e44ad; color: white; }
+.btn-local:hover    { background: #2980b9; }
+.btn-servidor:hover { background: #d35400; }
+.btn-mesclar:hover  { background: #6c3483; }
+.empty { text-align: center; padding: 48px; color: #888; }
+.resolvido { opacity: 0.5; }
+.resolvido .conflito-header { background: #d4edda; }
+.resolvido .conflito-header h2 { color: #155724; }
+
+/* Toggle switch (configurações) */
+.toggle-switch { position: relative; display: inline-block; width: 42px; height: 22px; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: .3s; }
+.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s; }
+input:checked + .slider { background: #27ae60; }
+input:checked + .slider:before { transform: translateX(20px); }

@@ -1,0 +1,95 @@
+<%- include('partials/head', { title: tabelaParam ? 'Auditoria — ' + tabelaParam : 'Auditoria' }) %>
+<%- include('partials/nav') %>
+
+<h1>Auditoria<%= tabelaParam ? ' — ' + tabelaParam : ' de Dados' %></h1>
+
+<form method="get" action="/auditoria" style="margin-bottom:20px;display:flex;gap:8px;align-items:center">
+  <select name="tabela" style="padding:7px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px">
+    <option value="">— Selecione uma tabela —</option>
+    <% for (const t of tabelaNomes) { %>
+      <option value="<%= t %>" <%= t === tabelaParam ? 'selected' : '' %>><%= t %></option>
+    <% } %>
+  </select>
+  <button type="submit" style="padding:7px 16px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px">Comparar</button>
+</form>
+
+<% if (error) { %>
+  <div class="empty"><p><%= error %></p></div>
+<% } else if (tabelaParam && rows) { %>
+
+  <div style="margin-bottom:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+    <span style="font-size:13px;color:#666">
+      <span style="color:#27ae60;font-weight:bold"><%= totalOk %> iguais</span> &nbsp;|&nbsp;
+      <span style="color:#c0392b;font-weight:bold"><%= totalDif %> diferente(s)</span> &nbsp;|&nbsp;
+      <span style="color:#856404;font-weight:bold"><%= totalAusente %> ausente(s) na filial</span>
+    </span>
+    <% if (temDivergencias) { %>
+      <button onclick="corrigir('<%= tabelaParam %>', <%= offset %>, 'matriz')"
+        style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+        Aplicar Matriz em Tudo
+      </button>
+      <button onclick="corrigir('<%= tabelaParam %>', <%= offset %>, 'manual')"
+        style="padding:7px 16px;background:#e67e22;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+        Resolver um por um (Conflitos)
+      </button>
+    <% } %>
+    <small style="color:#aaa;font-size:11px">Vermelho = filial difere (mouse = valor do servidor)</small>
+  </div>
+
+  <div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;background:white;font-size:12px;box-shadow:0 1px 3px rgba(0,0,0,.1)">
+      <thead style="background:#f0f0f0;text-transform:uppercase;color:#555">
+        <tr>
+          <th style="padding:8px 10px;text-align:left"><%= pkLabel %></th>
+          <% for (const col of todasColunas) { %>
+            <th style="padding:8px 10px;text-align:left"><%= col %></th>
+          <% } %>
+        </tr>
+      </thead>
+      <tbody>
+        <% for (const row of rows) { %>
+          <% if (!row.loc) { %>
+            <tr style="background:#fff3cd">
+              <td><%= row.pkValor %></td>
+              <td colspan="<%= todasColunas.length %>" style="color:#856404;font-style:italic">
+                Não existe na filial
+              </td>
+            </tr>
+          <% } else { %>
+            <tr style="<%= row.difColunas.length > 0 ? 'background:#f8d7da' : '' %>">
+              <td><strong style="<%= row.difColunas.length > 0 ? 'font-weight:bold' : '' %>"><%= row.pkValor %></strong></td>
+              <% for (const col of todasColunas) { %>
+                <% const isDif = row.difColunas.includes(col); %>
+                <td>
+                  <% if (isDif) { %>
+                    <span title="Servidor: <%= String(row.srv[col] != null ? row.srv[col] : 'NULL') %>"
+                          style="color:#721c24;font-weight:bold"><%- formatDisplay(row.loc[col]) %></span>
+                  <% } else { %>
+                    <span style="color:#aaa"><%- formatDisplay(row.loc[col]) %></span>
+                  <% } %>
+                </td>
+              <% } %>
+            </tr>
+          <% } %>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top:16px;display:flex;gap:8px">
+    <% if (offset > 0) { %>
+      <a href="/auditoria?tabela=<%= tabelaParam %>&offset=<%= Math.max(0, offset - limite) %>"
+         style="padding:6px 14px;background:#eee;border-radius:4px;text-decoration:none;font-size:13px">← Anterior</a>
+    <% } %>
+    <% if (temProxima) { %>
+      <a href="/auditoria?tabela=<%= tabelaParam %>&offset=<%= proxOffset %>"
+         style="padding:6px 14px;background:#eee;border-radius:4px;text-decoration:none;font-size:13px">Próxima →</a>
+    <% } %>
+    <span style="font-size:12px;color:#888;margin-left:8px;align-self:center">
+      Registros <%= offset + 1 %>–<%= offset + rows.length %>
+    </span>
+  </div>
+
+<% } %>
+
+<%- include('partials/scripts') %>

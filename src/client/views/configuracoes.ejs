@@ -1,0 +1,81 @@
+<%- include('partials/head', { title: 'Configurações' }) %>
+<%- include('partials/nav') %>
+
+<h1>Configurações de Tabelas</h1>
+<p style="margin-bottom:16px;font-size:13px;color:#666">
+  Tabelas inativas são ignoradas nos ciclos de pull e push.
+  A alteração tem efeito no próximo ciclo (sem necessidade de reiniciar).
+  &nbsp;<strong style="color:#333"><%= totalAtivas %>/<%= totalTabelas %></strong> ativas.
+</p>
+
+<div style="margin-bottom:20px;display:flex;gap:8px">
+  <button onclick="toggleTodos(true)"  style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Ativar todas</button>
+  <button onclick="toggleTodos(false)" style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Desativar todas</button>
+</div>
+
+<% for (const [grupo, tabelas] of Object.entries(grupos)) { %>
+  <div style="margin-bottom:24px">
+    <h2 style="font-size:14px;text-transform:uppercase;color:#555;margin-bottom:8px;letter-spacing:1px"><%= grupo %></h2>
+    <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
+      <thead style="background:#f0f0f0;font-size:11px;text-transform:uppercase;color:#777">
+        <tr>
+          <th style="padding:8px 12px;text-align:left">Tabela</th>
+          <th style="padding:8px 12px;text-align:left">Chave Primária</th>
+          <th style="padding:8px 12px;text-align:center;width:80px">Sincronizar</th>
+          <th style="padding:8px 12px;text-align:left;width:80px">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% for (const t of tabelas) { %>
+          <% const ativo = config[t.nome] !== false; %>
+          <tr>
+            <td style="padding:8px 12px;font-size:13px;font-family:monospace"><%= t.nome %></td>
+            <td style="padding:8px 12px;font-size:12px;color:#888"><%= Array.isArray(t.pk) ? t.pk.join(', ') : t.pk %></td>
+            <td style="padding:8px 12px;text-align:center">
+              <label class="toggle-switch">
+                <input type="checkbox" <%= ativo ? 'checked' : '' %> onchange="toggleTabela('<%= t.nome %>', this.checked)">
+                <span class="slider"></span>
+              </label>
+            </td>
+            <td style="padding:8px 12px;font-size:12px" id="status-<%= t.nome %>">
+              <span style="color:<%= ativo ? '#27ae60' : '#e74c3c' %>;font-weight:bold"><%= ativo ? 'Ativa' : 'Inativa' %></span>
+            </td>
+          </tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+<% } %>
+
+<script>
+  async function toggleTabela(tabela, ativo) {
+    var el = document.getElementById('status-' + tabela);
+    if (el) el.innerHTML = '<span style="color:#888">Salvando...</span>';
+    try {
+      var r = await fetch('/configuracoes/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: tabela, ativo: ativo })
+      });
+      var d = await r.json();
+      if (d.ok && el) {
+        el.innerHTML = '<span style="color:' + (ativo ? '#27ae60' : '#e74c3c') + ';font-weight:bold">' + (ativo ? 'Ativa' : 'Inativa') + '</span>';
+      } else if (el) {
+        el.innerHTML = '<span style="color:#e74c3c">Erro</span>';
+      }
+    } catch(e) {
+      if (el) el.innerHTML = '<span style="color:#e74c3c">Erro de rede</span>';
+    }
+  }
+
+  async function toggleTodos(ativo) {
+    var r = await fetch('/configuracoes/toggle-todos', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: ativo })
+    });
+    if ((await r.json()).ok) location.reload();
+  }
+</script>
+
+<%- include('partials/scripts') %>

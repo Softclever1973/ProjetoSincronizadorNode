@@ -1,0 +1,49 @@
+<%- include('partials/head', { title: 'Status' }) %>
+<%- include('partials/nav') %>
+
+<h1>Status de Sincronização</h1>
+
+<% if (error) { %>
+  <div class="empty"><p><%= error %></p></div>
+<% } else { %>
+
+  <p style="margin-bottom:16px;font-size:13px;color:#666">
+    <span style="color:#27ae60;font-weight:bold"><%= totalOk %> OK</span> &nbsp;|&nbsp;
+    <span style="color:#e67e22;font-weight:bold"><%= totalPendente %> pendente(s)</span> &nbsp;|&nbsp;
+    <span style="color:#6c757d"><%= totalErro %> N/D</span>
+    &nbsp;&nbsp;
+    <a href="/status" style="font-size:12px">Atualizar</a>
+    &nbsp;|&nbsp;
+    <a href="/" style="font-size:12px">Ver conflitos</a>
+  </p>
+
+  <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
+    <thead style="background:#f0f0f0;font-size:12px;text-transform:uppercase;color:#555">
+      <tr>
+        <th style="padding:10px 12px;text-align:left">Tabela</th>
+        <th style="padding:10px 12px;text-align:right">Servidor</th>
+        <th style="padding:10px 12px;text-align:right">Local</th>
+        <th style="padding:10px 12px;text-align:right">Max ID Servidor</th>
+        <th style="padding:10px 12px;text-align:right">Cursor Local</th>
+        <th style="padding:10px 12px;text-align:right">A Enviar</th>
+        <th style="padding:10px 12px;text-align:center">Status</th>
+      </tr>
+    </thead>
+    <tbody style="font-size:13px">
+      <% for (const t of tabelas) { %>
+        <tr>
+          <td><%= t.nome %></td>
+          <td style="text-align:right"><%= t.totalServidor != null ? t.totalServidor : '—' %></td>
+          <td style="text-align:right"><%= t.totalLocal || '—' %></td>
+          <td style="text-align:right"><%= t.maxId != null ? t.maxId : '—' %></td>
+          <td style="text-align:right"><%= t.cursorLocal || 0 %></td>
+          <td style="text-align:right;color:#e74c3c;font-weight:bold"><%= t.pendentesEnvio > 0 ? t.pendentesEnvio : '—' %></td>
+          <td style="text-align:center;color:<%= t.statusCor %>;font-weight:bold"><%= t.statusTexto %></td>
+        </tr>
+      <% } %>
+    </tbody>
+  </table>
+
+<% } %>
+
+<%- include('partials/scripts') %>

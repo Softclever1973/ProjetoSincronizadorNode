@@ -10,6 +10,99 @@ const { salvarConflito } = require('./conflitos');
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
 
+// Cache de referências FK por "TABELA.COLUNA_PK" — evita consultar system tables toda vez
+const cacheFKRefs = {};
+
+/**
+ * Retorna todas as tabelas filhas que referenciam via FK a coluna PK informada.
+ * Parte do PK constraint do pai e navega para os FK constraints dos filhos.
+ * Resultado: [{ tabela: 'MOVIMENTACOES', coluna: 'ID_PRODUTO' }, ...]
+ */
+async function getFKRefs(db, tabelaPai, colunaPai) {
+  const chave = `${tabelaPai}.${colunaPai}`;
+  if (cacheFKRefs[chave]) return cacheFKRefs[chave];
+
+  const rows = await query(db, `
+    SELECT TRIM(rc2.RDB$RELATION_NAME) AS TABELA_FILHA,
+           TRIM(seg2.RDB$FIELD_NAME)   AS COLUNA_FK
+    FROM RDB$RELATION_CONSTRAINTS rc1
+    JOIN RDB$INDEX_SEGMENTS       seg1 ON seg1.RDB$INDEX_NAME        = rc1.RDB$INDEX_NAME
+    JOIN RDB$REF_CONSTRAINTS      ref  ON ref.RDB$CONST_NAME_UQ      = rc1.RDB$CONSTRAINT_NAME
+    JOIN RDB$RELATION_CONSTRAINTS rc2  ON rc2.RDB$CONSTRAINT_NAME    = ref.RDB$CONSTRAINT_NAME
+    JOIN RDB$INDEX_SEGMENTS       seg2 ON seg2.RDB$INDEX_NAME        = rc2.RDB$INDEX_NAME
+                                      AND seg2.RDB$FIELD_POSITION    = seg1.RDB$FIELD_POSITION
+    WHERE TRIM(rc1.RDB$RELATION_NAME)   = ?
+      AND TRIM(rc1.RDB$CONSTRAINT_TYPE) = 'PRIMARY KEY'
+      AND TRIM(seg1.RDB$FIELD_NAME)     = ?
+  `, [tabelaPai, colunaPai]);
+
+  const refs = rows.map(r => ({ tabela: r.TABELA_FILHA.trim(), coluna: r.COLUNA_FK.trim() }));
+  cacheFKRefs[chave] = refs;
+  return refs;
+}
+
+/**
+ * Renomeia o PK de um registro local tratando dependências FK em cascata.
+ *
+ * Se não há filhos FK: simples UPDATE do PK.
+ * Se há filhos FK: INSERT cópia com novo PK → UPDATE filhos → DELETE original.
+ * Essa sequência é necessária porque o Firebird valida FK por instrução (não por commit),
+ * criando um impasse circular se tentarmos apenas fazer UPDATE no pai ou nos filhos primeiro.
+ */
+async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
+  const pks = Array.isArray(pk) ? pk : [pk];
+  const pkPrincipal = pks[pks.length - 1];
+  const valorAntigo = registro[pkPrincipal];
+
+  const whereParts  = pks.map(p => `${p} = ?`).join(' AND ');
+  const whereValores = pks.map(p => registro[p]);
+
+  if (fkRefs.length === 0) {
+    await execute(db,
+      `UPDATE ${nome} SET ${pkPrincipal} = ? WHERE ${whereParts}`,
+      [novoValorPK, ...whereValores]
+    );
+    return;
+  }
+
+  // Descobrir colunas não-computadas para o INSERT...SELECT
+  const colRows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+    FROM RDB$RELATION_FIELDS rf
+    LEFT JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ?
+      AND f.RDB$COMPUTED_SOURCE IS NULL
+    ORDER BY rf.RDB$FIELD_POSITION
+  `, [nome]);
+  const colunas = colRows.map(r => r.COLUNA.trim());
+
+  // Monta SELECT substituindo apenas o PK principal pelo novo valor.
+  // Usa literal inline (safe: vem de gerarNovoPK que retorna número ou string controlada).
+  const isNumerico = Number.isFinite(Number(novoValorPK)) && String(novoValorPK).trim() !== '';
+  const pkLiteral  = isNumerico
+    ? String(parseInt(novoValorPK, 10))
+    : `'${String(novoValorPK).replace(/'/g, "''")}'`;
+
+  const selectParts = colunas.map(c => (c === pkPrincipal ? pkLiteral : c)).join(', ');
+
+  // 1. Insere cópia com novo PK (agora ambos os valores existem na tabela pai)
+  await execute(db,
+    `INSERT INTO ${nome} (${colunas.join(', ')}) SELECT ${selectParts} FROM ${nome} WHERE ${pkPrincipal} = ?`,
+    [valorAntigo]
+  );
+
+  // 2. Atualiza FK refs para o novo PK (pai já existe; FK satisfeita)
+  for (const ref of fkRefs) {
+    await execute(db,
+      `UPDATE ${ref.tabela} SET ${ref.coluna} = ? WHERE ${ref.coluna} = ?`,
+      [novoValorPK, valorAntigo]
+    );
+  }
+
+  // 3. Remove o registro original (PK antigo livre para o servidor inserir)
+  await execute(db, `DELETE FROM ${nome} WHERE ${whereParts}`, whereValores);
+}
+
 /**
  * Retorna o conjunto de colunas computadas (COMPUTED BY) de uma tabela.
  * Essas colunas são read-only no Firebird e não podem ser incluídas no UPSERT.
@@ -198,7 +291,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
               const whereValores = pks.map(p => registro[p]);
 
-              await execute(db, `UPDATE ${nome} SET ${pkPrincipal} = ? WHERE ${whereParts}`, [novoValorPK, ...whereValores]);
+              const fkRefs = await getFKRefs(db, nome, pkPrincipal);
+              await renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs);
 
               // Calcula o novo PK_VALOR (concatenado) para atualizar a fila de pendentes
               const registroAtualizado = { ...registro, [pkPrincipal]: novoValorPK };

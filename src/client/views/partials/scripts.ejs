@@ -1,0 +1,157 @@
+<script>
+  async function corrigir(tabela, offset, escolha) {
+    escolha = escolha || 'matriz';
+    var btn = event.target;
+    var originalText = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Processando...';
+    try {
+      var r = await fetch('/auditoria/corrigir', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabela: tabela, offset: offset, escolha: escolha })
+      });
+      var data = await r.json();
+      if (data.ok) {
+        if (escolha === 'manual') {
+          window.location.href = '/';
+        } else {
+          btn.textContent = 'Concluído: ' + data.processados + ' registro(s)';
+          setTimeout(function() { location.reload(); }, 1500);
+        }
+      } else {
+        alert('Erro: ' + (data.message || 'desconhecido'));
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    } catch(e) {
+      alert('Erro de rede: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = originalText;
+    }
+  }
+
+  async function resolver(id, escolha) {
+    var btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Aguarde...';
+    try {
+      var r = await fetch('/conflitos/' + id + '/resolver', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ escolha: escolha })
+      });
+      var data = await r.json();
+      if (data.ok) {
+        location.reload();
+      } else {
+        alert('Erro: ' + (data.message || 'desconhecido'));
+        btn.disabled = false;
+      }
+    } catch(e) {
+      alert('Erro de rede: ' + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  async function resolverMesclado(conflitoid) {
+    var campos = {};
+    document.querySelectorAll('[name^="campo-' + conflitoid + '-"]').forEach(function(r) {
+      if (r.checked) {
+        var col = r.name.replace('campo-' + conflitoid + '-', '');
+        campos[col] = r.value;
+      }
+    });
+    var btn = event.target;
+    btn.disabled = true;
+    btn.textContent = 'Aguarde...';
+    try {
+      var r = await fetch('/conflitos/' + conflitoid + '/resolver', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ escolha: 'mesclar', campos: campos })
+      });
+      var data = await r.json();
+      if (data.ok) {
+        location.reload();
+      } else {
+        alert('Erro: ' + (data.message || 'desconhecido'));
+        btn.disabled = false;
+        btn.textContent = 'Aplicar seleção';
+      }
+    } catch(e) {
+      alert('Erro de rede: ' + e.message);
+      btn.disabled = false;
+      btn.textContent = 'Aplicar seleção';
+    }
+  }
+
+  // ── SSE: badges e notificações em tempo real ─────────────────────────────
+  (function () {
+    // Carrega contagens iniciais dos badges
+    fetch('/api/erros/count')
+      .then(function(r) { return r.json(); })
+      .then(function(d) { atualizarBadgeErros(d.total); })
+      .catch(function() {});
+
+    fetch('/api/conflitos/count')
+      .then(function(r) { return r.json(); })
+      .then(function(d) { atualizarBadgeConflitos(d.total); })
+      .catch(function() {});
+
+    // Solicita permissão para notificações do SO (apenas uma vez)
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+
+    var es = new EventSource('/eventos');
+
+    es.addEventListener('novo-erro', function(e) {
+      try {
+        var erro = JSON.parse(e.data);
+        var badge = document.getElementById('erros-badge');
+        var atual = badge ? (parseInt(badge.textContent, 10) || 0) : 0;
+        atualizarBadgeErros(atual + 1);
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Erro de Sincronização', {
+            body: (erro.tabela ? '[' + erro.tabela + '] ' : '') + erro.mensagem,
+            tag: 'sync-erro-' + (erro.tabela || 'geral'),
+          });
+        }
+      } catch (_) {}
+    });
+
+    es.addEventListener('novo-conflito', function(e) {
+      try {
+        var c = JSON.parse(e.data);
+        var badge = document.getElementById('conflitos-badge');
+        var atual = badge ? (parseInt(badge.textContent, 10) || 0) : 0;
+        atualizarBadgeConflitos(atual + 1);
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Conflito de Sincronização', {
+            body: (c.tabela ? '[' + c.tabela + '] ' : '') + 'PK: ' + c.pkValor,
+            tag: 'sync-conflito-' + (c.tabela || 'geral'),
+          });
+        }
+      } catch (_) {}
+    });
+
+    es.onerror = function() {};
+  })();
+
+  function atualizarBadgeErros(total) {
+    var badge = document.getElementById('erros-badge');
+    if (!badge) return;
+    if (total > 0) { badge.textContent = total; badge.style.display = 'inline'; }
+    else { badge.style.display = 'none'; }
+  }
+
+  function atualizarBadgeConflitos(total) {
+    var badge = document.getElementById('conflitos-badge');
+    if (!badge) return;
+    if (total > 0) { badge.textContent = total; badge.style.display = 'inline'; }
+    else { badge.style.display = 'none'; }
+  }
+</script>
+</body>
+</html>

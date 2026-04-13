@@ -1,0 +1,90 @@
+<%- include('partials/head', { title: 'Conflitos' }) %>
+<%- include('partials/nav') %>
+
+<h1>Conflitos de Sincronização
+  <% if (numPendentes > 0) { %>
+    <span class="badge"><%= numPendentes %> pendente(s)</span>
+  <% } else { %>
+    <span class="badge ok">0 pendentes</span>
+  <% } %>
+</h1>
+
+<% if (conflitos.length === 0) { %>
+  <div class="empty">
+    <p>Nenhum conflito <%= mostrarResolvidos ? '' : 'pendente ' %>encontrado.</p>
+    <% if (!mostrarResolvidos) { %>
+      <p style="margin-top:8px"><a href="/?todos=1">Ver resolvidos</a></p>
+    <% } else { %>
+      <p style="margin-top:8px"><a href="/">Voltar</a></p>
+    <% } %>
+  </div>
+<% } else { %>
+
+  <p style="margin-bottom:16px;font-size:13px;color:#666">
+    Campos destacados em amarelo diferem entre as versões.
+    <% if (!mostrarResolvidos && total < totalGeral) { %>
+      <a href="/?todos=1" style="margin-left:8px">Ver todos (incluindo resolvidos)</a>
+    <% } else if (mostrarResolvidos) { %>
+      <a href="/" style="margin-left:8px">Ocultar resolvidos</a>
+    <% } %>
+  </p>
+
+  <%- paginacaoHTML %>
+
+  <% for (const c of conflitos) { %>
+    <%
+      const resolvido = c.resolvido;
+      const escolhaLabel = c.escolha === 'local' ? 'versão local'
+                         : c.escolha === 'servidor' ? 'versão do servidor'
+                         : 'mesclado campo a campo';
+      const gridId = 'grid-' + c.id;
+    %>
+    <div class="conflito<%= resolvido ? ' resolvido' : '' %>">
+      <div class="conflito-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center"
+           onclick="var g=document.getElementById('<%= gridId %>');var aberto=g.style.display!=='none';g.style.display=aberto?'none':'';this.querySelector('.toggle-icon').textContent=aberto?'▼ Ver detalhes':'▲ Ocultar';">
+        <div>
+          <h2><%= c.tabela %> — <%= c.pk %> = <%= c.pkValor %>
+            <% if (!resolvido) { %>
+              <span style="font-size:12px;font-weight:normal;color:#c0392b;margin-left:8px"><%= c.rendered.numDivergentes %> campo(s) diferente(s)</span>
+            <% } %>
+          </h2>
+          <span><%= c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : '' %></span>
+          <% if (resolvido) { %>
+            <span style="margin-left:16px;color:#155724">Resolvido: manteve <strong><%= escolhaLabel %></strong></span>
+          <% } %>
+        </div>
+        <span class="toggle-icon" style="font-size:12px;color:#888;white-space:nowrap;padding-left:16px">▲ Ocultar</span>
+      </div>
+
+      <div class="grid" id="<%= gridId %>">
+        <% if (c.rendered.numDivergentes > 0) { %>
+          <div style="grid-column:1/-1;padding:16px 16px 0">
+            <h3 style="font-size:13px;font-weight:bold;margin-bottom:10px;text-transform:uppercase;color:#666">Campos Divergentes</h3>
+            <%- c.rendered.divergentesTable %>
+          </div>
+        <% } %>
+        <div class="lado">
+          <h3>Versão Local (Filial)</h3>
+          <table><%- c.rendered.localRows %></table>
+        </div>
+        <div class="lado">
+          <h3>Versão do Servidor (Matriz)</h3>
+          <table><%- c.rendered.servidorRows %></table>
+        </div>
+      </div>
+
+      <% if (!resolvido) { %>
+        <div class="acoes">
+          <button class="btn-local"    onclick="resolver('<%= c.id %>', 'local')">Manter versão local</button>
+          <button class="btn-servidor" onclick="resolver('<%= c.id %>', 'servidor')">Manter versão do servidor</button>
+          <button class="btn-mesclar"  onclick="resolverMesclado('<%= c.id %>')">Aplicar seleção campo a campo</button>
+        </div>
+      <% } %>
+    </div>
+  <% } %>
+
+  <%- paginacaoHTML %>
+
+<% } %>
+
+<%- include('partials/scripts') %>
