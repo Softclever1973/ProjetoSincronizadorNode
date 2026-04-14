@@ -89,10 +89,16 @@ function get(url) {
 /**
  * Busca registros para atualizar de uma tabela genérica.
  * Rota: /datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar
+ *
+ * Se idLoja e filtroFilial estiverem preenchidos, o servidor aplica
+ * WHERE <filtroFilial> = idLoja — apenas registros da filial são retornados.
  */
-function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idPDV = null) {
+function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null) {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
+  if (idLoja != null && filtroFilial) {
+    url += `&idLoja=${idLoja}&filtroFilial=${encodeURIComponent(filtroFilial)}`;
+  }
   if (idPDV != null) url += `&idPDV=${idPDV}`;
   return get(url);
 }

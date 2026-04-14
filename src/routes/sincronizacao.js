@@ -87,6 +87,10 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const nomeTabela = (req.query.nomeTabela || '').toUpperCase().trim();
   const idUltimaAtualizacaoMatriz = parseInt(req.query.idUltimaAtualizacaoMatriz, 10) || 0;
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const idLoja = req.query.idLoja ? parseInt(req.query.idLoja, 10) : null;
+  const filtroFilial = req.query.filtroFilial
+    ? String(req.query.filtroFilial).trim().toUpperCase()
+    : null;
 
   if (!nomeTabela) {
     return res.status(400).json({
@@ -98,17 +102,25 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não é permitida para sincronização` });
   }
 
+  // Valida nome de coluna para evitar SQL injection
+  if (filtroFilial && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilial)) {
+    return res.status(400).json({ message: `Nome de coluna inválido: '${filtroFilial}'` });
+  }
+
   try {
-    const rows = await withConnection((db) =>
-      query(
-        db,
-        `SELECT FIRST 50 * FROM ${nomeTabela}
-         WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
-           AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?
-         ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ`,
-        [idUltimaAtualizacaoMatriz]
-      )
-    );
+    let sql = `SELECT FIRST 50 * FROM ${nomeTabela}
+               WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
+                 AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?`;
+    const params = [idUltimaAtualizacaoMatriz];
+
+    if (filtroFilial && idLoja) {
+      sql += ` AND ${filtroFilial} = ?`;
+      params.push(idLoja);
+    }
+
+    sql += ` ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ`;
+
+    const rows = await withConnection((db) => query(db, sql, params));
 
     res.json(rows);
   } catch (e) {
