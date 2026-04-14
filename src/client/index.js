@@ -15,7 +15,7 @@ const PORTA_WEBUI  = 3001;
 let rodando = false;
 
 // Contexto compartilhado com a WebUI para forçar envio ao resolver conflito
-const contextoSync = { baseURI: null, idLoja: null };
+const contextoSync = { baseURI: null, idLoja: null, idPDV: null };
 
 function log(msg) {
   const hora = new Date().toLocaleTimeString('pt-BR');
@@ -33,8 +33,10 @@ async function executarCiclo() {
 
   const db = await getConnection();
   try {
-    const baseURI = (await getParam(db, 60024)).replace(/\/+$/, '');
-    const idLoja  = parseInt(await getParam(db, 50003), 10);
+    const baseURI  = (await getParam(db, 60024)).replace(/\/+$/, '');
+    const idLoja   = parseInt(await getParam(db, 50003), 10);
+    const idPDVRaw = await getParam(db, 50004);
+    const idPDV    = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
 
     if (!baseURI) {
       const msg = 'Parâmetro 60024 (URL do servidor) não configurado.';
@@ -52,13 +54,14 @@ async function executarCiclo() {
 
     contextoSync.baseURI = baseURI;
     contextoSync.idLoja  = idLoja;
+    contextoSync.idPDV   = idPDV;
 
-    log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}`);
+    log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
 
     // ── PULL (servidor → filial) ──────────────────────────────────────────
     for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
       try {
-        await sincronizarTabela(db, baseURI, idLoja, tabela, log);
+        await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log(`[${tabela.nome}] Erro inesperado no pull: ${msg}`);
@@ -69,7 +72,7 @@ async function executarCiclo() {
     // ── PUSH (filial → servidor) ──────────────────────────────────────────
     for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
       try {
-        await empurrarTabela(db, baseURI, idLoja, tabela, log);
+        await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         log(`[${tabela.nome}] Erro inesperado no push: ${msg}`);

@@ -6,7 +6,7 @@ const { atualizarOuSalvarConflito } = require('./conflitos');
  * Envia ao servidor os registros locais que foram alterados desde o último sync.
  * Detecta conflitos e os salva para resolução manual via interface web.
  */
-async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log) {
+async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null) {
   const { nome, pk } = configTabela;
 
   let pendentes;
@@ -70,7 +70,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     } catch {}
 
     try {
-      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida);
+      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV);
 
       if (resultado.conflito) {
         // Remove dos pendentes para não re-enviar indefinidamente no próximo ciclo

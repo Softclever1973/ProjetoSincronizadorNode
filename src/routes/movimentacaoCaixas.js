@@ -19,8 +19,9 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
     return res.status(400).json({ message: 'Body não informado!' });
   }
 
-  const idLoja    = movCaixa.idLoja    || movCaixa.ID_LOJA;
+  const idLoja     = movCaixa.idLoja     || movCaixa.ID_LOJA;
   const idMovCaixa = movCaixa.idMovCaixa || movCaixa.ID_MOV_CAIXA;
+  const idPDV      = movCaixa.idPDV      || movCaixa.ID_PDV || null; // eslint-disable-line no-unused-vars
 
   if (!idMovCaixa) {
     return res.status(400).json({ message: 'Campo ID_MOV_CAIXA não informado!' });

@@ -86,6 +86,7 @@ const TABELAS_PERMITIDAS = new Set([
 router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const nomeTabela = (req.query.nomeTabela || '').toUpperCase().trim();
   const idUltimaAtualizacaoMatriz = parseInt(req.query.idUltimaAtualizacaoMatriz, 10) || 0;
+  const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
 
   if (!nomeTabela) {
     return res.status(400).json({
@@ -244,6 +245,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
  */
 router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
+  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
   const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false } = req.body || {};
 
   if (!idLoja) {

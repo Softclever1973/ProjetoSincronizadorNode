@@ -90,9 +90,10 @@ function get(url) {
  * Busca registros para atualizar de uma tabela genérica.
  * Rota: /datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar
  */
-function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz) {
-  const url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
+function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idPDV = null) {
+  let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
+  if (idPDV != null) url += `&idPDV=${idPDV}`;
   return get(url);
 }
 
@@ -110,9 +111,10 @@ function buscarRegistrosParaDeletar(baseURI, nomeTabela, idUltimoRegistroDeletad
  * Busca produtos para atualizar (endpoint específico com preço por loja).
  * Rota: /datasnap/rest/TSMProdutos/ProdutosParaAtualizar
  */
-function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz) {
-  const url = `${baseURI}/datasnap/rest/TSMProdutos/ProdutosParaAtualizar` +
+function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz, idPDV = null) {
+  let url = `${baseURI}/datasnap/rest/TSMProdutos/ProdutosParaAtualizar` +
     `?token=${TOKEN}&idLoja=${idLoja}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
+  if (idPDV != null) url += `&idPDV=${idPDV}`;
   return get(url);
 }
 
@@ -121,9 +123,10 @@ function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz)
  * Se forcar=true, o servidor aplica sem verificar conflito.
  * Retorna { ok: true } ou { conflito: true, versaoServidor: {...} }
  */
-function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false) {
-  const url = `${baseURI}/datasnap/rest/TSMSincronizacao/ReceberRegistro` +
+function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false, idPDV = null) {
+  let url = `${baseURI}/datasnap/rest/TSMSincronizacao/ReceberRegistro` +
     `?token=${TOKEN}&idLoja=${idLoja}`;
+  if (idPDV != null) url += `&idPDV=${idPDV}`;
   return post(url, { tabela, pk, registro, ultimaVersaoConhecida, forcar });
 }
 

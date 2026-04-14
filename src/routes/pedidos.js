@@ -12,6 +12,7 @@ const { isFilialBloqueada } = require('../middleware/filialBloqueada');
  */
 router.get('/getPedidos', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
+  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
 
   if (!idLoja) {
     return res.status(400).json({
@@ -68,6 +69,7 @@ router.get('/getPedidos', auth, async (req, res) => {
  */
 router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
+  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
 
   if (!idLoja) {
     return res.status(400).json({
@@ -123,6 +125,7 @@ router.post('/updatePedido', auth, async (req, res) => {
   }
 
   const idLoja = pedido.idLoja || pedido.ID_LOJA;
+  const idPDV  = pedido.idPDV  || pedido.ID_PDV  || null; // eslint-disable-line no-unused-vars
 
   const db = await getConnection();
   try {
