@@ -69,6 +69,11 @@ const TABELAS = [
   { nome: 'REPRESENTANTES',                  pk: 'ID_REPRESENTANTE',                 temDelete: true,  filtroFilial: null, grupo: 'Vendedores' },
   { nome: 'SUPERVISORES',                    pk: 'ID_SUPERVISOR',                    temDelete: true,  filtroFilial: null, grupo: 'Vendedores' },
 
+  // --- Pedidos ---
+  { nome: 'PEDIDOS',                     pk: 'ID_PEDIDO',                       temDelete: true,  filtroFilial: 'ID_LOJA', grupo: 'Pedidos' },
+  { nome: 'PEDIDOS_ITENS',               pk: 'ID_PEDIDO_ITEM',                  temDelete: true,  filtroFilial: null,      grupo: 'Pedidos' },
+  { nome: 'PEDIDOS_PARCELAS_PAGAMENTOS', pk: ['ID_PEDIDO', 'PARCELA'],          temDelete: false, filtroFilial: null,      grupo: 'Pedidos' },
+
   // --- Kits ---
   { nome: 'KITS_PRODUTOS',                   pk: 'ID_KIT_PRODUTO',                   temDelete: true,  filtroFilial: null, grupo: 'Kits' },
   { nome: 'KITS_ITENS_PROD',                 pk: 'ID_KIT_ITEM_PROD',                 temDelete: true,  filtroFilial: null, grupo: 'Kits' },

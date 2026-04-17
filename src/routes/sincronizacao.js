@@ -7,6 +7,21 @@ const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
 
+// Cache de colunas existentes no servidor por tabela
+const cacheColunasServidor = {};
+
+async function getColunasServidor(db, nomeTabela) {
+  if (cacheColunasServidor[nomeTabela]) return cacheColunasServidor[nomeTabela];
+  const rows = await query(db,
+    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+     FROM RDB$RELATION_FIELDS rf
+     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
+    [nomeTabela]
+  );
+  cacheColunasServidor[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  return cacheColunasServidor[nomeTabela];
+}
+
 function normalizarBlobs(row) {
   if (!row || typeof row !== 'object') return row;
   return Object.fromEntries(
@@ -75,6 +90,9 @@ const TABELAS_PERMITIDAS = new Set([
   'KITS_PRODUTOS',
   'KITS_ITENS_PROD',
   'KITS_ITENS_SUB_PROD',
+  'PEDIDOS',
+  'PEDIDOS_ITENS',
+  'PEDIDOS_PARCELAS_PAGAMENTOS',
 ]);
 
 /**
@@ -293,12 +311,14 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       }
     }
 
-    // Aplica o UPSERT filtrando colunas computadas e reservadas
+    // Aplica o UPSERT filtrando colunas computadas, reservadas e inexistentes no servidor
     const computadas = await getColunasComputadas(db, nomeTabela);
+    const colunasServidor = await getColunasServidor(db, nomeTabela);
     const colunas = Object.keys(registro).filter(k =>
       registro[k] !== undefined &&
       !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
-      !computadas.has(k)
+      !computadas.has(k) &&
+      colunasServidor.has(k)
     );
 
     if (colunas.length > 0) {
