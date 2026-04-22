@@ -192,6 +192,20 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
 }
 
 /**
+ * Avança o generator Firebird para pelo menos `novoValor`, se necessário.
+ * Evita que o próximo INSERT do Delphi reutilize um ID já ocupado após uma
+ * resolução de colisão de PK via gerarNovoPK (que usa MAX+1, não GEN_ID).
+ */
+async function sincronizarGenerator(db, nomeGenerator, novoValor) {
+  if (!nomeGenerator || !Number.isFinite(novoValor)) return;
+  const rows = await query(db, `SELECT GEN_ID(${nomeGenerator}, 0) AS ATUAL FROM RDB$DATABASE`);
+  const atual = rows[0]?.ATUAL ?? 0;
+  if (atual < novoValor) {
+    await execute(db, `SET GENERATOR ${nomeGenerator} TO ${novoValor}`);
+  }
+}
+
+/**
  * Gera um novo valor de PK que não existe na tabela.
  * - PK numérica: MAX(pk) + 1
  * - PK string:   valorAtual + '_1', '_2', ... até achar livre
@@ -232,7 +246,7 @@ async function gerarNovoPK(db, tabela, pkColuna, registro) {
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
 async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null) {
-  const { nome, pk, temDelete, endpoint, filtroFilial = null } = configTabela;
+  const { nome, pk, temDelete, endpoint, filtroFilial = null, generator = null } = configTabela;
 
   // ---- ATUALIZAÇÕES ----
   let totalAtualizados = 0;
@@ -293,6 +307,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
               const fkRefs = await getFKRefs(db, nome, pkPrincipal);
               await renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs);
+              await sincronizarGenerator(db, generator, novoValorPK);
 
               // Calcula o novo PK_VALOR (concatenado) para atualizar a fila de pendentes
               const registroAtualizado = { ...registro, [pkPrincipal]: novoValorPK };
@@ -345,6 +360,10 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
         await upsertRegistro(db, nome, pk, registro);
         totalAtualizados++;
+
+        // Mantém o generator da filial sempre à frente dos IDs que o servidor já atribuiu,
+        // evitando que o próximo INSERT do Delphi produza um ID que o servidor já usa.
+        await sincronizarGenerator(db, generator, registro[pks[pks.length - 1]]);
 
         // Registra a versão do servidor para detecção futura de conflitos
         const versaoServidor = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
