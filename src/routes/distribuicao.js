@@ -28,7 +28,7 @@ router.get('/ListarDistribuicaoDeMercadorias', auth, async (req, res) => {
   let pagina = parseInt(req.query.pagina, 10) || 1;
   if (pagina <= 0) pagina = 1;
 
-  const skip = (pagina - 1) * qtdRegistros;
+  const offset = (pagina - 1) * qtdRegistros;
 
   const db = await getConnection();
   try {
@@ -38,14 +38,14 @@ router.get('/ListarDistribuicaoDeMercadorias', auth, async (req, res) => {
 
     const rows = await query(
       db,
-      `SELECT FIRST ${qtdRegistros} SKIP ${skip}
-         DML.*, DM.ID_PRODUTO, DM.CODIGO_PRODUTO, DM.DATA_DISTRIBUICAO,
-         (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
+      `SELECT DML.*, DM.ID_PRODUTO, DM.CODIGO_PRODUTO, DM.DATA_DISTRIBUICAO,
+              (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
        FROM DISTRIB_MERCADORIAS_LOJAS DML
        INNER JOIN DISTRIBUICAO_MERCADORIAS DM
          ON DML.ID_DISTRIBUICAO_MERCADORIA = DM.ID_DISTRIBUICAO_MERCADORIA
-       WHERE DML.ID_LOJA = ? AND DML.STATUS = ?`,
-      [idLoja, status]
+       WHERE DML.ID_LOJA = $1 AND DML.STATUS = $2
+       LIMIT $3 OFFSET $4`,
+      [idLoja, status, qtdRegistros, offset]
     );
 
     res.json(rows);
@@ -80,14 +80,14 @@ router.get('/ListarDistribuicaoDeMercadoriasPorID', auth, async (req, res) => {
     const rows = await withConnection((db) =>
       query(
         db,
-        `SELECT FIRST 1
-           DML.*, DM.ID_PRODUTO, DM.DATA_DISTRIBUICAO,
-           (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
+        `SELECT DML.*, DM.ID_PRODUTO, DM.DATA_DISTRIBUICAO,
+                (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
          FROM DISTRIB_MERCADORIAS_LOJAS DML
          INNER JOIN DISTRIBUICAO_MERCADORIAS DM
            ON DML.ID_DISTRIBUICAO_MERCADORIA = DM.ID_DISTRIBUICAO_MERCADORIA
-         WHERE DML.ID_LOJA = ?
-           AND DML.ID_DISTRIB_MERCADORIAS_LOJAS = ?`,
+         WHERE DML.ID_LOJA = $1
+           AND DML.ID_DISTRIB_MERCADORIAS_LOJAS = $2
+         LIMIT 1`,
         [idLoja, idDistrib]
       )
     );
@@ -126,7 +126,7 @@ router.get('/QuantidadeDeRegistros', auth, async (req, res) => {
          FROM DISTRIB_MERCADORIAS_LOJAS DML
          INNER JOIN DISTRIBUICAO_MERCADORIAS DM
            ON DML.ID_DISTRIBUICAO_MERCADORIA = DM.ID_DISTRIBUICAO_MERCADORIA
-         WHERE DML.ID_LOJA = ? AND DML.STATUS = ?`,
+         WHERE DML.ID_LOJA = $1 AND DML.STATUS = $2`,
         [idLoja, status]
       )
     );
@@ -164,7 +164,7 @@ router.post('/acceptAlterarStatus', auth, async (req, res) => {
     await withConnection((db) =>
       execute(
         db,
-        'UPDATE DISTRIB_MERCADORIAS_LOJAS SET STATUS = ? WHERE ID_DISTRIB_MERCADORIAS_LOJAS = ?',
+        'UPDATE DISTRIB_MERCADORIAS_LOJAS SET STATUS = $1 WHERE ID_DISTRIB_MERCADORIAS_LOJAS = $2',
         [novoStatus, idDistrib]
       )
     );

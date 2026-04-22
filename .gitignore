@@ -22,3 +22,6 @@ GEMINI.md
 
 # Variáveis de ambiente (contém token e segredos)
 .env
+.vscode/
+
+todo.md

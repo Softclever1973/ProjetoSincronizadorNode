@@ -1,70 +1,46 @@
-const Firebird = require('node-firebird');
-const config = require('./config');
+const { Pool } = require('pg');
+const { databaseUrl } = require('./config');
+
+const pool = new Pool({ connectionString: databaseUrl });
 
 /**
- * Abre uma conexão com o Firebird e retorna uma Promise.
- * Equivalente ao TServicosBanco.CriarConnection() do Delphi.
- */
-function getConnection() {
-  return new Promise((resolve, reject) => {
-    Firebird.attach(config.banco, (err, db) => {
-      if (err) return reject(err);
-      resolve(db);
-    });
-  });
-}
-
-/**
- * Executa uma query SELECT e retorna os resultados como array de objetos.
- * @param {object} db  - conexão aberta
- * @param {string} sql - SQL a executar
- * @param {Array}  params - parâmetros (opcional)
- */
-function query(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.query(sql, params, (err, rows) => {
-      if (err) return reject(err);
-      resolve(rows || []);
-    });
-  });
-}
-
-/**
- * Executa um comando DML (INSERT/UPDATE/DELETE) e commita.
- * @param {object} db  - conexão aberta
- * @param {string} sql - SQL a executar
- * @param {Array}  params - parâmetros (opcional)
- */
-function execute(db, sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.query(sql, params, (err, result) => {
-      if (err) return reject(err);
-      resolve(result);
-    });
-  });
-}
-
-/**
- * Fecha a conexão com o banco.
- */
-function closeConnection(db) {
-  return new Promise((resolve) => {
-    db.detach((err) => resolve());
-  });
-}
-
-/**
- * Helper: abre conexão, executa a função e fecha a conexão ao final.
- * Uso:
- *   const rows = await withConnection(async (db) => query(db, 'SELECT ...'));
+ * Executa uma função com um client do pool. Libera o client ao final.
  */
 async function withConnection(fn) {
-  const db = await getConnection();
+  const client = await pool.connect();
   try {
-    return await fn(db);
+    return await fn(client);
   } finally {
-    await closeConnection(db);
+    client.release();
   }
 }
 
-module.exports = { getConnection, query, execute, closeConnection, withConnection };
+/**
+ * Executa uma query SELECT e retorna os resultados com chaves em UPPERCASE.
+ */
+async function query(client, sql, params = []) {
+  const result = await client.query(sql, params);
+  return result.rows.map(row =>
+    Object.fromEntries(Object.entries(row).map(([k, v]) => [k.toUpperCase(), v]))
+  );
+}
+
+/**
+ * Executa um comando DML (INSERT/UPDATE/DELETE).
+ */
+async function execute(client, sql, params = []) {
+  return client.query(sql, params);
+}
+
+// Mantém getConnection/closeConnection como wrappers do pool para compatibilidade
+// com rotas que abrem conexão manualmente (produtos, pedidos, distribuicao, movCaixas).
+async function getConnection() {
+  return pool.connect();
+}
+
+function closeConnection(client) {
+  client.release();
+  return Promise.resolve();
+}
+
+module.exports = { withConnection, query, execute, getConnection, closeConnection };

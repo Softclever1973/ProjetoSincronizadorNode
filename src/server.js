@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const config = require('./config');
+const { initializeDatabase } = require('./db-init');
 
 const sincronizacaoRoutes     = require('./routes/sincronizacao');
 const produtosRoutes          = require('./routes/produtos');
@@ -26,8 +27,7 @@ app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
 app.get('/', (req, res) => {
   res.json({
     status: 'Sincronizador ativo',
-    banco: config.banco.database,
-    servidor: config.banco.host,
+    banco: config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@'), // oculta credenciais
     porta: config.portaHttp,
   });
 });
@@ -42,7 +42,14 @@ app.use((req, res) => {
 // ---------------------------------------------------------------------------
 // Inicialização
 // ---------------------------------------------------------------------------
-app.listen(config.portaHttp, () => {
-  console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
-  console.log(`Banco: ${config.banco.host}:${config.banco.port} → ${config.banco.database}`);
-});
+initializeDatabase()
+  .then(() => {
+    app.listen(config.portaHttp, () => {
+      console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
+      console.log(`Banco: ${config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@')}`);
+    });
+  })
+  .catch((err) => {
+    console.error(`Falha ao inicializar banco: ${err.message}`);
+    process.exit(1);
+  });

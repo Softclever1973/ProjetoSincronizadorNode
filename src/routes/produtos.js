@@ -29,10 +29,11 @@ router.get('/ProdutosParaAtualizar', auth, async (req, res) => {
 
     const produtos = await query(
       db,
-      `SELECT FIRST 10 * FROM PRODUTOS
+      `SELECT * FROM PRODUTOS
        WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
-         AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?
-       ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ`,
+         AND ID_ULTIMA_ATUALIZACAO_MATRIZ > $1
+       ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
+       LIMIT 10`,
       [idUltimaAtualizacaoMatriz]
     );
 
@@ -43,7 +44,7 @@ router.get('/ProdutosParaAtualizar', auth, async (req, res) => {
         const precoLoja = await query(
           db,
           `SELECT PRECO FROM PRODUTOS_PRECOS_LOJAS
-           WHERE ID_PRODUTO = ? AND ID_LOJA = ?`,
+           WHERE ID_PRODUTO = $1 AND ID_LOJA = $2`,
           [produto.ID_PRODUTO, idLoja]
         );
 
@@ -85,8 +86,8 @@ router.get('/getCountProdutosParaSincronizar', auth, async (req, res) => {
     const params = [];
 
     if (req.query.idUltAtt) {
-      sql += ' AND ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?';
       params.push(parseInt(req.query.idUltAtt, 10));
+      sql += ` AND ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL AND ID_ULTIMA_ATUALIZACAO_MATRIZ > $${params.length}`;
     }
 
     const rows = await withConnection((db) => query(db, sql, params));
@@ -119,8 +120,8 @@ router.get('/getProdutosSincronizadosByFilial', auth, async (req, res) => {
     const params = [];
 
     if (req.query.situacao) {
-      sql += ' AND SITUACAO = ?';
       params.push(req.query.situacao);
+      sql += ` AND SITUACAO = $${params.length}`;
     }
 
     sql += ' ORDER BY ID_PRODUTO DESC';

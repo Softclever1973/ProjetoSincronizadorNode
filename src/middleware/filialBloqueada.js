@@ -8,7 +8,7 @@ async function isFilialBloqueada(idLoja, db) {
   // A PK ID_FILIAL_BLOQUEADA armazena o número da loja diretamente
   const rows = await query(
     db,
-    'SELECT ID_FILIAL_BLOQUEADA FROM FILIAIS_BLOQUEADAS WHERE ID_FILIAL_BLOQUEADA = ?',
+    'SELECT ID_FILIAL_BLOQUEADA FROM FILIAIS_BLOQUEADAS WHERE ID_FILIAL_BLOQUEADA = $1',
     [idLoja]
   );
   return rows.length > 0;

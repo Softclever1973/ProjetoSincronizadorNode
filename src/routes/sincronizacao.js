@@ -13,33 +13,35 @@ const cacheColunasServidor = {};
 async function getColunasServidor(db, nomeTabela) {
   if (cacheColunasServidor[nomeTabela]) return cacheColunasServidor[nomeTabela];
   const rows = await query(db,
-    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
-     FROM RDB$RELATION_FIELDS rf
-     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
+    `SELECT column_name AS "COLUNA"
+     FROM information_schema.columns
+     WHERE table_name = lower($1)`,
     [nomeTabela]
   );
-  cacheColunasServidor[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheColunasServidor[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
   return cacheColunasServidor[nomeTabela];
 }
 
 function normalizarBlobs(row) {
   if (!row || typeof row !== 'object') return row;
   return Object.fromEntries(
-    Object.entries(row).map(([k, v]) => [k, typeof v === 'function' ? null : v])
+    Object.entries(row).map(([k, v]) => [
+      k,
+      Buffer.isBuffer(v) ? v.toString('utf8') : (typeof v === 'function' ? null : v),
+    ])
   );
 }
 
 async function getColunasComputadas(db, nomeTabela) {
   if (cacheComputadas[nomeTabela]) return cacheComputadas[nomeTabela];
   const rows = await query(db,
-    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
-     FROM RDB$RELATION_FIELDS rf
-     JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
-     WHERE TRIM(rf.RDB$RELATION_NAME) = ?
-       AND f.RDB$COMPUTED_SOURCE IS NOT NULL`,
+    `SELECT column_name AS "COLUNA"
+     FROM information_schema.columns
+     WHERE table_name = lower($1)
+       AND is_generated = 'ALWAYS'`,
     [nomeTabela]
   );
-  cacheComputadas[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheComputadas[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
   return cacheComputadas[nomeTabela];
 }
 
@@ -126,17 +128,20 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   }
 
   try {
-    let sql = `SELECT FIRST 50 * FROM ${nomeTabela}
-               WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
-                 AND ID_ULTIMA_ATUALIZACAO_MATRIZ > ?`;
     const params = [idUltimaAtualizacaoMatriz];
+    let whereExtra = '';
 
     if (filtroFilial && idLoja) {
-      sql += ` AND ${filtroFilial} = ?`;
       params.push(idLoja);
+      whereExtra = ` AND ${filtroFilial} = $${params.length}`;
     }
 
-    sql += ` ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ`;
+    const sql = `SELECT * FROM ${nomeTabela}
+                 WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
+                   AND ID_ULTIMA_ATUALIZACAO_MATRIZ > $1
+                   ${whereExtra}
+                 ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
+                 LIMIT 50`;
 
     const rows = await withConnection((db) => query(db, sql, params));
 
@@ -168,10 +173,11 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
     const rows = await withConnection((db) =>
       query(
         db,
-        `SELECT FIRST 10 * FROM REGISTROS_DELETADOS
-         WHERE NOME_DA_TABELA = ?
-           AND ID_REGISTRO_DELETADO > ?
-         ORDER BY ID_REGISTRO_DELETADO`,
+        `SELECT * FROM REGISTROS_DELETADOS
+         WHERE NOME_DA_TABELA = $1
+           AND ID_REGISTRO_DELETADO > $2
+         ORDER BY ID_REGISTRO_DELETADO
+         LIMIT 10`,
         [nomeTabela, idUltimoRegistroDeletado]
       )
     );
@@ -253,8 +259,8 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
   try {
     const rows = await withConnection((db) =>
       query(db,
-        `SELECT FIRST ${limit} SKIP ${offset} * FROM ${nomeTabela} ORDER BY ${pks.join(', ')}`,
-        []
+        `SELECT * FROM ${nomeTabela} ORDER BY ${pks.join(', ')} LIMIT $1 OFFSET $2`,
+        [limit, offset]
       )
     );
     res.json(rows.map(normalizarBlobs));
@@ -298,8 +304,8 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
     // Busca o registro atual no servidor para detecção de conflito
     const pks = Array.isArray(pk) ? pk : [pk];
-    const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
     const whereValores = pks.map(p => registro[p]);
+    const whereParts = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
 
     const atual = await query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
 
@@ -322,10 +328,15 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
     );
 
     if (colunas.length > 0) {
-      const placeholders = colunas.map(() => '?').join(', ');
+      const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
       const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
+      const nonPkCols = colunas.filter(c => !pks.includes(c));
+      const updateSet = nonPkCols.length > 0
+        ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
+        : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
       await execute(db,
-        `UPDATE OR INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
+        `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
+         ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
         valores
       );
     }

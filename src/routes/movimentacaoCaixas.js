@@ -36,7 +36,7 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
     // Verifica se a movimentação já existe (evita duplicata — mesmo comportamento do Delphi)
     const existente = await query(
       db,
-      'SELECT ID_MOV_CAIXA FROM MOV_CAIXA WHERE ID_MOV_CAIXA = ?',
+      'SELECT ID_MOV_CAIXA FROM MOV_CAIXA WHERE ID_MOV_CAIXA = $1',
       [idMovCaixa]
     );
 
@@ -49,7 +49,7 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
       db,
       `INSERT INTO MOV_CAIXA
          (ID_MOV_CAIXA, ID_LOJA, DATA_MOV, TIPO, VALOR, HISTORICO, ID_CONTA)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
         idMovCaixa,
         idLoja,

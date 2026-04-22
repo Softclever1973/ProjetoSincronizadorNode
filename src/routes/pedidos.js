@@ -26,25 +26,22 @@ router.get('/getPedidos', auth, async (req, res) => {
       return res.status(401).send();
     }
 
-    let sql = 'SELECT * FROM PEDIDOS WHERE 1=1';
-    const params = [];
-
-    sql += ' AND ID_LOJA = ?';
-    params.push(idLoja);
+    const params = [idLoja];
+    let sql = `SELECT * FROM PEDIDOS WHERE ID_LOJA = $1`;
 
     if (req.query.status) {
-      sql += ' AND STATUS = ?';
       params.push(req.query.status);
+      sql += ` AND STATUS = $${params.length}`;
     }
 
     if (req.query.minDataCriacao) {
-      sql += ' AND DATA_DO_PEDIDO >= ?';
       params.push(req.query.minDataCriacao);
+      sql += ` AND DATA_DO_PEDIDO >= $${params.length}`;
     }
 
     if (req.query.maxDataCriacao) {
-      sql += ' AND DATA_DO_PEDIDO <= ?';
       params.push(req.query.maxDataCriacao);
+      sql += ` AND DATA_DO_PEDIDO <= $${params.length}`;
     }
 
     sql += ' ORDER BY ID_PEDIDO ASC';
@@ -78,25 +75,22 @@ router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
   }
 
   try {
-    let sql = 'SELECT ID_PEDIDO_LOJA FROM PEDIDOS WHERE 1=1';
-    const params = [];
-
-    sql += ' AND ID_LOJA = ?';
-    params.push(idLoja);
+    const params = [idLoja];
+    let sql = `SELECT ID_PEDIDO_LOJA FROM PEDIDOS WHERE ID_LOJA = $1`;
 
     if (req.query.status) {
-      sql += ' AND STATUS = ?';
       params.push(req.query.status);
+      sql += ` AND STATUS = $${params.length}`;
     }
 
     if (req.query.minDataCriacao) {
-      sql += ' AND DATA_DO_PEDIDO >= ?';
       params.push(req.query.minDataCriacao);
+      sql += ` AND DATA_DO_PEDIDO >= $${params.length}`;
     }
 
     if (req.query.maxDataCriacao) {
-      sql += ' AND DATA_DO_PEDIDO <= ?';
       params.push(req.query.maxDataCriacao);
+      sql += ` AND DATA_DO_PEDIDO <= $${params.length}`;
     }
 
     sql += ' ORDER BY ID_PEDIDO ASC';
@@ -136,7 +130,7 @@ router.post('/updatePedido', auth, async (req, res) => {
     // Verifica se o pedido já existe no banco
     const existente = await query(
       db,
-      'SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_PEDIDO = ?',
+      'SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_PEDIDO = $1',
       [pedido.idPedido || pedido.ID_PEDIDO]
     );
 
@@ -144,8 +138,8 @@ router.post('/updatePedido', auth, async (req, res) => {
       // UPDATE
       await execute(
         db,
-        `UPDATE PEDIDOS SET STATUS = ?, DATA_DO_PEDIDO = ?, ID_LOJA = ?
-         WHERE ID_PEDIDO = ?`,
+        `UPDATE PEDIDOS SET STATUS = $1, DATA_DO_PEDIDO = $2, ID_LOJA = $3
+         WHERE ID_PEDIDO = $4`,
         [
           pedido.status || pedido.STATUS,
           pedido.dataLancamento || pedido.DATA_DO_PEDIDO,
