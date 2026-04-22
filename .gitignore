@@ -17,6 +17,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
+scripts/
+
+.claude/
 CLAUDE.md
 GEMINI.md
 
