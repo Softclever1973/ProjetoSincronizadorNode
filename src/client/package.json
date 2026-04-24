@@ -1,0 +1,22 @@
+{
+  "name": "sirius-sync-client",
+  "version": "1.0.0",
+  "description": "Cliente de sincronização Sirius — filial Firebird → servidor matriz",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.1",
+    "ejs": "^5.0.1",
+    "express": "^4.18.2",
+    "node-firebird": "^1.1.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.0"
+  }
+}
