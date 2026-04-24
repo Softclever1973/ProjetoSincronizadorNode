@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withConnection, getConnection, query, execute, closeConnection } = require('../db');
+const { withTenantConnection, query, execute } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -30,31 +30,31 @@ router.get('/ListarDistribuicaoDeMercadorias', auth, async (req, res) => {
 
   const offset = (pagina - 1) * qtdRegistros;
 
-  const db = await getConnection();
   try {
-    if (await isFilialBloqueada(idLoja, db)) {
-      return res.status(401).send();
-    }
+    await withTenantConnection(req.schemaName, async (db) => {
+      if (await isFilialBloqueada(idLoja, db)) {
+        res.status(401).send();
+        return;
+      }
 
-    const rows = await query(
-      db,
-      `SELECT DML.*, DM.ID_PRODUTO, DM.CODIGO_PRODUTO, DM.DATA_DISTRIBUICAO,
-              (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
-       FROM DISTRIB_MERCADORIAS_LOJAS DML
-       INNER JOIN DISTRIBUICAO_MERCADORIAS DM
-         ON DML.ID_DISTRIBUICAO_MERCADORIA = DM.ID_DISTRIBUICAO_MERCADORIA
-       WHERE DML.ID_LOJA = $1 AND DML.STATUS = $2
-       LIMIT $3 OFFSET $4`,
-      [idLoja, status, qtdRegistros, offset]
-    );
+      const rows = await query(
+        db,
+        `SELECT DML.*, DM.ID_PRODUTO, DM.CODIGO_PRODUTO, DM.DATA_DISTRIBUICAO,
+                (SELECT DESCRICAO FROM PRODUTOS P WHERE P.ID_PRODUTO = DM.ID_PRODUTO) AS DESCRICAO
+         FROM DISTRIB_MERCADORIAS_LOJAS DML
+         INNER JOIN DISTRIBUICAO_MERCADORIAS DM
+           ON DML.ID_DISTRIBUICAO_MERCADORIA = DM.ID_DISTRIBUICAO_MERCADORIA
+         WHERE DML.ID_LOJA = $1 AND DML.STATUS = $2
+         LIMIT $3 OFFSET $4`,
+        [idLoja, status, qtdRegistros, offset]
+      );
 
-    res.json(rows);
+      res.json(rows);
+    });
   } catch (e) {
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar as distribuições. Erro: ${e.message}`,
     });
-  } finally {
-    await closeConnection(db);
   }
 });
 
@@ -77,7 +77,7 @@ router.get('/ListarDistribuicaoDeMercadoriasPorID', auth, async (req, res) => {
   }
 
   try {
-    const rows = await withConnection((db) =>
+    const rows = await withTenantConnection(req.schemaName, (db) =>
       query(
         db,
         `SELECT DML.*, DM.ID_PRODUTO, DM.DATA_DISTRIBUICAO,
@@ -119,7 +119,7 @@ router.get('/QuantidadeDeRegistros', auth, async (req, res) => {
   }
 
   try {
-    const rows = await withConnection((db) =>
+    const rows = await withTenantConnection(req.schemaName, (db) =>
       query(
         db,
         `SELECT COUNT(*) AS QUANTIDADE
@@ -161,7 +161,7 @@ router.post('/acceptAlterarStatus', auth, async (req, res) => {
   }
 
   try {
-    await withConnection((db) =>
+    await withTenantConnection(req.schemaName, (db) =>
       execute(
         db,
         'UPDATE DISTRIB_MERCADORIAS_LOJAS SET STATUS = $1 WHERE ID_DISTRIB_MERCADORIAS_LOJAS = $2',

@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { getConnection, query, execute, closeConnection } = require('../db');
+const { withTenantConnection, query, execute } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -27,47 +27,48 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
     return res.status(400).json({ message: 'Campo ID_MOV_CAIXA não informado!' });
   }
 
-  const db = await getConnection();
   try {
-    if (idLoja && await isFilialBloqueada(idLoja, db)) {
-      return res.status(401).send();
-    }
+    await withTenantConnection(req.schemaName, async (db) => {
+      if (idLoja && await isFilialBloqueada(idLoja, db)) {
+        res.status(401).send();
+        return;
+      }
 
-    // Verifica se a movimentação já existe (evita duplicata — mesmo comportamento do Delphi)
-    const existente = await query(
-      db,
-      'SELECT ID_MOV_CAIXA FROM MOV_CAIXA WHERE ID_MOV_CAIXA = $1',
-      [idMovCaixa]
-    );
+      // Verifica se a movimentação já existe (evita duplicata — mesmo comportamento do Delphi)
+      const existente = await query(
+        db,
+        'SELECT ID_MOV_CAIXA FROM MOV_CAIXA WHERE ID_MOV_CAIXA = $1',
+        [idMovCaixa]
+      );
 
-    if (existente.length > 0) {
-      return res.json({ message: 'Movimentação já registrada!' });
-    }
+      if (existente.length > 0) {
+        res.json({ message: 'Movimentação já registrada!' });
+        return;
+      }
 
-    // INSERT da movimentação
-    await execute(
-      db,
-      `INSERT INTO MOV_CAIXA
-         (ID_MOV_CAIXA, ID_LOJA, DATA_MOV, TIPO, VALOR, HISTORICO, ID_CONTA)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [
-        idMovCaixa,
-        idLoja,
-        movCaixa.dataMov       ?? movCaixa.DATA_MOV,
-        movCaixa.tipo          ?? movCaixa.TIPO,
-        movCaixa.valor         ?? movCaixa.VALOR,
-        movCaixa.historico     ?? movCaixa.HISTORICO,
-        movCaixa.idConta       ?? movCaixa.ID_CONTA,
-      ]
-    );
+      // INSERT da movimentação
+      await execute(
+        db,
+        `INSERT INTO MOV_CAIXA
+           (ID_MOV_CAIXA, ID_LOJA, DATA_MOV, TIPO, VALOR, HISTORICO, ID_CONTA)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          idMovCaixa,
+          idLoja,
+          movCaixa.dataMov       ?? movCaixa.DATA_MOV,
+          movCaixa.tipo          ?? movCaixa.TIPO,
+          movCaixa.valor         ?? movCaixa.VALOR,
+          movCaixa.historico     ?? movCaixa.HISTORICO,
+          movCaixa.idConta       ?? movCaixa.ID_CONTA,
+        ]
+      );
 
-    res.json({ message: 'Movimentação registrada com sucesso', movCaixa });
+      res.json({ message: 'Movimentação registrada com sucesso', movCaixa });
+    });
   } catch (e) {
     res.status(400).json({
       message: `Ocorreu um erro ao tentar gravar a movimentação. Erro: ${e.message}`,
     });
-  } finally {
-    await closeConnection(db);
   }
 });
 

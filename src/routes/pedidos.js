@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withConnection, getConnection, query, execute, closeConnection } = require('../db');
+const { withTenantConnection, query, execute } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -20,40 +20,40 @@ router.get('/getPedidos', auth, async (req, res) => {
     });
   }
 
-  const db = await getConnection();
   try {
-    if (await isFilialBloqueada(idLoja, db)) {
-      return res.status(401).send();
-    }
+    await withTenantConnection(req.schemaName, async (db) => {
+      if (await isFilialBloqueada(idLoja, db)) {
+        res.status(401).send();
+        return;
+      }
 
-    const params = [idLoja];
-    let sql = `SELECT * FROM PEDIDOS WHERE ID_LOJA = $1`;
+      const params = [idLoja];
+      let sql = `SELECT * FROM PEDIDOS WHERE ID_LOJA = $1`;
 
-    if (req.query.status) {
-      params.push(req.query.status);
-      sql += ` AND STATUS = $${params.length}`;
-    }
+      if (req.query.status) {
+        params.push(req.query.status);
+        sql += ` AND STATUS = $${params.length}`;
+      }
 
-    if (req.query.minDataCriacao) {
-      params.push(req.query.minDataCriacao);
-      sql += ` AND DATA_DO_PEDIDO >= $${params.length}`;
-    }
+      if (req.query.minDataCriacao) {
+        params.push(req.query.minDataCriacao);
+        sql += ` AND DATA_DO_PEDIDO >= $${params.length}`;
+      }
 
-    if (req.query.maxDataCriacao) {
-      params.push(req.query.maxDataCriacao);
-      sql += ` AND DATA_DO_PEDIDO <= $${params.length}`;
-    }
+      if (req.query.maxDataCriacao) {
+        params.push(req.query.maxDataCriacao);
+        sql += ` AND DATA_DO_PEDIDO <= $${params.length}`;
+      }
 
-    sql += ' ORDER BY ID_PEDIDO ASC';
+      sql += ' ORDER BY ID_PEDIDO ASC';
 
-    const rows = await query(db, sql, params);
-    res.json(rows);
+      const rows = await query(db, sql, params);
+      res.json(rows);
+    });
   } catch (e) {
     res.status(400).json({
       message: `Ocorreu um erro ao tentar buscar os pedidos. Erro: ${e.message}`,
     });
-  } finally {
-    await closeConnection(db);
   }
 });
 
@@ -95,7 +95,7 @@ router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
 
     sql += ' ORDER BY ID_PEDIDO ASC';
 
-    const rows = await withConnection((db) => query(db, sql, params));
+    const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
     res.json(rows.map((r) => ({ idPedido: r.ID_PEDIDO_LOJA })));
   } catch (e) {
     res.status(400).json({
@@ -121,47 +121,46 @@ router.post('/updatePedido', auth, async (req, res) => {
   const idLoja = pedido.idLoja || pedido.ID_LOJA;
   const idPDV  = pedido.idPDV  || pedido.ID_PDV  || null; // eslint-disable-line no-unused-vars
 
-  const db = await getConnection();
   try {
-    if (idLoja && await isFilialBloqueada(idLoja, db)) {
-      return res.status(401).send();
-    }
+    await withTenantConnection(req.schemaName, async (db) => {
+      if (idLoja && await isFilialBloqueada(idLoja, db)) {
+        res.status(401).send();
+        return;
+      }
 
-    // Verifica se o pedido já existe no banco
-    const existente = await query(
-      db,
-      'SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_PEDIDO = $1',
-      [pedido.idPedido || pedido.ID_PEDIDO]
-    );
-
-    if (existente.length > 0) {
-      // UPDATE
-      await execute(
+      // Verifica se o pedido já existe no banco
+      const existente = await query(
         db,
-        `UPDATE PEDIDOS SET STATUS = $1, DATA_DO_PEDIDO = $2, ID_LOJA = $3
-         WHERE ID_PEDIDO = $4`,
-        [
-          pedido.status || pedido.STATUS,
-          pedido.dataLancamento || pedido.DATA_DO_PEDIDO,
-          idLoja,
-          pedido.idPedido || pedido.ID_PEDIDO,
-        ]
+        'SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_PEDIDO = $1',
+        [pedido.idPedido || pedido.ID_PEDIDO]
       );
-    } else {
-      // INSERT — a lógica completa de SincronizarPedido() é complexa e específica
-      // do Delphi (envolve itens, parcelas, cliente). Por ora retorna erro orientativo.
-      return res.status(400).json({
-        message: 'INSERT de pedido ainda não implementado nesta versão Node. Use o cliente Delphi para inserções.',
-      });
-    }
 
-    res.json({ message: 'Pedido atualizado com sucesso', pedido });
+      if (existente.length > 0) {
+        // UPDATE
+        await execute(
+          db,
+          `UPDATE PEDIDOS SET STATUS = $1, DATA_DO_PEDIDO = $2, ID_LOJA = $3
+           WHERE ID_PEDIDO = $4`,
+          [
+            pedido.status || pedido.STATUS,
+            pedido.dataLancamento || pedido.DATA_DO_PEDIDO,
+            idLoja,
+            pedido.idPedido || pedido.ID_PEDIDO,
+          ]
+        );
+        res.json({ message: 'Pedido atualizado com sucesso', pedido });
+      } else {
+        // INSERT — a lógica completa de SincronizarPedido() é complexa e específica
+        // do Delphi (envolve itens, parcelas, cliente). Por ora retorna erro orientativo.
+        res.status(400).json({
+          message: 'INSERT de pedido ainda não implementado nesta versão Node. Use o cliente Delphi para inserções.',
+        });
+      }
+    });
   } catch (e) {
     res.status(400).json({
       message: `Ocorreu um erro ao tentar sincronizar o pedido. Erro: ${e.message}`,
     });
-  } finally {
-    await closeConnection(db);
   }
 });
 

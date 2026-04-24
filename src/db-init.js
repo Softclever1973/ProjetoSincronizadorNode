@@ -1,26 +1,53 @@
-const { withConnection } = require('./db');
+const { pool } = require('./db');
 
-const DDL = [
-  `CREATE SEQUENCE IF NOT EXISTS seq_atualizacao_matriz`,
-
-  `CREATE TABLE IF NOT EXISTS filiais_bloqueadas (
-    id_filial_bloqueada INTEGER PRIMARY KEY
-  )`,
-
-  `CREATE TABLE IF NOT EXISTS registros_deletados (
-    id_registro_deletado SERIAL        PRIMARY KEY,
-    nome_da_tabela       VARCHAR(64)   NOT NULL,
-    id_registros         VARCHAR(255)  NOT NULL
+// Tabela de controle: fica sempre em public, fora de qualquer tenant schema
+const DDL_CONTROLE = [
+  `CREATE TABLE IF NOT EXISTS public.sync_tenants (
+    token       TEXT    PRIMARY KEY,
+    schema_name TEXT    NOT NULL,
+    nome        TEXT,
+    ativo       BOOLEAN NOT NULL DEFAULT TRUE
   )`,
 ];
 
-async function initializeDatabase() {
-  await withConnection(async (client) => {
-    for (const ddl of DDL) {
-      await client.query(ddl);
-    }
-  });
-  console.log('Banco: infraestrutura de sync verificada/criada.');
+// DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
+function ddlTenant(schema) {
+  return [
+    `CREATE SCHEMA IF NOT EXISTS ${schema}`,
+    `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_atualizacao_matriz`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.filiais_bloqueadas (
+      id_filial_bloqueada INTEGER PRIMARY KEY
+    )`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.registros_deletados (
+      id_registro_deletado SERIAL        PRIMARY KEY,
+      nome_da_tabela       VARCHAR(64)   NOT NULL,
+      id_registros         VARCHAR(255)  NOT NULL
+    )`,
+  ];
 }
 
-module.exports = { initializeDatabase };
+async function initializeDatabase() {
+  const client = await pool.connect();
+  try {
+    for (const ddl of DDL_CONTROLE) {
+      await client.query(ddl);
+    }
+  } finally {
+    client.release();
+  }
+  console.log('Banco: public.sync_tenants verificada/criada.');
+}
+
+async function initializeTenantSchema(schemaName) {
+  const client = await pool.connect();
+  try {
+    for (const ddl of ddlTenant(schemaName)) {
+      await client.query(ddl);
+    }
+  } finally {
+    client.release();
+  }
+  console.log(`Banco: schema '${schemaName}' verificado/criado.`);
+}
+
+module.exports = { initializeDatabase, initializeTenantSchema };

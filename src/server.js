@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const config = require('./config');
 const { initializeDatabase } = require('./db-init');
+const { recarregarEmpresas } = require('./empresas');
 
 const sincronizacaoRoutes     = require('./routes/sincronizacao');
 const produtosRoutes          = require('./routes/produtos');
@@ -30,6 +31,18 @@ app.get('/', (req, res) => {
     banco: config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@'), // oculta credenciais
     porta: config.portaHttp,
   });
+});
+
+// ---------------------------------------------------------------------------
+// Endpoint admin — recarrega o cache de empresas sem reiniciar o servidor
+// Requer header: x-admin-token: <ADMIN_TOKEN>
+// ---------------------------------------------------------------------------
+app.post('/admin/reload-empresas', async (req, res) => {
+  if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+    return res.status(403).json({ erro: 'acesso negado' });
+  }
+  await recarregarEmpresas();
+  res.json({ ok: true });
 });
 
 // ---------------------------------------------------------------------------

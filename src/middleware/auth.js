@@ -1,13 +1,9 @@
-// Token lido do .env — equivalente ao TAutenticacao.VerificarSeTokenValido() do Delphi
-const TOKEN_VALIDO = process.env.SYNC_TOKEN;
+const { resolverEmpresa } = require('../empresas');
 
-function authMiddleware(req, res, next) {
-  const token = req.query.token;
-
-  if (token !== TOKEN_VALIDO) {
-    return res.status(400).json({ erro: 'token inválido!' });
-  }
-
+async function authMiddleware(req, res, next) {
+  const empresa = await resolverEmpresa(req.query.token);
+  if (!empresa) return res.status(400).json({ erro: 'token inválido!' });
+  req.schemaName = empresa.schema_name;
   next();
 }
 

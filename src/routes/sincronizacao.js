@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withConnection, getConnection, query, execute, closeConnection } = require('../db');
+const { withTenantConnection, query, execute } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 // Cache de colunas computadas do servidor
@@ -10,16 +10,17 @@ const cacheComputadas = {};
 // Cache de colunas existentes no servidor por tabela
 const cacheColunasServidor = {};
 
-async function getColunasServidor(db, nomeTabela) {
-  if (cacheColunasServidor[nomeTabela]) return cacheColunasServidor[nomeTabela];
+async function getColunasServidor(db, nomeTabela, schemaName) {
+  const key = `${schemaName}:${nomeTabela}`;
+  if (cacheColunasServidor[key]) return cacheColunasServidor[key];
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
-     WHERE table_name = lower($1)`,
-    [nomeTabela]
+     WHERE table_name = lower($1) AND table_schema = lower($2)`,
+    [nomeTabela, schemaName]
   );
-  cacheColunasServidor[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheColunasServidor[nomeTabela];
+  cacheColunasServidor[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
+  return cacheColunasServidor[key];
 }
 
 function normalizarBlobs(row) {
@@ -32,17 +33,19 @@ function normalizarBlobs(row) {
   );
 }
 
-async function getColunasComputadas(db, nomeTabela) {
-  if (cacheComputadas[nomeTabela]) return cacheComputadas[nomeTabela];
+async function getColunasComputadas(db, nomeTabela, schemaName) {
+  const key = `${schemaName}:${nomeTabela}`;
+  if (cacheComputadas[key]) return cacheComputadas[key];
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
      WHERE table_name = lower($1)
+       AND table_schema = lower($2)
        AND is_generated = 'ALWAYS'`,
-    [nomeTabela]
+    [nomeTabela, schemaName]
   );
-  cacheComputadas[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheComputadas[nomeTabela];
+  cacheComputadas[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
+  return cacheComputadas[key];
 }
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
@@ -143,7 +146,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
                  ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
                  LIMIT 50`;
 
-    const rows = await withConnection((db) => query(db, sql, params));
+    const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
 
     res.json(rows);
   } catch (e) {
@@ -170,7 +173,7 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
   }
 
   try {
-    const rows = await withConnection((db) =>
+    const rows = await withTenantConnection(req.schemaName, (db) =>
       query(
         db,
         `SELECT * FROM REGISTROS_DELETADOS
@@ -199,7 +202,7 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
  */
 router.get('/StatusTabelas', auth, async (req, res) => {
   try {
-    const resultado = await withConnection(async (db) => {
+    const resultado = await withTenantConnection(req.schemaName, async (db) => {
       const tabelas = [...TABELAS_PERMITIDAS];
       const status = [];
 
@@ -257,7 +260,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
   }
 
   try {
-    const rows = await withConnection((db) =>
+    const rows = await withTenantConnection(req.schemaName, (db) =>
       query(db,
         `SELECT * FROM ${nomeTabela} ORDER BY ${pks.join(', ')} LIMIT $1 OFFSET $2`,
         [limit, offset]
@@ -296,56 +299,57 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
   }
 
-  const db = await getConnection();
   try {
-    if (await isFilialBloqueada(idLoja, db)) {
-      return res.status(401).send();
-    }
-
-    // Busca o registro atual no servidor para detecção de conflito
-    const pks = Array.isArray(pk) ? pk : [pk];
-    const whereValores = pks.map(p => registro[p]);
-    const whereParts = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-
-    const atual = await query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
-
-    if (!forcar && atual.length > 0) {
-      const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
-      if (versaoServidor && versaoServidor > ultimaVersaoConhecida) {
-        // Conflito detectado: servidor tem versão mais nova que o cliente conhecia
-        return res.json({ conflito: true, versaoServidor: atual[0] });
+    await withTenantConnection(req.schemaName, async (db) => {
+      if (await isFilialBloqueada(idLoja, db)) {
+        res.status(401).send();
+        return;
       }
-    }
 
-    // Aplica o UPSERT filtrando colunas computadas, reservadas e inexistentes no servidor
-    const computadas = await getColunasComputadas(db, nomeTabela);
-    const colunasServidor = await getColunasServidor(db, nomeTabela);
-    const colunas = Object.keys(registro).filter(k =>
-      registro[k] !== undefined &&
-      !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
-      !computadas.has(k) &&
-      colunasServidor.has(k)
-    );
+      // Busca o registro atual no servidor para detecção de conflito
+      const pks = Array.isArray(pk) ? pk : [pk];
+      const whereValores = pks.map(p => registro[p]);
+      const whereParts = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
 
-    if (colunas.length > 0) {
-      const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
-      const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
-      const nonPkCols = colunas.filter(c => !pks.includes(c));
-      const updateSet = nonPkCols.length > 0
-        ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
-        : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
-      await execute(db,
-        `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
-         ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
-        valores
+      const atual = await query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+
+      if (!forcar && atual.length > 0) {
+        const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
+        if (versaoServidor && versaoServidor > ultimaVersaoConhecida) {
+          // Conflito detectado: servidor tem versão mais nova que o cliente conhecia
+          res.json({ conflito: true, versaoServidor: atual[0] });
+          return;
+        }
+      }
+
+      // Aplica o UPSERT filtrando colunas computadas, reservadas e inexistentes no servidor
+      const computadas = await getColunasComputadas(db, nomeTabela, req.schemaName);
+      const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+      const colunas = Object.keys(registro).filter(k =>
+        registro[k] !== undefined &&
+        !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
+        !computadas.has(k) &&
+        colunasServidor.has(k)
       );
-    }
 
-    res.json({ ok: true });
+      if (colunas.length > 0) {
+        const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
+        const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
+        const nonPkCols = colunas.filter(c => !pks.includes(c));
+        const updateSet = nonPkCols.length > 0
+          ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
+          : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
+        await execute(db,
+          `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
+           ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
+          valores
+        );
+      }
+
+      res.json({ ok: true });
+    });
   } catch (e) {
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
-  } finally {
-    await closeConnection(db);
   }
 });
 
