@@ -9,6 +9,8 @@ const produtosRoutes          = require('./routes/produtos');
 const pedidosRoutes           = require('./routes/pedidos');
 const movimentacaoCaixasRoutes = require('./routes/movimentacaoCaixas');
 const distribuicaoRoutes      = require('./routes/distribuicao');
+const authRoutes              = require('./routes/auth');
+const userEmpresasRoutes      = require('./routes/userEmpresas');
 
 const app = express();
 app.use(express.json());
@@ -21,6 +23,8 @@ app.use('/datasnap/rest/TSMProdutos',                  produtosRoutes);
 app.use('/datasnap/rest/TSMPedidos',                   pedidosRoutes);
 app.use('/datasnap/rest/TSMMovimetacaoCaixas',         movimentacaoCaixasRoutes);
 app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
+app.use('/auth',          authRoutes);
+app.use('/user/empresas', userEmpresasRoutes);
 
 // ---------------------------------------------------------------------------
 // Rota raiz — útil para confirmar que o servidor está ativo

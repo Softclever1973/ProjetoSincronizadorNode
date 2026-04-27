@@ -9,7 +9,7 @@ const { tabelaAtiva } = require('./tabelasConfig');
 const { salvarErro } = require('./erros');
 
 // Intervalo entre cada ciclo de sincronização (em milissegundos)
-const INTERVALO_MS = 30_000; // 30 segundos
+const INTERVALO_MS = process.env.INTERVALO_MS; // 30 segundos
 const PORTA_WEBUI  = 3001;
 
 let rodando = false;

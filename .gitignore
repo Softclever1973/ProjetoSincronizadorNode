@@ -19,6 +19,7 @@ Thumbs.db
 
 scripts/
 
+.claude/
 CLAUDE.md
 GEMINI.md
 

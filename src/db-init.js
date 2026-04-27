@@ -1,12 +1,23 @@
 const { pool } = require('./db');
 
-// Tabela de controle: fica sempre em public, fora de qualquer tenant schema
+// Tabelas de controle: ficam sempre em public, fora de qualquer tenant schema
 const DDL_CONTROLE = [
   `CREATE TABLE IF NOT EXISTS public.sync_tenants (
     token       TEXT    PRIMARY KEY,
     schema_name TEXT    NOT NULL,
     nome        TEXT,
     ativo       BOOLEAN NOT NULL DEFAULT TRUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS public.usuarios (
+    id          SERIAL  PRIMARY KEY,
+    email       TEXT    UNIQUE NOT NULL,
+    senha_hash  TEXT    NOT NULL,
+    ativo       BOOLEAN NOT NULL DEFAULT TRUE
+  )`,
+  `CREATE TABLE IF NOT EXISTS public.usuarios_empresas (
+    id_usuario  INTEGER NOT NULL REFERENCES public.usuarios(id),
+    schema_name TEXT    NOT NULL REFERENCES public.sync_tenants(schema_name),
+    PRIMARY KEY (id_usuario, schema_name)
   )`,
 ];
 
