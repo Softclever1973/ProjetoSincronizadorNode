@@ -322,8 +322,6 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
     return res.status(400).json({ message: 'tabela, pk e registro são obrigatórios' });
   }
 
-  restaurarBuffers(registro);
-
   const nomeTabela = tabela.toUpperCase().trim();
   if (!TABELAS_PERMITIDAS.has(nomeTabela)) {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
@@ -377,22 +375,6 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         const updateSet = nonPkCols.length > 0
           ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
           : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
-        await execute(db,
-          `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
-           ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
-          valores
-        );
-      }
-
-      res.json({ ok: true });
-    });
-  } catch (e) {
-    res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
-  }
-});
-
-module.exports = router;
- colunas não-PK: no-op seguro
         await execute(db,
           `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
            ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
