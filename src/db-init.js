@@ -4,10 +4,14 @@ const { pool } = require('./db');
 const DDL_CONTROLE = [
   `CREATE TABLE IF NOT EXISTS public.sync_tenants (
     token       TEXT    PRIMARY KEY,
-    schema_name TEXT    NOT NULL,
+    schema_name TEXT    NOT NULL UNIQUE,
     nome        TEXT,
     ativo       BOOLEAN NOT NULL DEFAULT TRUE
   )`,
+  // Migração para instalações existentes sem a constraint UNIQUE em schema_name.
+  // Um índice único satisfaz o requisito de FK do PostgreSQL.
+  `CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_tenants_schema_name
+   ON public.sync_tenants(schema_name)`,
   `CREATE TABLE IF NOT EXISTS public.usuarios (
     id          SERIAL  PRIMARY KEY,
     email       TEXT    UNIQUE NOT NULL,

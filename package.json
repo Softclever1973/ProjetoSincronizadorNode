@@ -7,7 +7,8 @@
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "client": "node src/client/index.js",
-    "client:dev": "nodemon src/client/index.js"
+    "client:dev": "nodemon src/client/index.js",
+    "generate-secret": "node -e \"process.stdout.write(require('crypto').randomBytes(64).toString('hex') + '\\n')\""
   },
   "dependencies": {
     "bcrypt": "^6.0.0",

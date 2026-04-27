@@ -1,4 +1,5 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+
 const { getConnection, closeConnection, getParam } = require('./db');
 const { sincronizarTabela } = require('./sync');
 const { empurrarTabela } = require('./push');
@@ -8,8 +9,14 @@ const TABELAS = require('./tabelas');
 const { tabelaAtiva } = require('./tabelasConfig');
 const { salvarErro } = require('./erros');
 
+if (!process.env.SYNC_TOKEN) {
+  console.error('[ERRO] SYNC_TOKEN não configurado.');
+  console.error('       Adicione o token na linha 3 do sirius-client.ini ou em SYNC_TOKEN= no .env');
+  process.exit(1);
+}
+
 // Intervalo entre cada ciclo de sincronização (em milissegundos)
-const INTERVALO_MS = process.env.INTERVALO_MS; // 30 segundos
+const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
 const PORTA_WEBUI  = 3001;
 
 let rodando = false;

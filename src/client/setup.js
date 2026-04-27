@@ -41,7 +41,8 @@ async function setup(db, log = console.log) {
   }
 
   // 2. Tabela de pendentes de envio ao servidor
-  if (!(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'))) {
+  const primeiraInstalacao = !(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'));
+  if (primeiraInstalacao) {
     await execute(db, `
       CREATE TABLE SYNC_ALTERACOES_PENDENTES (
         NOME_TABELA         VARCHAR(50)  NOT NULL,
@@ -51,6 +52,33 @@ async function setup(db, log = console.log) {
       )
     `);
     log('[SETUP] Tabela SYNC_ALTERACOES_PENDENTES criada');
+
+    // Enfileira todos os registros existentes para envio inicial ao servidor.
+    // Feito aqui (antes de criar os triggers) para evitar colisão de PK.
+    log('[SETUP] Primeira instalação — enfileirando registros existentes para envio inicial...');
+    let totalEnfileirados = 0;
+    for (const tabela of TABELAS) {
+      const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
+      const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
+      try {
+        await execute(db,
+          `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+           SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP FROM ${tabela.nome}`
+        );
+        const cnt = await query(db,
+          `SELECT COUNT(*) AS CNT FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
+          [tabela.nome]
+        );
+        const n = Number(cnt[0]?.CNT || 0);
+        if (n > 0) {
+          log(`[SETUP] ${tabela.nome}: ${n} registro(s) enfileirado(s)`);
+          totalEnfileirados += n;
+        }
+      } catch (e) {
+        log(`[SETUP] Aviso: não foi possível enfileirar ${tabela.nome}: ${e.message}`);
+      }
+    }
+    log(`[SETUP] Total enfileirado para envio inicial: ${totalEnfileirados} registro(s)`);
   }
 
   // 3. Tabela que rastreia a última versão recebida do servidor por registro

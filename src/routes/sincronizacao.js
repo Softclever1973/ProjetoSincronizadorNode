@@ -10,6 +10,34 @@ const cacheComputadas = {};
 // Cache de colunas existentes no servidor por tabela
 const cacheColunasServidor = {};
 
+// Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL
+function inferirTipoPg(valor) {
+  if (Buffer.isBuffer(valor))      return 'BYTEA';
+  if (valor instanceof Date)       return 'TIMESTAMP';
+  if (typeof valor === 'boolean')  return 'BOOLEAN';
+  if (typeof valor === 'number')   return Number.isInteger(valor) ? 'INTEGER' : 'NUMERIC';
+  return 'TEXT';
+}
+
+/**
+ * Cria a tabela no schema do tenant usando os tipos inferidos do primeiro registro recebido.
+ * Chamado quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente).
+ */
+async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks) {
+  const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
+  const colunas = Object.keys(registro).map(nome => {
+    const tipo = inferirTipoPg(registro[nome]);
+    return `${nome} ${tipo}${pkSet.has(nome) ? ' NOT NULL' : ''}`;
+  });
+  if (!Object.prototype.hasOwnProperty.call(registro, 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
+    colunas.push('ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER');
+  }
+  await execute(db,
+    `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
+  );
+  console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
+}
+
 async function getColunasServidor(db, nomeTabela, schemaName) {
   const key = `${schemaName}:${nomeTabela}`;
   if (cacheColunasServidor[key]) return cacheColunasServidor[key];
@@ -294,6 +322,8 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
     return res.status(400).json({ message: 'tabela, pk e registro são obrigatórios' });
   }
 
+  restaurarBuffers(registro);
+
   const nomeTabela = tabela.toUpperCase().trim();
   if (!TABELAS_PERMITIDAS.has(nomeTabela)) {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
@@ -306,8 +336,21 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         return;
       }
 
-      // Busca o registro atual no servidor para detecção de conflito
       const pks = Array.isArray(pk) ? pk : [pk];
+
+      // Garante que a tabela existe antes de qualquer query nela.
+      // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.
+      const computadas = await getColunasComputadas(db, nomeTabela, req.schemaName);
+      let colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+      if (colunasServidor.size === 0) {
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks);
+        const cacheKey = `${req.schemaName}:${nomeTabela}`;
+        delete cacheColunasServidor[cacheKey];
+        delete cacheComputadas[cacheKey];
+        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+      }
+
+      // Busca o registro atual no servidor para detecção de conflito
       const whereValores = pks.map(p => registro[p]);
       const whereParts = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
 
@@ -316,15 +359,10 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       if (!forcar && atual.length > 0) {
         const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
         if (versaoServidor && versaoServidor > ultimaVersaoConhecida) {
-          // Conflito detectado: servidor tem versão mais nova que o cliente conhecia
           res.json({ conflito: true, versaoServidor: atual[0] });
           return;
         }
       }
-
-      // Aplica o UPSERT filtrando colunas computadas, reservadas e inexistentes no servidor
-      const computadas = await getColunasComputadas(db, nomeTabela, req.schemaName);
-      const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       const colunas = Object.keys(registro).filter(k =>
         registro[k] !== undefined &&
         !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
@@ -339,6 +377,22 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         const updateSet = nonPkCols.length > 0
           ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
           : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
+        await execute(db,
+          `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
+           ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
+          valores
+        );
+      }
+
+      res.json({ ok: true });
+    });
+  } catch (e) {
+    res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
+  }
+});
+
+module.exports = router;
+ colunas não-PK: no-op seguro
         await execute(db,
           `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
            ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,

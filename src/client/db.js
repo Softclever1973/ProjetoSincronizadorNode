@@ -1,56 +1,18 @@
 const Firebird = require('node-firebird');
-const fs = require('fs');
-const path = require('path');
 
-/**
- * Lê o sirius.ini do cliente (filial) e retorna as opções de conexão Firebird.
- * Mesmo formato do sirius.ini do servidor, mas sem a 3ª linha (porta HTTP).
- */
-function lerConfigFilial() {
-  const caminhoIni = path.join(process.cwd(), 'sirius-client.ini');
-
-  if (!fs.existsSync(caminhoIni)) {
-    throw new Error(`sirius-client.ini não encontrado em: ${caminhoIni}`);
-  }
-
-  const linhas = fs.readFileSync(caminhoIni, 'utf8')
-    .split('\n')
-    .map(l => l.trim());
-
-  const linha1 = linhas[0] || '';
-  const versao = (linhas[1] || '3').trim().charAt(0);
-
-  let caminhoBanco, caminhoServidor, porta;
-
-  const temPortaExplicita =
-    linha1.includes('/3050') ||
-    linha1.includes('/3051') ||
-    linha1.includes('/3060');
-
-  if (temPortaExplicita) {
-    const posDosPontos = linha1.lastIndexOf(':');
-    caminhoBanco = linha1.substring(posDosPontos + 1).replace(/\//g, '\\');
-    const prefixo = linha1.substring(0, posDosPontos);
-    const partes = prefixo.split('/');
-    caminhoServidor = partes[0];
-    porta = parseInt(partes[1], 10);
-  } else {
-    const posDosPontos = linha1.indexOf(':');
-    caminhoServidor = linha1.substring(0, posDosPontos);
-    caminhoBanco = linha1.substring(posDosPontos + 1);
-    porta = 3050;
-  }
-
-  return {
-    host: caminhoServidor || 'localhost',
-    port: porta || 3050,
-    database: caminhoBanco,
-    user: 'SYSDBA',
-    password: versao === '2' ? 'masterkey' : 'Soft1973824650',
-  };
+if (!process.env.FIREBIRD_DATABASE) {
+  throw new Error('FIREBIRD_DATABASE não definido no .env (ex: C:\\FDBS\\FILIAL.FDB)');
 }
 
-const opcoes = lerConfigFilial();
+const versao = (process.env.FIREBIRD_VERSION || '3').trim().charAt(0);
+
+const opcoes = {
+  host:     process.env.FIREBIRD_HOST     || 'localhost',
+  port:     parseInt(process.env.FIREBIRD_PORT || '3050', 10),
+  database: process.env.FIREBIRD_DATABASE,
+  user:     'SYSDBA',
+  password: process.env.FIREBIRD_PASSWORD,
+};
 
 function getConnection() {
   return new Promise((resolve, reject) => {

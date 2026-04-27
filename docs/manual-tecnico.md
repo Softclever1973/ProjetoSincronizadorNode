@@ -43,7 +43,7 @@ localhost/3050:C:\FDBS\FILIAL.FDB
 3
 ```
 - Linha 1: `host/porta_firebird:caminho_do_banco`
-- Linha 2: versão do Firebird (`2` = senha `masterkey`, `3` = senha `Soft1973824650`)
+- Linha 2: versão do Firebird
 
 > **Nota:** `sirius.ini` ainda é referenciado no README, mas o servidor atual usa `.env` + PostgreSQL. Ignorar `sirius.ini` para configuração do servidor.
 

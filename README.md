@@ -56,8 +56,6 @@ localhost/3050:C:\FDBS\MATRIZ.FDB
 | 2 | Versão do Firebird (`2` ou `3`) |
 | 3 | Porta HTTP do servidor Express |
 
-> **Senha Firebird:** versão 2 usa `masterkey`, versão 3 usa `Soft1973824650`.
-
 ### Cliente — `sirius-client.ini`
 
 Mesmo formato, sem a linha 3 (porta HTTP não se aplica ao cliente):
