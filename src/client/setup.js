@@ -19,6 +19,15 @@ async function triggerExiste(db, nome) {
   return (rows[0].CNT || 0) > 0;
 }
 
+async function generatorExiste(db, nome) {
+  const rows = await query(
+    db,
+    `SELECT COUNT(*) AS CNT FROM RDB$GENERATORS WHERE TRIM(RDB$GENERATOR_NAME) = ?`,
+    [nome]
+  );
+  return (rows[0].CNT || 0) > 0;
+}
+
 /**
  * Cria a infraestrutura de sync bidirecional no banco da filial:
  *   - SYNC_ALTERACOES_PENDENTES: registros modificados localmente aguardando envio
@@ -26,7 +35,26 @@ async function triggerExiste(db, nome) {
  *   - Triggers AFTER INSERT OR UPDATE em cada tabela sincronizada
  */
 async function setup(db, log = console.log) {
-  // 1. Tabela de erros de sincronização
+  // 1. Generator e tabela de cursores de sync (ULTIMOS_REGISTROS_MATRIZ)
+  //    Existiam no banco Delphi pré-existente; criados aqui para instalações novas.
+  if (!(await generatorExiste(db, 'NOVO_ULTIMOS_REGISTROS_MATRIZ'))) {
+    await execute(db, 'CREATE SEQUENCE NOVO_ULTIMOS_REGISTROS_MATRIZ');
+    log('[SETUP] Generator NOVO_ULTIMOS_REGISTROS_MATRIZ criado');
+  }
+
+  if (!(await tabelaExiste(db, 'ULTIMOS_REGISTROS_MATRIZ'))) {
+    await execute(db, `
+      CREATE TABLE ULTIMOS_REGISTROS_MATRIZ (
+        ID_ULTIMO_REGISTRO_MATRIZ  INTEGER      NOT NULL PRIMARY KEY,
+        NOME_TABELA                VARCHAR(50)  NOT NULL UNIQUE,
+        ULTIMO_REGISTRO_ATUALIZADO INTEGER      DEFAULT 0 NOT NULL,
+        ULTIMO_REGISTRO_DELETADO   INTEGER      DEFAULT 0 NOT NULL
+      )
+    `);
+    log('[SETUP] Tabela ULTIMOS_REGISTROS_MATRIZ criada');
+  }
+
+  // 2. Tabela de erros de sincronização
   if (!(await tabelaExiste(db, 'SYNC_ERROS'))) {
     await execute(db, `
       CREATE TABLE SYNC_ERROS (
@@ -40,7 +68,7 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_ERROS criada');
   }
 
-  // 2. Tabela de pendentes de envio ao servidor
+  // 3. Tabela de pendentes de envio ao servidor
   const primeiraInstalacao = !(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'));
   if (primeiraInstalacao) {
     await execute(db, `
@@ -81,7 +109,7 @@ async function setup(db, log = console.log) {
     log(`[SETUP] Total enfileirado para envio inicial: ${totalEnfileirados} registro(s)`);
   }
 
-  // 3. Tabela que rastreia a última versão recebida do servidor por registro
+  // 4. Tabela que rastreia a última versão recebida do servidor por registro
   //    (usada para detectar conflito na hora do envio)
   if (!(await tabelaExiste(db, 'SYNC_VERSOES_SERVIDOR'))) {
     await execute(db, `
@@ -95,7 +123,7 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_VERSOES_SERVIDOR criada');
   }
 
-  // 4. Triggers em cada tabela para detectar alterações locais
+  // 5. Triggers em cada tabela para detectar alterações locais
   for (const tabela of TABELAS) {
     const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
     const pkExpressao = pks.map(p => `CAST(NEW.${p} AS VARCHAR(100))`).join(" || '|' || ");

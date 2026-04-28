@@ -10,12 +10,15 @@ const cacheComputadas = {};
 // Cache de colunas existentes no servidor por tabela
 const cacheColunasServidor = {};
 
-// Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL
+// Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL.
+// Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
+// inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
+// NUMERIC é superset seguro — comporta inteiros e decimais sem perda.
 function inferirTipoPg(valor) {
   if (Buffer.isBuffer(valor))      return 'BYTEA';
   if (valor instanceof Date)       return 'TIMESTAMP';
   if (typeof valor === 'boolean')  return 'BOOLEAN';
-  if (typeof valor === 'number')   return Number.isInteger(valor) ? 'INTEGER' : 'NUMERIC';
+  if (typeof valor === 'number')   return 'NUMERIC';
   return 'TEXT';
 }
 
@@ -178,6 +181,9 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
 
     res.json(rows);
   } catch (e) {
+    // Tabela ainda não existe no servidor — retorna vazio para não bloquear o pull.
+    // Será criada automaticamente no primeiro push via criarTabelaSeNecessario.
+    if (e.code === '42P01') return res.json([]);
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
     });
@@ -370,7 +376,12 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
       if (colunas.length > 0) {
         const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
-        const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
+        // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes
+        // vindos de dados binários ou padding de campo de tamanho fixo.
+        const valores = colunas.map(c => {
+          const v = registro[c] === undefined ? null : registro[c];
+          return typeof v === 'string' ? v.replace(/\x00/g, '') : v;
+        });
         const nonPkCols = colunas.filter(c => !pks.includes(c));
         const updateSet = nonPkCols.length > 0
           ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')

@@ -1,85 +1,242 @@
-# Sincronizador Firebird — Matriz/Filiais
+# Sincronizador Node.js — Matriz / Filial
 
-Sistema de sincronização bidirecional de banco de dados Firebird entre uma matriz central e múltiplas filiais. Reescrita em Node.js de uma aplicação Delphi/DataSnap original.
+Sistema de sincronização bidirecional de dados entre um servidor central PostgreSQL (matriz) e clientes Firebird (filiais). É uma reescrita em Node.js de um sistema originalmente desenvolvido em Delphi/DataSnap.
+
+---
+
+## Sumário
+
+1. [Visão Geral](#visão-geral)
+2. [Pré-requisitos](#pré-requisitos)
+3. [Estrutura do Projeto](#estrutura-do-projeto)
+4. [Configuração do Servidor (Matriz)](#configuração-do-servidor-matriz)
+5. [Configuração do Cliente (Filial)](#configuração-do-cliente-filial)
+6. [Referência de Variáveis de Ambiente](#referência-de-variáveis-de-ambiente)
+7. [Multi-tenancy: Gerenciando Empresas](#multi-tenancy-gerenciando-empresas)
+8. [Autenticação de Usuários (API Web)](#autenticação-de-usuários-api-web)
+9. [Interface Web da Filial](#interface-web-da-filial)
+10. [Fluxo de Sincronização](#fluxo-de-sincronização)
+11. [Resolução de Conflitos](#resolução-de-conflitos)
+12. [Adicionando uma Nova Tabela ao Sync](#adicionando-uma-nova-tabela-ao-sync)
+13. [Scripts Utilitários](#scripts-utilitários)
+14. [Solução de Problemas](#solução-de-problemas)
 
 ---
 
 ## Visão Geral
 
 ```
-┌─────────────┐        HTTP/REST        ┌──────────────────┐
-│   MATRIZ    │ ◄────────────────────── │    FILIAL(IS)    │
-│  (Servidor) │ ──────────────────────► │    (Cliente)     │
-│  porta 8080 │                         │  webui: 3001     │
-└─────────────┘                         └──────────────────┘
-   Firebird MATRIZ.FDB                   Firebird FILIAL.FDB
+┌─────────────────────────────────────────────────────┐
+│                 SERVIDOR (Matriz)                   │
+│          Node.js + Express + PostgreSQL             │
+│              porta padrão: 8080                     │
+└──────────────────────┬──────────────────────────────┘
+                       │ HTTP REST
+          ┌────────────┴────────────┐
+          │                         │
+┌─────────▼──────────┐   ┌─────────▼──────────┐
+│  CLIENTE (Filial 1) │   │  CLIENTE (Filial 2) │
+│  Node.js + Firebird │   │  Node.js + Firebird │
+│  WebUI: porta 3001  │   │  WebUI: porta 3001  │
+└────────────────────┘   └────────────────────┘
 ```
 
-- **Servidor (Matriz):** expõe o banco da matriz via REST. Deve rodar na máquina central.
-- **Cliente (Filial):** processo contínuo que sincroniza com o servidor a cada 30 segundos e disponibiliza uma interface web local em `http://localhost:3001`.
+**O servidor** expõe uma API REST no padrão `/datasnap/rest/{Classe}/{Método}` — compatível com os clientes Delphi originais. Cada empresa (CNPJ) ocupa um schema isolado no PostgreSQL (multi-tenancy schema-per-tenant).
+
+**O cliente** roda como processo contínuo na filial. A cada intervalo configurável (padrão 30 segundos), ele executa:
+1. **Pull** — busca registros novos/atualizados no servidor e aplica no Firebird local
+2. **Push** — envia alterações locais do Firebird ao servidor
 
 ---
 
 ## Pré-requisitos
 
-- Node.js 18+
-- Firebird 2.5 ou 3.0 acessível via rede (ou local)
-- Bancos `.fdb` já existentes (o sincronizador não cria o schema)
+| Componente | Versão mínima |
+|---|---|
+| Node.js | 18+ |
+| PostgreSQL | 12+ (no servidor/matriz) |
+| Firebird | 2.5 ou 3.x (nas filiais) |
 
----
-
-## Instalação
+Instale as dependências do projeto:
 
 ```bash
-git clone <repositório>
-cd ProjetoSincronizadorNode
 npm install
 ```
 
 ---
 
-## Configuração
-
-Crie os arquivos `.ini` na raiz do projeto (junto ao `package.json`). Eles **não são versionados** (estão no `.gitignore`).
-
-### Servidor — `sirius.ini`
+## Estrutura do Projeto
 
 ```
-localhost/3050:C:\FDBS\MATRIZ.FDB
-3
-8080
-```
-
-| Linha | Conteúdo |
-|-------|----------|
-| 1 | `host/portaFirebird:caminho_do_banco` |
-| 2 | Versão do Firebird (`2` ou `3`) |
-| 3 | Porta HTTP do servidor Express |
-
-### Cliente — `sirius-client.ini`
-
-Mesmo formato, sem a linha 3 (porta HTTP não se aplica ao cliente):
-
-```
-localhost/3050:C:\FDBS\FILIAL.FDB
-3
+├── src/
+│   ├── server.js              # Ponto de entrada do servidor
+│   ├── db.js                  # Pool PostgreSQL + helpers de query
+│   ├── db-init.js             # Criação das tabelas de controle no startup
+│   ├── config.js              # Lê DATABASE_URL e PORT do .env
+│   ├── empresas.js            # Cache em memória: token → schema
+│   ├── middleware/
+│   │   ├── auth.js            # Valida ?token= (clientes Delphi/Node)
+│   │   ├── authJwt.js         # Valida Bearer JWT (usuários da API web)
+│   │   └── filialBloqueada.js # Bloqueia filiais cadastradas
+│   └── routes/
+│       ├── sincronizacao.js   # Pull, push, status, auditoria
+│       ├── produtos.js        # Produtos com preço por loja
+│       ├── pedidos.js         # Pedidos
+│       ├── movimentacaoCaixas.js
+│       ├── distribuicao.js
+│       ├── auth.js            # Login JWT + /me
+│       └── userEmpresas.js    # CRUD de empresas por usuário
+│
+├── src/client/
+│   ├── index.js               # Loop principal de sync
+│   ├── sync.js                # Fase pull (servidor → filial)
+│   ├── push.js                # Fase push (filial → servidor)
+│   ├── setup.js               # Cria infraestrutura no Firebird (idempotente)
+│   ├── cursor.js              # Lê/grava ULTIMOS_REGISTROS_MATRIZ
+│   ├── tabelas.js             # Lista de tabelas sincronizadas (ordem FK)
+│   ├── tabelasConfig.js       # Ativa/desativa tabelas em runtime
+│   ├── http.js                # Chamadas HTTP ao servidor
+│   ├── db.js                  # Conexão Firebird
+│   ├── conflitos.js           # Persistência de conflitos (conflitos.json)
+│   ├── erros.js               # Persistência de erros (erros.json)
+│   ├── webui.js               # Interface web na porta 3001
+│   └── views/                 # Templates EJS da WebUI
+│
+├── scripts/
+│   ├── create-empresa.js           # Cria nova empresa/schema
+│   ├── create-usuario.js           # Cria usuário da API web
+│   ├── migrate-public-to-schema.js # Migra dados do schema public
+│   ├── migrate-data.js             # Migra dados do Firebird → PostgreSQL
+│   └── export-schema.js            # Exporta DDL do Firebird → SQL PostgreSQL
+│
+├── .env.example               # Modelo de configuração do servidor
+└── src/client/.env.example    # Modelo de configuração do cliente
 ```
 
 ---
 
-## Executando
+## Configuração do Servidor (Matriz)
 
-### Servidor (Matriz)
+### 1. Criar o arquivo `.env` na raiz do projeto
+
+Copie o modelo e preencha com seus dados:
+
+```bash
+cp .env.example .env
+```
+
+Conteúdo do `.env`:
+
+```env
+# URL de conexão PostgreSQL
+DATABASE_URL=postgresql://postgres:suasenha@localhost:5432/matriz
+
+# Porta HTTP do servidor Express (padrão: 8080)
+PORT=8080
+
+# Segredo para assinar JWTs de usuários
+# Gere um valor forte com: npm run generate-secret
+JWT_SECRET=cole-aqui-o-secret-gerado
+
+# Token de administrador para o endpoint /admin/reload-empresas
+ADMIN_TOKEN=outro-secret-forte-aqui
+```
+
+> **Gerar valores seguros** para `JWT_SECRET` e `ADMIN_TOKEN`:
+> ```bash
+> npm run generate-secret
+> ```
+
+### 2. Criar o banco de dados PostgreSQL
+
+```sql
+CREATE DATABASE matriz;
+```
+
+### 3. Iniciar o servidor
 
 ```bash
 # Produção
 npm start
 
-# Desenvolvimento (auto-reload)
+# Desenvolvimento (auto-reload com nodemon)
 npm run dev
 ```
 
-### Cliente (Filial)
+Na primeira inicialização, o servidor cria automaticamente as seguintes tabelas no schema `public`:
+
+| Tabela | Descrição |
+|---|---|
+| `sync_tenants` | Mapeia token → schema (uma linha por empresa) |
+| `usuarios` | Usuários da API web (login JWT) |
+| `usuarios_empresas` | Relação N:N usuário ↔ empresa |
+
+### 4. Criar a primeira empresa
+
+Cada empresa (grupo de filiais) precisa de um **schema** próprio no PostgreSQL e um **token** de autenticação para os clientes.
+
+```bash
+node scripts/create-empresa.js \
+  --schema=empresa_kr \
+  --token=TOKEN_SEGURO_AQUI \
+  --nome="KR Supermercados"
+```
+
+O script:
+- Cria o schema `empresa_kr` no PostgreSQL
+- Provisiona as tabelas internas de controle do schema (sequências, registros deletados, filiais bloqueadas)
+- Registra a empresa em `public.sync_tenants`
+
+**Não é necessário reiniciar o servidor** — o cache de empresas é recarregado automaticamente na próxima requisição.
+
+> Para forçar o reload do cache manualmente:
+> ```bash
+> curl -X POST http://localhost:8080/admin/reload-empresas \
+>      -H "x-admin-token: SEU_ADMIN_TOKEN"
+> ```
+
+---
+
+## Configuração do Cliente (Filial)
+
+O cliente roda **na máquina da filial**, conectado ao banco Firebird local.
+
+### 1. Criar o arquivo `src/client/.env`
+
+```bash
+cp src/client/.env.example src/client/.env
+```
+
+Preencha com os dados da filial:
+
+```env
+# Token — deve ser idêntico ao cadastrado no servidor para esta empresa
+SYNC_TOKEN=TOKEN_SEGURO_AQUI
+
+# Conexão com o banco Firebird da filial
+FIREBIRD_HOST=localhost
+FIREBIRD_PORT=3050
+FIREBIRD_DATABASE=C:\FDBS\FILIAL.FDB
+FIREBIRD_USER=SYSDBA
+FIREBIRD_PASSWORD=masterkey
+
+# Intervalo entre ciclos de sync em milissegundos (padrão: 30000 = 30s)
+INTERVALO_MS=30000
+```
+
+> **`FIREBIRD_USER` e `FIREBIRD_PASSWORD` são obrigatórios.** O processo termina com mensagem clara se estiverem ausentes.
+
+### 2. Configurar os parâmetros no banco Firebird
+
+O cliente lê as seguintes configurações da tabela `PARAMETROS` do banco Firebird:
+
+| ID | Exemplo de valor | Descrição |
+|---|---|---|
+| `60024` | `http://192.168.1.100:8080` | URL base do servidor (sem barra no final) |
+| `50003` | `1` | Número da loja (`idLoja`) |
+| `50004` | `1` | Número do PDV (`idPDV`) — opcional |
+
+### 3. Iniciar o cliente
 
 ```bash
 # Produção
@@ -89,154 +246,411 @@ npm run client
 npm run client:dev
 ```
 
-> Os dois processos são **independentes** e devem ser iniciados separadamente — normalmente o servidor na máquina da matriz e o cliente em cada filial.
+**Na primeira execução**, o `setup.js` cria automaticamente no banco Firebird:
+
+| Objeto criado | Descrição |
+|---|---|
+| `ULTIMOS_REGISTROS_MATRIZ` | Tabela de cursor de sync por tabela |
+| `SYNC_ALTERACOES_PENDENTES` | Fila de alterações locais para enviar ao servidor |
+| `SYNC_VERSOES_SERVIDOR` | Última versão recebida do servidor por registro (detecção de conflito) |
+| `SYNC_ERROS` | Log de erros de sincronização (máx. 200 registros) |
+| Triggers `SYNC_*` | Criados em cada tabela sincronizada para capturar INSERT/UPDATE |
+
+Após o setup, o cliente entra no loop de sincronização e inicia a **interface web** em `http://localhost:3001`.
 
 ---
 
-## Interface Web do Cliente
+## Referência de Variáveis de Ambiente
+
+### Servidor (`.env` na raiz do projeto)
+
+| Variável | Obrigatório | Padrão | Descrição |
+|---|---|---|---|
+| `DATABASE_URL` | Sim | — | URL de conexão PostgreSQL |
+| `PORT` | Não | `8080` | Porta HTTP do servidor |
+| `JWT_SECRET` | Sim | — | Segredo para assinar JWTs |
+| `ADMIN_TOKEN` | Não | — | Token para o endpoint `/admin/reload-empresas` |
+
+### Cliente (`src/client/.env`)
+
+| Variável | Obrigatório | Padrão | Descrição |
+|---|---|---|---|
+| `SYNC_TOKEN` | Sim | — | Token de autenticação com o servidor |
+| `FIREBIRD_HOST` | Não | `localhost` | Host do servidor Firebird |
+| `FIREBIRD_PORT` | Não | `3050` | Porta TCP do Firebird |
+| `FIREBIRD_DATABASE` | Sim | — | Caminho completo do arquivo `.fdb` |
+| `FIREBIRD_USER` | Não | `SYSDBA` | Usuário do Firebird |
+| `FIREBIRD_PASSWORD` | Sim | — | Senha do usuário Firebird |
+| `INTERVALO_MS` | Não | `30000` | Intervalo entre ciclos (ms) |
+
+---
+
+## Multi-tenancy: Gerenciando Empresas
+
+O servidor suporta múltiplas empresas simultaneamente. Cada empresa tem:
+- Um **schema PostgreSQL** isolado (ex: `empresa_kr`, `empresa_jb`)
+- Um **token único** usado pelos clientes das filiais
+
+### Criar uma nova empresa
+
+```bash
+node scripts/create-empresa.js \
+  --schema=empresa_jb \
+  --token=NOVO_TOKEN_AQUI \
+  --nome="JB Atacado"
+```
+
+### Migrar dados do schema `public` (instalações legadas)
+
+Se você tinha dados no schema `public` de uma instalação anterior ao multi-tenancy:
+
+```bash
+node scripts/migrate-public-to-schema.js \
+  --schema=empresa_kr \
+  --token=TOKEN \
+  --nome="KR Supermercados"
+```
+
+Reinicie o servidor após a migração.
+
+---
+
+## Autenticação de Usuários (API Web)
+
+Existe uma camada de autenticação JWT separada do token de sync, usada por donos de empresas para acessar a API via browser ou ferramentas REST.
+
+### Criar um usuário
+
+```bash
+node scripts/create-usuario.js \
+  --email=admin@empresa.com \
+  --senha=senha123 \
+  --schema=empresa_kr
+```
+
+### Fazer login
+
+```http
+POST /auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@empresa.com",
+  "senha": "senha123"
+}
+```
+
+Resposta:
+```json
+{
+  "token": "eyJhbGci...",
+  "schemas": ["empresa_kr"]
+}
+```
+
+### Verificar token
+
+```http
+GET /auth/me
+Authorization: Bearer eyJhbGci...
+```
+
+Resposta:
+```json
+{
+  "id": 1,
+  "schemas": ["empresa_kr"]
+}
+```
+
+### Listar empresas do usuário
+
+```http
+GET /user/empresas
+Authorization: Bearer eyJhbGci...
+```
+
+### Criar empresa via API
+
+```http
+POST /user/empresas
+Authorization: Bearer eyJhbGci...
+Content-Type: application/json
+
+{
+  "schema": "empresa_nova",
+  "token": "TOKEN_SYNC_NOVO",
+  "nome": "Nova Empresa Ltda"
+}
+```
+
+O schema deve ter apenas letras minúsculas, números e underscore, e começar com letra ou underscore (ex: `empresa_abc`).
+
+---
+
+## Interface Web da Filial
 
 Após iniciar o cliente, acesse `http://localhost:3001` no navegador da filial.
 
-### Conflitos (`/`)
+### `/` — Conflitos
 
-Exibe registros onde a filial e a matriz divergem e precisam de decisão manual.
+Lista registros em conflito entre a filial e o servidor (alterados nos dois lados desde a última sync).
 
-Cada conflito mostra:
-- Tabela e chave primária do registro
-- Quantos campos estão diferentes
-- Tabela de campos divergentes com os valores de cada lado
+Para cada conflito são exibidos os campos divergentes. Ações disponíveis:
 
-**Opções de resolução por conflito:**
+| Botão | O que faz |
+|---|---|
+| **Manter local** | Envia a versão da filial ao servidor (força sobrescrita) |
+| **Manter servidor** | Aplica a versão do servidor no banco Firebird local |
 
-| Botão | Ação |
-|-------|------|
-| Manter versão local | Envia o valor da filial ao servidor (força sobrescrita) |
-| Manter versão do servidor | Aplica o valor do servidor no banco local |
-| Aplicar seleção campo a campo | Para cada campo divergente, você escolhe qual versão manter usando os radio buttons da tabela |
+### `/status` — Status de Sincronização
 
-> Clique no cabeçalho do card para expandir/recolher os detalhes. As seções **Identificação** e **Outros campos** ficam colapsadas por padrão; só os campos divergentes ficam abertos.
+Exibe por tabela:
+- Total de registros no servidor vs total local
+- Último ID de cursor sincronizado
+- Quantidade de registros pendentes de envio ao servidor
+- Status geral: `OK`, `Pendente` ou `N/D` (tabela inacessível)
 
----
+### `/auditoria` — Auditoria de Dados
 
-### Status (`/status`)
-
-Tabela com o estado de sincronização de cada tabela configurada:
-
-- **Total matriz / Total local** — comparação de volume
-- **Cursor local** — último ID recebido da matriz
-- **Pendentes envio** — registros locais ainda não enviados ao servidor
-- **Status** — `OK` (sincronizado) | `Pendente` | `N/D` (tabela inacessível)
-
----
-
-### Auditoria (`/auditoria`)
-
-Comparação registro a registro entre matriz e filial para uma tabela escolhida.
+Comparação registro a registro entre servidor e filial para qualquer tabela.
 
 1. Selecione a tabela no seletor
 2. Clique em **Comparar**
-3. Linhas em vermelho indicam divergência (passe o mouse para ver o valor do servidor)
-4. Use **Aplicar Matriz em Tudo** para sobrescrever todos os registros da página com os valores do servidor
-5. Use **Resolver um por um** para enviar os divergentes para a fila de conflitos
+3. Linhas em vermelho indicam divergência — passe o mouse para ver o valor do servidor
+4. Use **Aplicar Matriz em Tudo** para sobrescrever todos os registros divergentes da página
+5. Use **Resolver um por um** para enviar cada divergência para a fila de conflitos
 
 > A auditoria pagina de 200 em 200 registros. Use os botões de navegação no rodapé.
 
----
+### `/configuracoes` — Habilitar/Desabilitar Tabelas
 
-### Configurações (`/configuracoes`)
+Ativa ou desativa tabelas do sync sem reiniciar o processo.
 
-Ativa ou desativa tabelas individualmente sem reiniciar o processo.
+- Use os toggles individuais ou **Ativar Todas / Desativar Todas** por grupo
+- Tabelas desativadas são ignoradas no próximo ciclo
+- Estado persiste em `tabelas-config.json` no diretório de trabalho
 
-- Use os toggles por tabela ou os botões **Ativar Todas / Desativar Todas** por grupo
-- Tabelas desativadas são ignoradas no próximo ciclo de 30 segundos
-- O estado persiste em `tabelas-config.json` na raiz do projeto
+### `/erros` — Log de Erros
 
----
+Exibe os últimos 200 erros de sincronização com tabela, operação e mensagem de erro.
 
-## Tabelas Sincronizadas
+### `/eventos` — SSE
 
-As tabelas são sincronizadas na ordem abaixo (respeita dependências de FK):
-
-| Grupo | Tabelas |
-|-------|---------|
-| Auxiliares | UNIDADES, AUX_CLASSIFICACOES_FISCAIS, AUX_CODIFICACAO_GRUPOS, AUX_ESPECIES_EMBALAGENS, AUX_GENERICA, AUX_PAISES_BACEN, AUX_PARCELAS_PAGAMENTOS, AUX_SITUACOES_TRIBUTARIAS, AUX_SUB_GRUPOS, AUX_MOEDAS |
-| Cadastros | CENTROS_DE_CUSTO, CLASSIFICACOES, CODIGOS_REGIMES_TRIBUTARIOS, CONTAS, DEPARTAMENTOS, LISTA_PRECOS, TIPOS_PRODUTOS |
-| Produtos | PRODUTOS, PRODUTOS_GRADES, PRODUTOS_X_LISTA |
-| Clientes | CLIENTES, CLIENTES_X_ENTREGA, ENDERECOS_DE_RETIRADA |
-| Fornecedores | FORNECEDORES, FORN_CONTATOS_ADICIONAIS, FORMAS_DE_PAGAMENTOS_SISPAG |
-| Transportadores | TRANSPORTADORES, TRANSP_CONTATOS_ADICIONAIS, TRANSPORTADORES_PLACAS |
-| Vendedores | VENDEDORES, REPRESENTANTES, SUPERVISORES |
-| Kits | KITS_PRODUTOS, KITS_ITENS_PROD, KITS_ITENS_SUB_PROD |
+Endpoint de eventos em tempo real (`text/event-stream`). Browsers conectados recebem notificações instantâneas de novos conflitos e erros — usado internamente pela WebUI para atualizar contadores.
 
 ---
 
-## Como Funciona a Sincronização
+## Fluxo de Sincronização
 
-### Pull (Matriz → Filial)
+### Pull (Servidor → Filial)
 
-A cada ciclo, o cliente busca registros novos/alterados da matriz (baseado em cursor por tabela). Antes de gravar localmente, verifica:
+A cada ciclo, para cada tabela ativa:
 
-- **Colisão de PK:** registro local com mesmo ID nunca veio do servidor → renomeia a PK local (incrementa ou adiciona sufixo `_1`) e aplica o registro do servidor.
-- **Conflito de conteúdo:** registro já recebido do servidor, mas filial o alterou → salva em `conflitos.json` para resolução manual.
-- **Normal:** nenhuma das situações acima → aplica o `UPDATE OR INSERT` diretamente.
+1. Busca até **50 registros** do servidor onde `ID_ULTIMA_ATUALIZACAO_MATRIZ > cursor_local`
+2. Para cada registro recebido, verifica se há alteração local pendente (`SYNC_ALTERACOES_PENDENTES`):
 
-### Push (Filial → Matriz)
+   | Situação | Ação |
+   |---|---|
+   | Sem alteração local pendente | Upsert normal no Firebird, atualiza cursor |
+   | Pendente + registro **nunca recebido do servidor** | **Colisão de PK** → renomeia PK local (MAX+1 para numérico, `val_1` para texto), aplica registro do servidor |
+   | Pendente + registro **já recebido anteriormente** | **Conflito de conteúdo** → salva em `conflitos.json`, avança cursor sem upsert |
 
-Registros alterados localmente ficam na tabela `SYNC_ALTERACOES_PENDENTES` (criada automaticamente). O cliente envia cada um ao servidor, que retorna conflito se sua versão for mais nova.
+3. Busca registros deletados (`REGISTROS_DELETADOS`) e remove do Firebird local
 
----
+> Os triggers do Firebird são desabilitados durante o pull via `RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1')` para evitar que registros vindos do servidor gerem novas entradas em `SYNC_ALTERACOES_PENDENTES`.
 
-## Adicionando uma Nova Tabela
+### Push (Filial → Servidor)
 
-1. Adicione a entrada em [src/client/tabelas.js](src/client/tabelas.js) respeitando a ordem de FKs:
-   ```js
-   { nome: 'NOME_TABELA', pk: 'ID_CAMPO', temDelete: true, grupo: 'GrupoExistente' }
-   ```
-2. Adicione o nome à constante `TABELAS_PERMITIDAS` em [src/routes/sincronizacao.js](src/routes/sincronizacao.js).
-3. Reinicie servidor e cliente — os triggers de rastreamento são criados automaticamente pelo `setup.js`.
+A cada ciclo, para cada tabela ativa:
 
----
-
-## Arquivos Gerados em Runtime
-
-Estes arquivos são criados automaticamente e estão no `.gitignore`:
-
-| Arquivo | Descrição |
-|---------|-----------|
-| `conflitos.json` | Fila de conflitos pendentes de resolução |
-| `tabelas-config.json` | Estado ativo/inativo de cada tabela (configurações) |
-| `sirius.ini` | Configuração do servidor |
-| `sirius-client.ini` | Configuração do cliente |
+1. Lê todos os registros de `SYNC_ALTERACOES_PENDENTES` para a tabela
+2. Para cada pendente:
+   - Busca o dado completo no Firebird
+   - Envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida do servidor
+3. O servidor verifica se houve alteração no servidor desde `ultimaVersaoConhecida`:
+   - **Sem conflito** → aplica o upsert e retorna `{ ok: true }`
+   - **Com conflito** → retorna `{ conflito: true, versaoServidor: {...} }` e o cliente salva em `conflitos.json`
+4. Registros enviados com sucesso são removidos de `SYNC_ALTERACOES_PENDENTES`
 
 ---
 
-## Estrutura do Projeto
+## Resolução de Conflitos
+
+Um conflito ocorre quando um registro foi alterado **tanto na filial quanto no servidor** desde a última sincronização.
+
+### Via interface web
+
+1. Acesse `http://localhost:3001` na filial
+2. Na página **Conflitos**, os campos divergentes são exibidos lado a lado
+3. Escolha:
+   - **Manter local** — versão da filial sobrescreve o servidor
+   - **Manter servidor** — versão do servidor sobrescreve o Firebird local
+
+### Prevenção
+
+O sistema evita conflitos usando `SYNC_VERSOES_SERVIDOR`: para cada registro recebido do servidor, armazena o `ID_ULTIMA_ATUALIZACAO_MATRIZ` como versão de referência. No push, essa versão é enviada ao servidor para que ele compare com a versão atual e detecte se houve alteração no servidor entre os dois eventos.
+
+---
+
+## Adicionando uma Nova Tabela ao Sync
+
+### Passo 1 — `src/client/tabelas.js`
+
+Adicione a entrada respeitando a **ordem de FK** (tabelas pai antes das filhas):
+
+```js
+{
+  nome: 'NOME_DA_TABELA',
+  pk: 'ID_NOME_DA_TABELA',     // string simples ou array para PK composta: ['COL1', 'COL2']
+  temDelete: true,              // true se a tabela tem rastreamento de deleção no servidor
+  filtroFilial: 'ID_LOJA',     // nome da coluna de filtro por loja, ou null para tabelas globais
+  grupo: 'Cadastros',          // grupo exibido na WebUI (/configuracoes)
+  generator: 'GEN_TABELA',     // nome do generator Firebird, ou null se a filial não cria registros
+}
+```
+
+**Grupos existentes:** `Auxiliares`, `Cadastros`, `Produtos`, `Clientes`, `Fornecedores`, `Transportadores`, `Vendedores`, `Kits`.
+
+> Use `filtroFilial: 'ID_LOJA'` se a tabela tem uma coluna por loja e você quer que cada filial receba apenas seus próprios registros. Para tabelas de referência globais (ex: `UNIDADES`), use `filtroFilial: null`.
+
+### Passo 2 — `src/routes/sincronizacao.js`
+
+Adicione o nome à lista de tabelas permitidas:
+
+```js
+const TABELAS_PERMITIDAS = new Set([
+  // ... tabelas existentes ...
+  'NOME_DA_TABELA',
+]);
+```
+
+### Passo 3 — Garantir a coluna no PostgreSQL
+
+A tabela no servidor precisa ter a coluna `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER` e um trigger que a incrementa a cada INSERT/UPDATE usando a sequência compartilhada do schema.
+
+> Se a tabela **não existe** no PostgreSQL, ela será criada automaticamente no primeiro push da filial, com tipos de coluna inferidos dos valores do primeiro registro recebido.
+
+### Passo 4 — Reiniciar servidor e cliente
+
+O `setup.js` cria o trigger `SYNC_NOME_DA_TABELA` no Firebird automaticamente na próxima inicialização do cliente.
+
+---
+
+## Scripts Utilitários
+
+### `scripts/create-empresa.js`
+
+Cria um novo schema de empresa no PostgreSQL com todas as tabelas de controle necessárias.
+
+```bash
+node scripts/create-empresa.js \
+  --schema=empresa_jb \
+  --token=MEU_TOKEN \
+  --nome="JB Atacado"
+```
+
+### `scripts/create-usuario.js`
+
+Cria um usuário para a API web (autenticação JWT).
+
+```bash
+node scripts/create-usuario.js \
+  --email=admin@empresa.com \
+  --senha=senha123 \
+  --schema=empresa_kr    # opcional: vincula o usuário a um schema
+```
+
+### `scripts/migrate-public-to-schema.js`
+
+Migra dados do schema `public` (instalação legada) para um schema dedicado. Execute uma única vez na migração para multi-tenancy.
+
+```bash
+node scripts/migrate-public-to-schema.js \
+  --schema=empresa_kr \
+  --token=MEU_TOKEN \
+  --nome="KR Supermercados"
+```
+
+### `scripts/export-schema.js`
+
+Exporta o DDL do banco Firebird (estrutura de tabelas) para um arquivo SQL compatível com PostgreSQL. Útil para a configuração inicial do servidor.
+
+```bash
+node scripts/export-schema.js
+# Gera: schema-matriz.sql
+
+psql -U postgres -d matriz -f schema-matriz.sql
+```
+
+### `scripts/migrate-data.js`
+
+Migra os dados do banco Firebird para o PostgreSQL. Operação única de setup inicial.
+
+```bash
+# Migrar todas as tabelas
+node scripts/migrate-data.js
+
+# Migrar apenas tabelas específicas
+node scripts/migrate-data.js --tables=PRODUTOS,CLIENTES
+
+# Excluir tabelas específicas
+node scripts/migrate-data.js --skip=SYNC_ERROS,PARAMETROS
+```
+
+---
+
+## Solução de Problemas
+
+### `FIREBIRD_DATABASE não definido`
+
+Crie ou complete o arquivo `src/client/.env` adicionando:
+```
+FIREBIRD_DATABASE=C:\FDBS\FILIAL.FDB
+```
+
+### `FIREBIRD_PASSWORD não definido`
+
+Adicione ao `src/client/.env`:
+```
+FIREBIRD_PASSWORD=suasenha
+```
+
+### `Your user name and password are not defined` (Firebird)
+
+O Firebird rejeitou as credenciais. Verifique:
+- `FIREBIRD_USER` — deve ser um usuário existente no Firebird (padrão: `SYSDBA`)
+- `FIREBIRD_PASSWORD` — senha correspondente ao usuário
+
+Ambos devem estar em `src/client/.env`.
+
+### `Table unknown, ULTIMOS_REGISTROS_MATRIZ`
+
+O banco Firebird é de uma instalação nova (sem histórico Delphi). Reinicie o cliente — o `setup.js` cria a tabela automaticamente na inicialização.
+
+### `relação "nome_tabela" não existe` (erro 400 no pull)
+
+A tabela ainda não existe no servidor PostgreSQL. O cliente retorna array vazio e continua normalmente. A tabela será criada automaticamente no **primeiro push** que a filial realizar para ela.
+
+### `Filial bloqueada (401)`
+
+A filial está na tabela `FILIAIS_BLOQUEADAS` do schema da empresa no PostgreSQL. Para desbloquear, remova o registro com o `ID_FILIAL_BLOQUEADA` correspondente ao número da loja.
+
+### Conflitos acumulando
+
+Acesse `http://localhost:3001` na filial e resolva cada conflito usando **Manter local** ou **Manter servidor**.
+
+### Ciclos lentos ou saltados
+
+O sistema protege contra ciclos sobrepostos com a flag `rodando` — se um ciclo levar mais que `INTERVALO_MS`, o próximo é descartado. Aumente `INTERVALO_MS` no `.env` do cliente se o ciclo estiver demorando demais.
 
 ```
-src/
-├── server.js              # Entry point do servidor
-├── config.js              # Leitura do sirius.ini
-├── db.js                  # Conexão Firebird (servidor)
-├── middleware/
-│   ├── auth.js            # Validação do token
-│   └── filialBloqueada.js # Verificação de filiais bloqueadas
-└── routes/
-    ├── sincronizacao.js   # Pull, push, auditoria
-    ├── produtos.js        # Produtos com preços por loja
-    ├── pedidos.js         # Pedidos
-    ├── movimentacaoCaixas.js
-    └── distribuicao.js
+INTERVALO_MS=60000   # 60 segundos
+```
 
-src/client/
-├── index.js               # Loop principal (30s)
-├── tabelas.js             # Lista de tabelas configuradas
-├── tabelasConfig.js       # Ativa/desativa tabelas em runtime
-├── sync.js                # Lógica de pull
-├── push.js                # Lógica de push
-├── http.js                # Chamadas HTTP ao servidor
-├── db.js                  # Conexão Firebird (cliente)
-├── cursor.js              # Controle de cursor por tabela
-├── setup.js               # Cria infra de sync no banco local
-├── conflitos.js           # Persistência de conflitos
-└── webui.js               # Interface web (porta 3001)
+### Recarregar lista de empresas sem reiniciar o servidor
+
+```bash
+curl -X POST http://localhost:8080/admin/reload-empresas \
+     -H "x-admin-token: SEU_ADMIN_TOKEN"
 ```

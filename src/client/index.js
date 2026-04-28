@@ -115,4 +115,7 @@ async function executarCiclo() {
 
   await executarCiclo();
   setInterval(executarCiclo, INTERVALO_MS);
-})();
+})().catch(e => {
+  console.error(`[ERRO FATAL] ${e.message}`);
+  process.exit(1);
+});

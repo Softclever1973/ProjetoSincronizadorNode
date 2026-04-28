@@ -4,13 +4,17 @@ if (!process.env.FIREBIRD_DATABASE) {
   throw new Error('FIREBIRD_DATABASE não definido no .env (ex: C:\\FDBS\\FILIAL.FDB)');
 }
 
+if (!process.env.FIREBIRD_PASSWORD) {
+  throw new Error('FIREBIRD_PASSWORD não definido no .env (ex: FIREBIRD_PASSWORD=masterkey)');
+}
+
 const versao = (process.env.FIREBIRD_VERSION || '3').trim().charAt(0);
 
 const opcoes = {
   host:     process.env.FIREBIRD_HOST     || 'localhost',
   port:     parseInt(process.env.FIREBIRD_PORT || '3050', 10),
   database: process.env.FIREBIRD_DATABASE,
-  user:     'SYSDBA',
+  user:     process.env.FIREBIRD_USER     || 'SYSDBA',
   password: process.env.FIREBIRD_PASSWORD,
 };
 
