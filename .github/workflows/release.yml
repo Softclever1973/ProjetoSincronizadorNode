@@ -16,20 +16,15 @@ jobs:
       # =========================
       # CLIENT
       # =========================
+      
       - name: Instalar dependências do client
         run: |
           cd src/client
-          npm install
-
-      - name: Build do client
-        run: |
-          cd src/client
-          npm run build
-
+          npm install --production
       - name: Zipar client
         run: |
           cd src/client
-          zip -r ../../client.zip .
+          zip -r ../../client.zip . -x "node_modules/*" ".git/*"
 
       # =========================
       # SERVER
