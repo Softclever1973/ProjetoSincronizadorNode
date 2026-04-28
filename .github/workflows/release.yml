@@ -5,6 +5,8 @@ on:
     tags:
       - 'v*' # só roda quando criar uma tag tipo v1.0.0
 
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
