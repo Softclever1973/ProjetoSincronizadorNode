@@ -18,8 +18,9 @@ Sistema de sincronização bidirecional de dados entre um servidor central Postg
 10. [Fluxo de Sincronização](#fluxo-de-sincronização)
 11. [Resolução de Conflitos](#resolução-de-conflitos)
 12. [Adicionando uma Nova Tabela ao Sync](#adicionando-uma-nova-tabela-ao-sync)
-13. [Scripts Utilitários](#scripts-utilitários)
-14. [Solução de Problemas](#solução-de-problemas)
+13. [Política de Retenção de 2 Anos](#política-de-retenção-de-2-anos)
+14. [Scripts Utilitários](#scripts-utilitários)
+15. [Solução de Problemas](#solução-de-problemas)
 
 ---
 
@@ -534,6 +535,80 @@ A tabela no servidor precisa ter a coluna `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER`
 ### Passo 4 — Reiniciar servidor e cliente
 
 O `setup.js` cria o trigger `SYNC_NOME_DA_TABELA` no Firebird automaticamente na próxima inicialização do cliente.
+
+---
+
+## Política de Retenção de 2 Anos
+
+O sistema limita automaticamente o histórico sincronizado a **2 anos**, tanto no servidor quanto nas filiais. O objetivo é manter o banco de dados operacional em tamanho gerenciável sem acumular dados históricos de pedidos indefinidamente.
+
+### Como funciona
+
+A política age em dois momentos distintos:
+
+| Momento | O que acontece |
+|---|---|
+| **Durante o pull** | O servidor não envia registros cuja `colunaData` seja anterior a 2 anos. Tabelas de cadastro (sem `colunaData`) não são afetadas — PRODUTOS, CLIENTES, etc. sempre são sincronizados integralmente. |
+| **Limpeza diária** | 24h após a inicialização, e a cada 24h, um job remove do servidor e da filial todos os registros transacionais mais antigos que 2 anos. |
+
+### Tabelas afetadas
+
+Apenas tabelas configuradas com o campo `colunaData` em `src/client/tabelas.js` estão sujeitas à política. Por padrão, somente `PEDIDOS` tem essa configuração:
+
+```js
+// src/client/tabelas.js
+{ nome: 'PEDIDOS', ..., colunaData: 'DATA_HORA' }
+```
+
+As tabelas filhas `PEDIDOS_ITENS` e `PEDIDOS_PARCELAS_PAGAMENTOS` são deletadas em cascata (pela aplicação, antes do pai) durante a limpeza diária.
+
+Tabelas de cadastro (`PRODUTOS`, `CLIENTES`, `FORNECEDORES`, etc.) têm `colunaData: null` e **nunca** são afetadas pela política de retenção.
+
+### Ajustando o nome da coluna de data
+
+Se a coluna de data do seu `PEDIDOS` não se chama `DATA_HORA`, edite o campo `colunaData` no `tabelas.js`:
+
+```js
+{ nome: 'PEDIDOS', ..., colunaData: 'DATA_EMISSAO' }
+```
+
+### Adicionando retenção a outras tabelas
+
+Para aplicar a política a outra tabela transacional (ex: `MOVIMENTACOES`):
+
+1. Defina `colunaData` na entrada de `tabelas.js`:
+   ```js
+   { nome: 'MOVIMENTACOES', ..., colunaData: 'DATA_MOVIMENTO' }
+   ```
+
+2. Se a tabela tiver filhas com FK, adicione o grupo em **ambos** os arquivos de limpeza:
+
+   **`src/limpeza.js`** (servidor PostgreSQL):
+   ```js
+   const GRUPOS_LIMPEZA = [
+     { pai: 'PEDIDOS', colunaData: 'DATA_HORA', filhas: [...] },
+     { pai: 'MOVIMENTACOES', colunaData: 'DATA_MOVIMENTO', filhas: [] },
+   ];
+   ```
+
+   **`src/client/limpeza.js`** (cliente Firebird):
+   ```js
+   const GRUPOS_LIMPEZA = [
+     { pai: 'PEDIDOS', colunaData: 'DATA_HORA', filhas: [...] },
+     { pai: 'MOVIMENTACOES', colunaData: 'DATA_MOVIMENTO', filhas: [] },
+   ];
+   ```
+
+### Logs esperados
+
+```
+[LIMPEZA] Iniciando limpeza de registros com mais de 2 anos...
+[LIMPEZA][empresa_kr] PEDIDOS_PARCELAS_PAGAMENTOS: 120 registro(s) antigo(s) removido(s)
+[LIMPEZA][empresa_kr] PEDIDOS_ITENS: 430 registro(s) antigo(s) removido(s)
+[LIMPEZA][empresa_kr] PEDIDOS: 85 registro(s) antigo(s) removido(s)
+[LIMPEZA][empresa_kr] REGISTROS_DELETADOS: 12 entrada(s) antiga(s) removida(s)
+[LIMPEZA] Limpeza concluída.
+```
 
 ---
 

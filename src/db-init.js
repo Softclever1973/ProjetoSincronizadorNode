@@ -38,6 +38,9 @@ function ddlTenant(schema) {
       nome_da_tabela       VARCHAR(64)   NOT NULL,
       id_registros         VARCHAR(255)  NOT NULL
     )`,
+    // Migração idempotente: adiciona criado_em para permitir limpeza de entradas antigas
+    `ALTER TABLE IF EXISTS ${schema}.registros_deletados
+     ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()`,
   ];
 }
 

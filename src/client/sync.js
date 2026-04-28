@@ -246,7 +246,7 @@ async function gerarNovoPK(db, tabela, pkColuna, registro) {
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
 async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null) {
-  const { nome, pk, temDelete, endpoint, filtroFilial = null, generator = null } = configTabela;
+  const { nome, pk, temDelete, endpoint, filtroFilial = null, generator = null, colunaData = null } = configTabela;
 
   // ---- ATUALIZAÇÕES ----
   let totalAtualizados = 0;
@@ -260,7 +260,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
       if (endpoint === 'TSMProdutos/ProdutosParaAtualizar') {
         registros = await buscarProdutosParaAtualizar(baseURI, idLoja, cursor, idPDV);
       } else {
-        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV);
+        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV, colunaData);
       }
     } catch (e) {
       log(`[${nome}] Erro ao buscar atualizações: ${e.message || e.code || String(e)}`);

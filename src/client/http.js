@@ -92,14 +92,18 @@ function get(url) {
  *
  * Se idLoja e filtroFilial estiverem preenchidos, o servidor aplica
  * WHERE <filtroFilial> = idLoja — apenas registros da filial são retornados.
+ *
+ * Se colunaData estiver preenchida, o servidor aplica adicionalmente
+ * WHERE <colunaData> >= NOW() - INTERVAL '2 years' — política de retenção.
  */
-function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null) {
+function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null, colunaData = null) {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
   if (idLoja != null && filtroFilial) {
     url += `&idLoja=${idLoja}&filtroFilial=${encodeURIComponent(filtroFilial)}`;
   }
   if (idPDV != null) url += `&idPDV=${idPDV}`;
+  if (colunaData)    url += `&colunaData=${encodeURIComponent(colunaData)}`;
   return get(url);
 }
 

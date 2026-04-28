@@ -3,6 +3,7 @@ const express = require('express');
 const config = require('./config');
 const { initializeDatabase } = require('./db-init');
 const { recarregarEmpresas } = require('./empresas');
+const { agendarLimpeza } = require('./limpeza');
 
 const sincronizacaoRoutes     = require('./routes/sincronizacao');
 const produtosRoutes          = require('./routes/produtos');
@@ -64,6 +65,7 @@ initializeDatabase()
     app.listen(config.portaHttp, () => {
       console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
       console.log(`Banco: ${config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@')}`);
+      agendarLimpeza();
     });
   })
   .catch((err) => {

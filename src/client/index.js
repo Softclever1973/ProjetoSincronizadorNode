@@ -8,6 +8,7 @@ const { iniciarWebUI } = require('./webui');
 const TABELAS = require('./tabelas');
 const { tabelaAtiva } = require('./tabelasConfig');
 const { salvarErro } = require('./erros');
+const { limparRegistrosAntigos } = require('./limpeza');
 
 if (!process.env.SYNC_TOKEN) {
   console.error('[ERRO] SYNC_TOKEN não configurado.');
@@ -115,6 +116,10 @@ async function executarCiclo() {
 
   await executarCiclo();
   setInterval(executarCiclo, INTERVALO_MS);
+
+  // Limpeza diária de registros com mais de 2 anos (primeira execução após 24h)
+  const VINTE_QUATRO_HORAS_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => limparRegistrosAntigos(log), VINTE_QUATRO_HORAS_MS);
 })().catch(e => {
   console.error(`[ERRO FATAL] ${e.message}`);
   process.exit(1);

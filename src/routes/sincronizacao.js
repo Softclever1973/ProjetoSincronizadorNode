@@ -145,6 +145,9 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const filtroFilial = req.query.filtroFilial
     ? String(req.query.filtroFilial).trim().toUpperCase()
     : null;
+  const colunaData = req.query.colunaData
+    ? String(req.query.colunaData).trim().toUpperCase()
+    : null;
 
   if (!nomeTabela) {
     return res.status(400).json({
@@ -156,28 +159,42 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não é permitida para sincronização` });
   }
 
-  // Valida nome de coluna para evitar SQL injection
+  // Valida nomes de coluna para evitar SQL injection
   if (filtroFilial && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilial)) {
     return res.status(400).json({ message: `Nome de coluna inválido: '${filtroFilial}'` });
   }
+  if (colunaData && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(colunaData)) {
+    return res.status(400).json({ message: `Nome de coluna inválido: '${colunaData}'` });
+  }
 
   try {
-    const params = [idUltimaAtualizacaoMatriz];
-    let whereExtra = '';
+    const rows = await withTenantConnection(req.schemaName, async (db) => {
+      const params = [idUltimaAtualizacaoMatriz];
+      let whereExtra = '';
 
-    if (filtroFilial && idLoja) {
-      params.push(idLoja);
-      whereExtra = ` AND ${filtroFilial} = $${params.length}`;
-    }
+      if (filtroFilial && idLoja) {
+        params.push(idLoja);
+        whereExtra += ` AND ${filtroFilial} = $${params.length}`;
+      }
 
-    const sql = `SELECT * FROM ${nomeTabela}
-                 WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
-                   AND ID_ULTIMA_ATUALIZACAO_MATRIZ > $1
-                   ${whereExtra}
-                 ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
-                 LIMIT 50`;
+      // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.
+      // Usa o cache de colunas para evitar quebrar quando o nome da coluna difere no banco.
+      if (colunaData) {
+        const colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
+        if (colunas.has(colunaData)) {
+          whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData} >= NOW() - INTERVAL '2 years')`;
+        }
+      }
 
-    const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
+      const sql = `SELECT * FROM ${nomeTabela}
+                   WHERE ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL
+                     AND ID_ULTIMA_ATUALIZACAO_MATRIZ > $1
+                     ${whereExtra}
+                   ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
+                   LIMIT 50`;
+
+      return query(db, sql, params);
+    });
 
     res.json(rows);
   } catch (e) {
