@@ -1,0 +1,54 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*' # só roda quando criar uma tag tipo v1.0.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clonar repositório
+        uses: actions/checkout@v3
+
+      # =========================
+      # CLIENT
+      # =========================
+      - name: Instalar dependências do client
+        run: |
+          cd src/client
+          npm install
+
+      - name: Build do client
+        run: |
+          cd src/client
+          npm run build
+
+      - name: Zipar client
+        run: |
+          cd src/client
+          zip -r ../../client.zip .
+
+      # =========================
+      # SERVER
+      # =========================
+      - name: Instalar dependências do server
+        run: |
+          cd src
+          npm install --production
+
+      - name: Zipar server (sem client)
+        run: |
+          zip -r server.zip src -x "src/client/*"
+
+      # =========================
+      # RELEASE
+      # =========================
+      - name: Criar release e anexar arquivos
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            client.zip
+            server.zip

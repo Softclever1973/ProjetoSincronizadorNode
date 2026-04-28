@@ -35,11 +35,11 @@ Sistema de sincronização bidirecional de dados entre um servidor central Postg
                        │ HTTP REST
           ┌────────────┴────────────┐
           │                         │
-┌─────────▼──────────┐   ┌─────────▼──────────┐
+┌─────────▼───────────┐   ┌─────────▼───────────┐
 │  CLIENTE (Filial 1) │   │  CLIENTE (Filial 2) │
 │  Node.js + Firebird │   │  Node.js + Firebird │
 │  WebUI: porta 3001  │   │  WebUI: porta 3001  │
-└────────────────────┘   └────────────────────┘
+└─────────────────────┘   └─────────────────────┘
 ```
 
 **O servidor** expõe uma API REST no padrão `/datasnap/rest/{Classe}/{Método}` — compatível com os clientes Delphi originais. Cada empresa (CNPJ) ocupa um schema isolado no PostgreSQL (multi-tenancy schema-per-tenant).
