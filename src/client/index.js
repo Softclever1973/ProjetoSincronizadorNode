@@ -1,126 +1,213 @@
-require('dotenv').config({ path: require('path').resolve(__dirname, '.env') });
+const fs   = require('fs');
+const path = require('path');
 
-const { getConnection, closeConnection, getParam } = require('./db');
-const { sincronizarTabela } = require('./sync');
-const { empurrarTabela } = require('./push');
-const { setup } = require('./setup');
-const { iniciarWebUI } = require('./webui');
-const TABELAS = require('./tabelas');
-const { tabelaAtiva } = require('./tabelasConfig');
-const { salvarErro } = require('./erros');
-const { limparRegistrosAntigos } = require('./limpeza');
+const isPackaged = typeof process.pkg !== 'undefined';
 
-if (!process.env.SYNC_TOKEN) {
-  console.error('[ERRO] SYNC_TOKEN não configurado.');
-  console.error('       Adicione o token na linha 3 do sirius-client.ini ou em SYNC_TOKEN= no .env');
-  process.exit(1);
-}
+// Quando empacotado, __dirname é read-only (virtual). Usa o diretório do .exe.
+const ENV_PATH = isPackaged
+  ? path.join(path.dirname(process.execPath), '.env')
+  : path.resolve(__dirname, '.env');
 
-// Intervalo entre cada ciclo de sincronização (em milissegundos)
-const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
-const PORTA_WEBUI  = 3001;
+const LOG_PATH = path.join(path.dirname(ENV_PATH), 'client.log');
 
-let rodando = false;
-
-// Contexto compartilhado com a WebUI para forçar envio ao resolver conflito
-const contextoSync = { baseURI: null, idLoja: null, idPDV: null };
-
-function log(msg) {
-  const hora = new Date().toLocaleTimeString('pt-BR');
-  console.log(`[${hora}] ${msg}`);
-}
-
-/**
- * Executa um ciclo completo de sincronização:
- *   1. Pull: puxa atualizações e deleções do servidor → aplica na filial
- *   2. Push: envia alterações locais da filial → servidor
- */
-async function executarCiclo() {
-  if (rodando) return; // Evita ciclos sobrepostos
-  rodando = true;
-
-  const db = await getConnection();
-  try {
-    const baseURI  = (await getParam(db, 60024)).replace(/\/+$/, '');
-    const idLoja   = parseInt(await getParam(db, 50003), 10);
-    const idPDVRaw = await getParam(db, 50004);
-    const idPDV    = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
-
-    if (!baseURI) {
-      const msg = 'Parâmetro 60024 (URL do servidor) não configurado.';
-      log('ERRO: ' + msg);
-      salvarErro({ operacao: 'config', mensagem: msg });
-      return;
-    }
-
-    if (!idLoja) {
-      const msg = 'Parâmetro 50003 (número da loja) não configurado.';
-      log('ERRO: ' + msg);
-      salvarErro({ operacao: 'config', mensagem: msg });
-      return;
-    }
-
-    contextoSync.baseURI = baseURI;
-    contextoSync.idLoja  = idLoja;
-    contextoSync.idPDV   = idPDV;
-
-    log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
-
-    // ── PULL (servidor → filial) ──────────────────────────────────────────
-    for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
-      try {
-        await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        log(`[${tabela.nome}] Erro inesperado no pull: ${msg}`);
-        salvarErro({ tabela: tabela.nome, operacao: 'pull', mensagem: msg });
-      }
-    }
-
-    // ── PUSH (filial → servidor) ──────────────────────────────────────────
-    for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
-      try {
-        await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV);
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        log(`[${tabela.nome}] Erro inesperado no push: ${msg}`);
-        salvarErro({ tabela: tabela.nome, operacao: 'push', mensagem: msg });
-      }
-    }
-
-    log('Ciclo concluído.');
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    log(`Erro no ciclo de sincronização: ${msg}`);
-    salvarErro({ operacao: 'ciclo', mensagem: msg });
-  } finally {
-    await closeConnection(db);
-    rodando = false;
+// ---------------------------------------------------------------------------
+// --background: relança o processo com janela oculta e sai do terminal atual
+// (uso explícito — o exe não faz isso automaticamente)
+// ---------------------------------------------------------------------------
+if (process.argv.includes('--background')) {
+  if (!fs.existsSync(ENV_PATH)) {
+    console.error('[ERRO] Configure o cliente primeiro (execute sem --background).');
+    process.exit(1);
   }
+  const { spawn } = require('child_process');
+  const childArgs = isPackaged
+    ? process.argv.slice(2).filter(a => a !== '--background')
+    : [process.argv[1], ...process.argv.slice(2).filter(a => a !== '--background')];
+  spawn(process.execPath, childArgs, {
+    detached:    true,
+    windowsHide: true,
+    stdio:       'ignore',
+    env:         { ...process.env, SINCRONIZADOR_BG: '1' },
+  }).unref();
+  console.log('  Cliente iniciado em segundo plano.');
+  console.log('  Web UI: http://localhost:3001');
+  console.log('  Logs em: ' + LOG_PATH);
+  process.exit(0);
 }
 
-// Inicialização
-(async () => {
-  log(`Cliente de sincronização iniciado. Intervalo: ${INTERVALO_MS / 1000}s`);
-
-  // Cria tabelas e triggers de rastreamento no banco da filial (idempotente)
-  const db = await getConnection();
+// ---------------------------------------------------------------------------
+// Quando rodando em segundo plano, redireciona console para arquivo (máx 5 MB)
+// ---------------------------------------------------------------------------
+if (process.env.SINCRONIZADOR_BG) {
   try {
-    await setup(db, log);
-  } finally {
-    await closeConnection(db);
+    if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 5 * 1024 * 1024) {
+      fs.writeFileSync(LOG_PATH, '');
+    }
+  } catch {}
+  const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
+  const ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
+  console.log   = (...a) => logStream.write(`${ts()} ${a.join(' ')}\n`);
+  console.error = (...a) => logStream.write(`${ts()} [ERRO] ${a.join(' ')}\n`);
+}
+
+// ---------------------------------------------------------------------------
+// Handlers globais — evitam que erros não tratados encerrem o processo
+// ---------------------------------------------------------------------------
+process.on('uncaughtException',  e => console.error(`[uncaughtException] ${e.message}`));
+process.on('unhandledRejection', e => console.error(`[unhandledRejection] ${e}`));
+
+// ---------------------------------------------------------------------------
+// Fechar o X da janela do console → continuar rodando só na bandeja do sistema
+// (SIGHUP é disparado no Windows quando o usuário fecha a janela do console)
+// ---------------------------------------------------------------------------
+if (isPackaged && !process.env.SINCRONIZADOR_BG) {
+  process.on('SIGHUP', () => {
+    if (!fs.existsSync(ENV_PATH)) { process.exit(0); return; }
+    require('child_process').spawn(process.execPath, [], {
+      detached:    true,
+      windowsHide: true,
+      stdio:       'ignore',
+      env:         { ...process.env, SINCRONIZADOR_BG: '1' },
+    }).unref();
+    process.exit(0);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Inicialização principal — reinicia automaticamente em caso de erro fatal
+// ---------------------------------------------------------------------------
+async function main() {
+  if (!fs.existsSync(ENV_PATH)) {
+    const { runSetupWizard } = require('./setup-wizard');
+    await runSetupWizard(ENV_PATH);
   }
 
-  // Interface web para resolução de conflitos
+  require('dotenv').config({ path: ENV_PATH });
+
+  const { getConnection, closeConnection, getParam } = require('./db');
+  const { sincronizarTabela }      = require('./sync');
+  const { empurrarTabela }         = require('./push');
+  const { setup }                  = require('./setup');
+  const { iniciarWebUI }           = require('./webui');
+  const TABELAS                    = require('./tabelas');
+  const { tabelaAtiva }            = require('./tabelasConfig');
+  const { salvarErro }             = require('./erros');
+  const { limparRegistrosAntigos } = require('./limpeza');
+
+  if (!process.env.SYNC_TOKEN) {
+    console.error('[ERRO] SYNC_TOKEN não configurado no .env');
+    process.exit(1);
+  }
+
+  const INTERVALO_MS       = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
+  const PORTA_WEBUI        = 3001;
+  const VINTE_QUATRO_HORAS = 24 * 60 * 60 * 1000;
+
+  let rodando = false;
+  const contextoSync = { baseURI: null, idLoja: null, idPDV: null };
+
+  function log(msg) {
+    const hora = new Date().toLocaleTimeString('pt-BR');
+    console.log(`[${hora}] ${msg}`);
+  }
+
+  // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
+  // (mostra quando empacotado — em modo background ou normal)
+  if (isPackaged) {
+    const { iniciarTray } = require('./tray');
+    iniciarTray(PORTA_WEBUI).catch(e => console.error('[tray] ' + e.message));
+  }
+
+  async function executarCiclo() {
+    if (rodando) return;
+    rodando = true;
+    const db = await getConnection();
+    try {
+      const baseURI  = (await getParam(db, 60024)).replace(/\/+$/, '');
+      const idLoja   = parseInt(await getParam(db, 50003), 10);
+      const idPDVRaw = await getParam(db, 50004);
+      const idPDV    = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
+
+      if (!baseURI) {
+        const msg = 'Parâmetro 60024 (URL do servidor) não configurado.';
+        log('ERRO: ' + msg);
+        salvarErro({ operacao: 'config', mensagem: msg });
+        return;
+      }
+      if (!idLoja) {
+        const msg = 'Parâmetro 50003 (número da loja) não configurado.';
+        log('ERRO: ' + msg);
+        salvarErro({ operacao: 'config', mensagem: msg });
+        return;
+      }
+
+      contextoSync.baseURI = baseURI;
+      contextoSync.idLoja  = idLoja;
+      contextoSync.idPDV   = idPDV;
+
+      log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
+
+      for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
+        try {
+          await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log(`[${tabela.nome}] Erro no pull: ${msg}`);
+          salvarErro({ tabela: tabela.nome, operacao: 'pull', mensagem: msg });
+        }
+      }
+
+      for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
+        try {
+          await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV);
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log(`[${tabela.nome}] Erro no push: ${msg}`);
+          salvarErro({ tabela: tabela.nome, operacao: 'push', mensagem: msg });
+        }
+      }
+
+      log('Ciclo concluído.');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      log(`Erro no ciclo: ${msg}`);
+      salvarErro({ operacao: 'ciclo', mensagem: msg });
+    } finally {
+      await closeConnection(db);
+      rodando = false;
+    }
+  }
+
+  log(`Cliente iniciado. Intervalo: ${INTERVALO_MS / 1000}s`);
+
   iniciarWebUI(PORTA_WEBUI, contextoSync);
+
+  // Tenta conectar ao Firebird — repete até conseguir (banco pode estar iniciando)
+  while (true) {
+    try {
+      const db = await getConnection();
+      try { await setup(db, log); } finally { await closeConnection(db); }
+      break;
+    } catch (e) {
+      log(`Firebird indisponível: ${e.message} — tentando novamente em 30s...`);
+      await new Promise(r => setTimeout(r, 30000));
+    }
+  }
 
   await executarCiclo();
   setInterval(executarCiclo, INTERVALO_MS);
+  setInterval(() => limparRegistrosAntigos(log), VINTE_QUATRO_HORAS);
+}
 
-  // Limpeza diária de registros com mais de 2 anos (primeira execução após 24h)
-  const VINTE_QUATRO_HORAS_MS = 24 * 60 * 60 * 1000;
-  setInterval(() => limparRegistrosAntigos(log), VINTE_QUATRO_HORAS_MS);
-})().catch(e => {
-  console.error(`[ERRO FATAL] ${e.message}`);
-  process.exit(1);
-});
+// Reinicia automaticamente se main() lançar erro inesperado
+(async () => {
+  while (true) {
+    try {
+      await main();
+      break;
+    } catch (e) {
+      console.error(`[ERRO FATAL] ${e.message} — reiniciando em 30s...`);
+      await new Promise(r => setTimeout(r, 30000));
+    }
+  }
+})();
