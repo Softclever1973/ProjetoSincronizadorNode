@@ -15,30 +15,31 @@ jobs:
       - name: Clonar repositório
         uses: actions/checkout@v4
 
+      - name: Instalar dependências (produção)
+        run: npm install --production
+
       # =========================
       # CLIENT
       # =========================
-      
-      - name: Instalar dependências do client
-        run: |
-          cd src/client
-          npm install --production
       - name: Zipar client
         run: |
-          cd src/client
-          zip -r ../../client.zip . -x "node_modules/*" ".git/*"
+          zip -r client.zip \
+            src/client \
+            node_modules \
+            package.json \
+            src/client/.env.example
 
       # =========================
       # SERVER
       # =========================
-      - name: Instalar dependências do server
-        run: |
-          cd src
-          npm install --production
-
       - name: Zipar server (sem client)
         run: |
-          zip -r server.zip src -x "src/client/*"
+          zip -r server.zip \
+            src \
+            node_modules \
+            package.json \
+            .env.example \
+            -x "src/client/*"
 
       # =========================
       # RELEASE
