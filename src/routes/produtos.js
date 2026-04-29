@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withTenantConnection, query } = require('../db');
+const { withTenantConnection, query, isMissingTableError } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -60,6 +60,9 @@ router.get('/ProdutosParaAtualizar', auth, async (req, res) => {
       res.json(produtos);
     });
   } catch (e) {
+    if (isMissingTableError(e)) {
+      return res.json([]);
+    }
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
     });
@@ -93,6 +96,9 @@ router.get('/getCountProdutosParaSincronizar', auth, async (req, res) => {
     const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
     res.json({ total: rows[0]?.TOTAL ?? 0 });
   } catch (e) {
+    if (isMissingTableError(e)) {
+      return res.json({ total: 0 });
+    }
     res.status(400).json({
       message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
     });
@@ -129,6 +135,9 @@ router.get('/getProdutosSincronizadosByFilial', auth, async (req, res) => {
     const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
     res.json(rows.map((r) => ({ codigo: r.CODIGO })));
   } catch (e) {
+    if (isMissingTableError(e)) {
+      return res.json([]);
+    }
     res.status(400).json({
       message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
     });

@@ -1,4 +1,4 @@
-const fs   = require('fs');
+const fs = require('fs');
 const path = require('path');
 
 const isPackaged = typeof process.pkg !== 'undefined';
@@ -24,10 +24,10 @@ if (process.argv.includes('--background')) {
     ? process.argv.slice(2).filter(a => a !== '--background')
     : [process.argv[1], ...process.argv.slice(2).filter(a => a !== '--background')];
   spawn(process.execPath, childArgs, {
-    detached:    true,
+    detached: true,
     windowsHide: true,
-    stdio:       'ignore',
-    env:         { ...process.env, SINCRONIZADOR_BG: '1' },
+    stdio: 'ignore',
+    env: { ...process.env, SINCRONIZADOR_BG: '1' },
   }).unref();
   console.log('  Cliente iniciado em segundo plano.');
   console.log('  Web UI: http://localhost:3001');
@@ -43,17 +43,17 @@ if (process.env.SINCRONIZADOR_BG) {
     if (fs.existsSync(LOG_PATH) && fs.statSync(LOG_PATH).size > 5 * 1024 * 1024) {
       fs.writeFileSync(LOG_PATH, '');
     }
-  } catch {}
+  } catch { }
   const logStream = fs.createWriteStream(LOG_PATH, { flags: 'a' });
   const ts = () => new Date().toISOString().replace('T', ' ').slice(0, 19);
-  console.log   = (...a) => logStream.write(`${ts()} ${a.join(' ')}\n`);
+  console.log = (...a) => logStream.write(`${ts()} ${a.join(' ')}\n`);
   console.error = (...a) => logStream.write(`${ts()} [ERRO] ${a.join(' ')}\n`);
 }
 
 // ---------------------------------------------------------------------------
 // Handlers globais — evitam que erros não tratados encerrem o processo
 // ---------------------------------------------------------------------------
-process.on('uncaughtException',  e => console.error(`[uncaughtException] ${e.message}`));
+process.on('uncaughtException', e => console.error(`[uncaughtException] ${e.message}`));
 process.on('unhandledRejection', e => console.error(`[unhandledRejection] ${e}`));
 
 // ---------------------------------------------------------------------------
@@ -64,10 +64,10 @@ if (isPackaged && !process.env.SINCRONIZADOR_BG) {
   process.on('SIGHUP', () => {
     if (!fs.existsSync(ENV_PATH)) { process.exit(0); return; }
     require('child_process').spawn(process.execPath, [], {
-      detached:    true,
+      detached: true,
       windowsHide: true,
-      stdio:       'ignore',
-      env:         { ...process.env, SINCRONIZADOR_BG: '1' },
+      stdio: 'ignore',
+      env: { ...process.env, SINCRONIZADOR_BG: '1' },
     }).unref();
     process.exit(0);
   });
@@ -84,14 +84,14 @@ async function main() {
 
   require('dotenv').config({ path: ENV_PATH });
 
-  const { getConnection, closeConnection, getParam } = require('./db');
-  const { sincronizarTabela }      = require('./sync');
-  const { empurrarTabela }         = require('./push');
-  const { setup }                  = require('./setup');
-  const { iniciarWebUI }           = require('./webui');
-  const TABELAS                    = require('./tabelas');
-  const { tabelaAtiva }            = require('./tabelasConfig');
-  const { salvarErro }             = require('./erros');
+  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
+  const { sincronizarTabela } = require('./sync');
+  const { empurrarTabela } = require('./push');
+  const { setup } = require('./setup');
+  const { iniciarWebUI } = require('./webui');
+  const TABELAS = require('./tabelas');
+  const { tabelaAtiva } = require('./tabelasConfig');
+  const { salvarErro } = require('./erros');
   const { limparRegistrosAntigos } = require('./limpeza');
 
   if (!process.env.SYNC_TOKEN) {
@@ -99,8 +99,8 @@ async function main() {
     process.exit(1);
   }
 
-  const INTERVALO_MS       = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
-  const PORTA_WEBUI        = 3001;
+  const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
+  const PORTA_WEBUI = 3001;
   const VINTE_QUATRO_HORAS = 24 * 60 * 60 * 1000;
 
   let rodando = false;
@@ -123,10 +123,16 @@ async function main() {
     rodando = true;
     const db = await getConnection();
     try {
-      const baseURI  = (await getParam(db, 60024)).replace(/\/+$/, '');
-      const idLoja   = parseInt(await getParam(db, 50003), 10);
+      const tabelasExistentes = await getTabelasExistentes(db);
+      const baseURI = (await getParam(db, 60024)).replace(/\/+$/, '');
+      const idLoja = parseInt(await getParam(db, 50003), 10);
       const idPDVRaw = await getParam(db, 50004);
-      const idPDV    = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
+      const idPDV = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
+
+      const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
+      for (const tabelaAusente of tabelasAusentes) {
+        log(`[${tabelaAusente.nome}] tabela ausente no Firebird — pulando sync`);
+      }
 
       if (!baseURI) {
         const msg = 'Parâmetro 60024 (URL do servidor) não configurado.';
@@ -142,12 +148,14 @@ async function main() {
       }
 
       contextoSync.baseURI = baseURI;
-      contextoSync.idLoja  = idLoja;
-      contextoSync.idPDV   = idPDV;
+      contextoSync.idLoja = idLoja;
+      contextoSync.idPDV = idPDV;
 
       log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
 
-      for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
+      const tabelasParaSincronizar = TABELAS.filter(t => tabelaAtiva(t.nome) && tabelasExistentes.has(t.nome));
+
+      for (const tabela of tabelasParaSincronizar) {
         try {
           await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV);
         } catch (e) {
@@ -157,7 +165,7 @@ async function main() {
         }
       }
 
-      for (const tabela of TABELAS.filter(t => tabelaAtiva(t.nome))) {
+      for (const tabela of tabelasParaSincronizar) {
         try {
           await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV);
         } catch (e) {

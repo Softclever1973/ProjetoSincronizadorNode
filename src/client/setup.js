@@ -1,14 +1,5 @@
-const { query, execute } = require('./db');
+const { query, execute, tabelaExiste } = require('./db');
 const TABELAS = require('./tabelas');
-
-async function tabelaExiste(db, nome) {
-  const rows = await query(
-    db,
-    `SELECT COUNT(*) AS CNT FROM RDB$RELATIONS WHERE TRIM(RDB$RELATION_NAME) = ?`,
-    [nome]
-  );
-  return (rows[0].CNT || 0) > 0;
-}
 
 async function triggerExiste(db, nome) {
   const rows = await query(
@@ -86,6 +77,11 @@ async function setup(db, log = console.log) {
     log('[SETUP] Primeira instalação — enfileirando registros existentes para envio inicial...');
     let totalEnfileirados = 0;
     for (const tabela of TABELAS) {
+      if (!(await tabelaExiste(db, tabela.nome))) {
+        log(`[SETUP] Tabela ${tabela.nome} não existe — pulando enfileiramento inicial`);
+        continue;
+      }
+
       const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
       const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
       try {
@@ -125,6 +121,11 @@ async function setup(db, log = console.log) {
 
   // 5. Triggers em cada tabela para detectar alterações locais
   for (const tabela of TABELAS) {
+    if (!(await tabelaExiste(db, tabela.nome))) {
+      log(`[SETUP] Tabela ${tabela.nome} não existe — pulando trigger`);
+      continue;
+    }
+
     const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
     const pkExpressao = pks.map(p => `CAST(NEW.${p} AS VARCHAR(100))`).join(" || '|' || ");
 

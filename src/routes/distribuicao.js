@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withTenantConnection, query, execute } = require('../db');
+const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -52,6 +52,7 @@ router.get('/ListarDistribuicaoDeMercadorias', auth, async (req, res) => {
       res.json(rows);
     });
   } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar as distribuições. Erro: ${e.message}`,
     });
@@ -94,6 +95,7 @@ router.get('/ListarDistribuicaoDeMercadoriasPorID', auth, async (req, res) => {
 
     res.json(rows[0] || null);
   } catch (e) {
+    if (isMissingTableError(e)) return res.json(null);
     res.status(400).json({
       message: `Ocorreu um erro ao buscar a distribuição. Erro: ${e.message}`,
     });
@@ -133,6 +135,7 @@ router.get('/QuantidadeDeRegistros', auth, async (req, res) => {
 
     res.json({ quantidade: rows[0]?.QUANTIDADE ?? 0 });
   } catch (e) {
+    if (isMissingTableError(e)) return res.json({ quantidade: 0 });
     res.status(400).json({
       message: `Ocorreu um erro ao contar os registros. Erro: ${e.message}`,
     });

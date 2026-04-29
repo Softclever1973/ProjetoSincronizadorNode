@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withTenantConnection, query, execute } = require('../db');
+const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 /**
@@ -12,7 +12,7 @@ const { isFilialBloqueada } = require('../middleware/filialBloqueada');
  */
 router.get('/getPedidos', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
-  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
 
   if (!idLoja) {
     return res.status(400).json({
@@ -66,7 +66,7 @@ router.get('/getPedidos', auth, async (req, res) => {
  */
 router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
-  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
 
   if (!idLoja) {
     return res.status(400).json({
@@ -98,6 +98,7 @@ router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
     const rows = await withTenantConnection(req.schemaName, (db) => query(db, sql, params));
     res.json(rows.map((r) => ({ idPedido: r.ID_PEDIDO_LOJA })));
   } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
     res.status(400).json({
       message: `Ocorreu um erro ao tentar buscar os pedidos. Erro: ${e.message}`,
     });
@@ -119,7 +120,7 @@ router.post('/updatePedido', auth, async (req, res) => {
   }
 
   const idLoja = pedido.idLoja || pedido.ID_LOJA;
-  const idPDV  = pedido.idPDV  || pedido.ID_PDV  || null; // eslint-disable-line no-unused-vars
+  const idPDV = pedido.idPDV || pedido.ID_PDV || null; // eslint-disable-line no-unused-vars
 
   try {
     await withTenantConnection(req.schemaName, async (db) => {

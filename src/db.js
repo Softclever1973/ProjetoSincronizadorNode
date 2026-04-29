@@ -54,6 +54,17 @@ async function execute(client, sql, params = []) {
   return client.query(sql, params);
 }
 
+function isMissingTableError(error) {
+  const mensagem = String(error?.message || '');
+  return Boolean(
+    error && (
+      error.code === '42P01' ||
+      /relation .* does not exist/i.test(mensagem) ||
+      /relação .* não existe/i.test(mensagem)
+    )
+  );
+}
+
 // Mantém getConnection/closeConnection como wrappers do pool para compatibilidade
 // com rotas que abrem conexão manualmente (produtos, pedidos, distribuicao, movCaixas).
 async function getConnection() {
@@ -65,4 +76,4 @@ function closeConnection(client) {
   return Promise.resolve();
 }
 
-module.exports = { pool, withConnection, withTenantConnection, query, execute, getConnection, closeConnection };
+module.exports = { pool, withConnection, withTenantConnection, query, execute, getConnection, closeConnection, isMissingTableError };

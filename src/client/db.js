@@ -11,10 +11,10 @@ if (!process.env.FIREBIRD_PASSWORD) {
 const versao = (process.env.FIREBIRD_VERSION || '3').trim().charAt(0);
 
 const opcoes = {
-  host:     process.env.FIREBIRD_HOST     || 'localhost',
-  port:     parseInt(process.env.FIREBIRD_PORT || '3050', 10),
+  host: process.env.FIREBIRD_HOST || 'localhost',
+  port: parseInt(process.env.FIREBIRD_PORT || '3050', 10),
   database: process.env.FIREBIRD_DATABASE,
-  user:     process.env.FIREBIRD_USER     || 'SYSDBA',
+  user: process.env.FIREBIRD_USER || 'SYSDBA',
   password: process.env.FIREBIRD_PASSWORD,
 };
 
@@ -51,6 +51,26 @@ function closeConnection(db) {
   });
 }
 
+async function tabelaExiste(db, nome) {
+  const rows = await query(
+    db,
+    'SELECT FIRST 1 1 FROM RDB$RELATIONS WHERE TRIM(RDB$RELATION_NAME) = ?',
+    [nome]
+  );
+  return rows.length > 0;
+}
+
+async function getTabelasExistentes(db) {
+  const rows = await query(
+    db,
+    `SELECT TRIM(RDB$RELATION_NAME) AS TABLE_NAME
+     FROM RDB$RELATIONS
+     WHERE TRIM(RDB$RELATION_NAME) NOT LIKE 'RDB$%'
+       AND TRIM(RDB$RELATION_NAME) NOT LIKE 'MON$%'`
+  );
+  return new Set(rows.map(r => (r.TABLE_NAME || '').trim().toUpperCase()));
+}
+
 /**
  * Lê o parâmetro da tabela PARAMETROS pelo ID.
  * Equivalente ao TServicosBanco.getParam() do Delphi.
@@ -64,4 +84,4 @@ async function getParam(db, idParametro) {
   return rows.length > 0 ? (rows[0].PARAMETRO || '').trim() : '';
 }
 
-module.exports = { getConnection, query, execute, closeConnection, getParam, opcoes };
+module.exports = { getConnection, query, execute, closeConnection, getParam, tabelaExiste, getTabelasExistentes, opcoes };

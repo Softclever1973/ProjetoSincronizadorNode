@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withTenantConnection, query, execute } = require('../db');
+const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 // Cache de colunas computadas do servidor
@@ -15,10 +15,10 @@ const cacheColunasServidor = {};
 // inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
 // NUMERIC é superset seguro — comporta inteiros e decimais sem perda.
 function inferirTipoPg(valor) {
-  if (Buffer.isBuffer(valor))      return 'BYTEA';
-  if (valor instanceof Date)       return 'TIMESTAMP';
-  if (typeof valor === 'boolean')  return 'BOOLEAN';
-  if (typeof valor === 'number')   return 'NUMERIC';
+  if (Buffer.isBuffer(valor)) return 'BYTEA';
+  if (valor instanceof Date) return 'TIMESTAMP';
+  if (typeof valor === 'boolean') return 'BOOLEAN';
+  if (typeof valor === 'number') return 'NUMERIC';
   return 'TEXT';
 }
 
@@ -200,7 +200,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   } catch (e) {
     // Tabela ainda não existe no servidor — retorna vazio para não bloquear o pull.
     // Será criada automaticamente no primeiro push via criarTabelaSeNecessario.
-    if (e.code === '42P01') return res.json([]);
+    if (isMissingTableError(e)) return res.json([]);
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
     });
@@ -238,6 +238,7 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
 
     res.json(rows);
   } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
     res.status(400).json({
       message: `Ocorreu um erro ao tentar listar os registros para deletar. Erro: ${e.message}`,
     });
@@ -292,9 +293,9 @@ router.get('/StatusTabelas', auth, async (req, res) => {
  */
 router.get('/RegistrosPaginados', auth, async (req, res) => {
   const nomeTabela = (req.query.nomeTabela || '').toUpperCase().trim();
-  const pk         = req.query.pk; // Pode ser string ou array
-  const offset     = parseInt(req.query.offset, 10) || 0;
-  const limit      = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  const pk = req.query.pk; // Pode ser string ou array
+  const offset = parseInt(req.query.offset, 10) || 0;
+  const limit = Math.min(parseInt(req.query.limit, 10) || 200, 500);
 
   if (!nomeTabela || !pk) {
     return res.status(400).json({ message: 'nomeTabela e pk são obrigatórios' });
@@ -319,6 +320,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
     );
     res.json(rows.map(normalizarBlobs));
   } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
     res.status(400).json({ message: e.message });
   }
 });
@@ -335,7 +337,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
  */
 router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
-  const idPDV  = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
   const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false } = req.body || {};
 
   if (!idLoja) {
