@@ -60,7 +60,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            server.exe
-            client.exe
+            dist/server.exe
+            dist/client.exe
             client.zip
             server.zip
