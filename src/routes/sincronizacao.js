@@ -38,6 +38,13 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
   await execute(db,
     `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
   );
+  const triggerName = `tg_${nomeTabela.toLowerCase()}_seq`;
+  await execute(db, `DROP TRIGGER IF EXISTS ${triggerName} ON ${nomeTabela}`);
+  await execute(db, `
+    CREATE TRIGGER ${triggerName}
+    BEFORE INSERT OR UPDATE ON ${nomeTabela}
+    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_seq_atualizacao()
+  `);
   console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
 }
 

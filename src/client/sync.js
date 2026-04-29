@@ -54,7 +54,7 @@ async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
   const pkPrincipal = pks[pks.length - 1];
   const valorAntigo = registro[pkPrincipal];
 
-  const whereParts  = pks.map(p => `${p} = ?`).join(' AND ');
+  const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
   const whereValores = pks.map(p => registro[p]);
 
   if (fkRefs.length === 0) {
@@ -79,7 +79,7 @@ async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
   // Monta SELECT substituindo apenas o PK principal pelo novo valor.
   // Usa literal inline (safe: vem de gerarNovoPK que retorna número ou string controlada).
   const isNumerico = Number.isFinite(Number(novoValorPK)) && String(novoValorPK).trim() !== '';
-  const pkLiteral  = isNumerico
+  const pkLiteral = isNumerico
     ? String(parseInt(novoValorPK, 10))
     : `'${String(novoValorPK).replace(/'/g, "''")}'`;
 
@@ -272,9 +272,11 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
       break;
     }
 
+    log(`[${nome}] recebendo ${registros.length} registro(s) do servidor`);
+
     // Suprime o trigger de SYNC_ALTERACOES_PENDENTES durante o pull para evitar
     // loop circular onde registros recebidos do servidor são re-enfileirados para envio.
-    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => {});
+    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
 
     for (const registro of registros) {
       const pks = Array.isArray(pk) ? pk : [pk];
@@ -316,7 +318,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               await execute(db,
                 `UPDATE SYNC_ALTERACOES_PENDENTES SET PK_VALOR = ? WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
                 [String(novoPKValor), nome, pkValor]
-              ).catch(() => {});
+              ).catch(() => { });
 
               log(`[${nome}] PK duplicada (${pkValor}) — registro local renomeado para ${novoPKValor}`);
             } catch (e) {
@@ -349,7 +351,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             await execute(db,
               `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
               [nome, pkValor]
-            ).catch(() => {});
+            ).catch(() => { });
 
             // Avança o cursor para não ficar preso neste registro
             const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
@@ -372,7 +374,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
              VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
             [nome, pkValor, versaoServidor]
-          ).catch(() => {});
+          ).catch(() => { });
         }
 
         const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
@@ -383,7 +385,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     }
 
     // Reativa o trigger de SYNC_ALTERACOES_PENDENTES ao fim do lote
-    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => {});
+    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => { });
   }
 
   if (totalAtualizados > 0) {

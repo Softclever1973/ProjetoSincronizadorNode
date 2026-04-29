@@ -41,6 +41,16 @@ function ddlTenant(schema) {
     // Migração idempotente: adiciona criado_em para permitir limpeza de entradas antigas
     `ALTER TABLE IF EXISTS ${schema}.registros_deletados
      ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()`,
+    // Função compartilhada usada por todos os triggers de tabelas do schema.
+    // Incrementa automaticamente ID_ULTIMA_ATUALIZACAO_MATRIZ em todo INSERT/UPDATE,
+    // garantindo que o cliente Firebird detecte qualquer alteração direta no PostgreSQL.
+    `CREATE OR REPLACE FUNCTION ${schema}.fn_seq_atualizacao()
+     RETURNS TRIGGER AS $$
+     BEGIN
+       NEW.id_ultima_atualizacao_matriz := nextval('${schema}.seq_atualizacao_matriz');
+       RETURN NEW;
+     END;
+     $$ LANGUAGE plpgsql`,
   ];
 }
 

@@ -23,6 +23,8 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
   if (pendentes.length === 0) return;
 
+  log(`[${nome}] ${pendentes.length} registro(s) pendente(s) para enviar ao servidor`);
+
   let totalEnviados = 0;
   let totalConflitos = 0;
 
@@ -50,7 +52,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
       await execute(db,
         `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
         [nome, pkValor]
-      ).catch(() => {});
+      ).catch(() => { });
       continue;
     }
 
@@ -67,9 +69,10 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
       if (versoes.length > 0) {
         ultimaVersaoConhecida = versoes[0].ID_ULTIMA_ATUALIZACAO_MATRIZ || 0;
       }
-    } catch {}
+    } catch { }
 
     try {
+      log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registro[p]}`).join(', ') : `${pk}=${registro[pk]}`}) ao servidor`);
       const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV);
 
       if (resultado.conflito) {
@@ -77,7 +80,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         await execute(db,
           `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
           [nome, pkValor]
-        ).catch(() => {});
+        ).catch(() => { });
 
         // Atualiza conflito existente para (tabela + pkValor) em vez de duplicar
         const id = atualizarOuSalvarConflito({
@@ -101,7 +104,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     }
   }
 
-  if (totalEnviados > 0)  log(`[${nome}] ${totalEnviados} registro(s) enviado(s) ao servidor`);
+  if (totalEnviados > 0) log(`[${nome}] ${totalEnviados} registro(s) enviado(s) ao servidor`);
   if (totalConflitos > 0) log(`[${nome}] ${totalConflitos} conflito(s) — acesse http://localhost:<porta_webui>/conflitos`);
 }
 
