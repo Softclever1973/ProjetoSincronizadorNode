@@ -13,6 +13,23 @@ const cacheColunasComputadas = {};
 // Cache de referências FK por "TABELA.COLUNA_PK" — evita consultar system tables toda vez
 const cacheFKRefs = {};
 
+// Cache do tamanho máximo (em chars) de colunas VARCHAR por "TABELA.COLUNA"
+const cacheCharLen = {};
+
+async function getColumnCharLen(db, tabela, coluna) {
+  const chave = `${tabela}.${coluna}`;
+  if (cacheCharLen[chave] !== undefined) return cacheCharLen[chave];
+  const rows = await query(db, `
+    SELECT f.RDB$CHARACTER_LENGTH AS MAX_LEN
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE rf.RDB$RELATION_NAME = ? AND rf.RDB$FIELD_NAME = ?
+  `, [tabela, coluna]);
+  const len = rows[0]?.MAX_LEN ?? null;
+  cacheCharLen[chave] = len;
+  return len;
+}
+
 /**
  * Retorna todas as tabelas filhas que referenciam via FK a coluna PK informada.
  * Parte do PK constraint do pai e navega para os FK constraints dos filhos.
@@ -231,8 +248,16 @@ async function gerarNovoPK(db, tabela, pkColuna, registro) {
     return (rows[0].MAXIMO || 0) + 1;
   }
 
+  const maxLen = await getColumnCharLen(db, tabela, pkPrincipal);
+
   for (let i = 1; i <= 999; i++) {
-    const candidato = `${valorAtual}_${i}`.substring(0, 50);
+    const suffix = `_${i}`;
+    // Trunca a base para caber dentro do tamanho da coluna, deixando espaço para o sufixo
+    const base = maxLen
+      ? String(valorAtual).substring(0, maxLen - suffix.length)
+      : String(valorAtual).substring(0, 50 - suffix.length);
+    if (base.length === 0) break;
+    const candidato = `${base}${suffix}`;
     let sql = `SELECT 1 FROM ${tabela} WHERE ${pkPrincipal} = ?`;
     if (whereBase) sql += ` AND ${whereBase}`;
 
@@ -323,6 +348,10 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               log(`[${nome}] PK duplicada (${pkValor}) — registro local renomeado para ${novoPKValor}`);
             } catch (e) {
               log(`[${nome}] Erro ao resolver colisão de PK (${pkValor}): ${e.message}`);
+              // Salva como conflito para resolução manual e avança o cursor para não travar o sync
+              salvarConflito({ tabela: nome, pk, pkValor, versaoLocal: null, versaoServidor: registro });
+              const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+              if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
               continue;
             }
             // Agora aplica o registro do servidor com o PK original (flui para o upsert abaixo)

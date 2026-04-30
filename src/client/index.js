@@ -60,8 +60,15 @@ if (process.env.SINCRONIZADOR_BG) {
 // ---------------------------------------------------------------------------
 // Handlers globais — evitam que erros não tratados encerrem o processo
 // ---------------------------------------------------------------------------
-process.on('uncaughtException', e => console.error(`[uncaughtException] ${e.message}`));
-process.on('unhandledRejection', e => console.error(`[unhandledRejection] ${e}`));
+process.on('uncaughtException', e => {
+  console.error(`[uncaughtException] ${e.stack || e.message}`);
+  try { require('./erros').salvarErro({ operacao: 'uncaughtException', mensagem: e.stack || e.message }); } catch {}
+});
+process.on('unhandledRejection', e => {
+  const msg = e instanceof Error ? (e.stack || e.message) : String(e);
+  console.error(`[unhandledRejection] ${msg}`);
+  try { require('./erros').salvarErro({ operacao: 'unhandledRejection', mensagem: msg }); } catch {}
+});
 
 // ---------------------------------------------------------------------------
 // Fechar o X da janela do console → continuar rodando só na bandeja do sistema
@@ -205,6 +212,7 @@ async function main() {
       break;
     } catch (e) {
       log(`Firebird indisponível: ${e.message} — tentando novamente em 30s...`);
+      salvarErro({ operacao: 'firebird', mensagem: e.message });
       await new Promise(r => setTimeout(r, 30000));
     }
   }
@@ -221,7 +229,9 @@ async function main() {
       await main();
       break;
     } catch (e) {
-      console.error(`[ERRO FATAL] ${e.message} — reiniciando em 30s...`);
+      const msg = e.stack || e.message;
+      console.error(`[ERRO FATAL] ${msg} — reiniciando em 30s...`);
+      try { require('./erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
       await new Promise(r => setTimeout(r, 30000));
     }
   }
