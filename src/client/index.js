@@ -36,6 +36,13 @@ if (process.argv.includes('--background')) {
 }
 
 // ---------------------------------------------------------------------------
+// Força UTF-8 no terminal Windows (code page 65001) quando há console ativo
+// ---------------------------------------------------------------------------
+if (!process.env.SINCRONIZADOR_BG && process.platform === 'win32' && process.stdout.isTTY) {
+  try { require('child_process').execSync('chcp 65001', { stdio: 'pipe' }); } catch {}
+}
+
+// ---------------------------------------------------------------------------
 // Quando rodando em segundo plano, redireciona console para arquivo (máx 5 MB)
 // ---------------------------------------------------------------------------
 if (process.env.SINCRONIZADOR_BG) {
@@ -115,7 +122,7 @@ async function main() {
   // (mostra quando empacotado — em modo background ou normal)
   if (isPackaged) {
     const { iniciarTray } = require('./tray');
-    iniciarTray(PORTA_WEBUI).catch(e => console.error('[tray] ' + e.message));
+    iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 
   async function executarCiclo() {

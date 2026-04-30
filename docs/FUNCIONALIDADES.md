@@ -6,7 +6,15 @@ Documento de referência descrevendo todas as funcionalidades implementadas no s
 
 ## 1. Infraestrutura de Sincronização
 
-### 1.1 Setup Automático da Filial (`setup.js`)
+### 1.1 Wizard de Configuração Inicial (`setup-wizard.js`)
+- Executado **automaticamente** na primeira inicialização quando `.env` não existe
+- Solicita via terminal: `SYNC_TOKEN`, URL do servidor, caminho do banco Firebird, senha e demais credenciais
+- Cria `src/client/.env` (ou `.env` ao lado do `client.exe`) com os dados informados
+- Grava a URL do servidor em `PARAMETROS(60024)` no Firebird via `UPDATE OR INSERT`
+- Suporta Ctrl+V para colar no Windows (via `powershell Get-Clipboard`)
+- Para reconfigurar: apague o `.env` e reinicie o cliente
+
+### 1.2 Setup Automático da Filial (`setup.js`)
 - Cria as tabelas de infraestrutura na filial de forma **idempotente** (seguro executar múltiplas vezes):
   - `SYNC_ALTERACOES_PENDENTES` — fila de mudanças locais aguardando envio ao servidor
   - `SYNC_VERSOES_SERVIDOR` — rastreia a última versão recebida do servidor por registro (usada na detecção de conflitos)
@@ -15,7 +23,7 @@ Documento de referência descrevendo todas as funcionalidades implementadas no s
   - O trigger escreve em `SYNC_ALTERACOES_PENDENTES` em todo INSERT ou UPDATE
   - O trigger é suprimido durante o pull via `RDB$GET_CONTEXT('USER_SESSION', 'SYNC_SKIP')` para evitar auto-enfileiramento de registros recebidos do servidor
 
-### 1.2 Cursor de Sincronização (`cursor.js`)
+### 1.3 Cursor de Sincronização (`cursor.js`)
 - Mantém a tabela `ULTIMOS_REGISTROS_MATRIZ` na filial
 - Armazena o último `ID_ULTIMA_ATUALIZACAO_MATRIZ` processado por tabela (cursor de atualização)
 - Armazena o último `ID_REGISTRO_DELETADO` processado por tabela (cursor de deleção)
@@ -161,7 +169,7 @@ Interface Express + EJS acessível em tempo real durante a execução do cliente
 | `/` | Dashboard de conflitos pendentes |
 | `/status` | Status do ciclo de sincronização atual |
 | `/auditoria` | Comparação paginada de registros entre matriz e filial |
-| `/configuracoes` | Ativar/desativar tabelas individualmente sem reiniciar |
+| `/configuracoes` | Ativar/desabilitar tabelas individualmente sem reiniciar |
 | `/erros` | Log dos últimos 200 erros de sincronização |
 
 ### 6.2 API JSON
@@ -185,64 +193,92 @@ Interface Express + EJS acessível em tempo real durante a execução do cliente
 
 ---
 
-## 7. Autenticação e Segurança
+## 7. Modo em Segundo Plano e Bandeja do Sistema (`client.exe`)
 
-### 7.1 Token de Sincronização
+### 7.1 Modo Background
+- Ao fechar a janela do CMD, o processo captura `SIGHUP` e se relança com `SINCRONIZADOR_BG=1` e `windowsHide: true`
+- Todos os logs (`console.log` / `console.error`) passam a ser gravados em `client.log` (máx. 5 MB; truncado ao exceder)
+- O processo continua rodando sem janela visível
+- Também pode ser iniciado diretamente com `client.exe --background`
+
+### 7.2 Ícone na Bandeja do Sistema (`tray.js`)
+- Disponível apenas quando empacotado como `client.exe` (usa `systray2`)
+- Ícone visível no canto inferior direito do Windows o tempo todo
+- Menu de contexto com quatro itens:
+
+| Item | Comportamento |
+|------|---------------|
+| **Abrir Console** | Abre `cmd.exe` exibindo `client.log` em tempo real (`Get-Content -Wait -Tail 100`) |
+| **Abrir Web UI** | Abre `http://localhost:3001` no navegador padrão |
+| **Iniciar com o Windows** | Toggle com checkmark: grava/remove entrada no registro `HKCU\...\Run` com `client.exe --background` para inicialização automática no boot |
+| **Parar cliente** | Encerra o processo Node.js completamente |
+
+### 7.3 Inicialização Automática com o Windows
+- Ativada via item **Iniciar com o Windows** no menu da bandeja
+- Grava `HKCU\Software\Microsoft\Windows\CurrentVersion\Run\SincronizadorCliente = "<caminho>\client.exe --background"`
+- O checkmark no menu reflete o estado atual consultando o registro a cada abertura do tray
+- Para desativar: clicar no mesmo item remove a chave do registro
+
+---
+
+## 8. Autenticação e Segurança
+
+### 8.1 Token de Sincronização
 - Todos os endpoints do servidor requerem `?token=<SYNC_TOKEN>`
 - Token lido de `.env` via `dotenv`; deve ser idêntico no servidor e no cliente
 - Falha retorna HTTP 400 com `{ erro: 'token inválido!' }`
 
-### 7.2 Bloqueio de Filial
+### 8.2 Bloqueio de Filial
 - Middleware `filialBloqueada.js` verifica `FILIAIS_BLOQUEADAS` antes de processar qualquer requisição
 - `ID_FILIAL_BLOQUEADA` armazena o número da filial diretamente (sem coluna separada de ID_LOJA)
 - Filial bloqueada retorna HTTP 401 (sem corpo)
 - Cliente detecta 401 e lança erro descritivo, interrompendo o ciclo de sync para aquela filial
 
-### 7.3 Validação de Nome de Tabela
+### 8.3 Validação de Nome de Tabela
 - `TABELAS_PERMITIDAS` Set em `sincronizacao.js` — rejeita qualquer tabela não listada
 - `filtroFilial` validado via regex `/^[A-Za-z_][A-Za-z0-9_]*$/` — previne SQL injection no nome de coluna
 
 ---
 
-## 8. Rastreamento de Erros
+## 9. Rastreamento de Erros
 
-### 8.1 Log Persistente (`erros.js` + `SYNC_ERROS`)
+### 9.1 Log Persistente (`erros.js` + `SYNC_ERROS`)
 - `salvarErro({ tabela, operacao, mensagem })` — grava na tabela Firebird `SYNC_ERROS`
 - Máximo de **200 registros**; ao atingir o limite, o mais antigo é deletado automaticamente
 - Escrita assíncrona via `setImmediate` (não bloqueia o ciclo de sync)
 - `EventEmitter` emite `'novo-erro'` para push imediato via SSE aos clientes Web UI conectados
 
-### 8.2 Erros por Tabela vs. por Ciclo
+### 9.2 Erros por Tabela vs. por Ciclo
 - Erros por registro individual são capturados e logados sem interromper as demais tabelas
 - Erros de conectividade (bloqueio de filial, timeout) interrompem o ciclo inteiro
 
 ---
 
-## 9. Configuração Multi-PDV / Sync Seletivo
+## 10. Configuração Multi-PDV / Sync Seletivo
 
-### 9.1 idPDV
+### 10.1 idPDV
 - Lido de `PARAMETROS(50004)` a cada ciclo; `null` se ausente
 - Repassado como `&idPDV=X` em todas as chamadas HTTP ao servidor
 - Servidor recebe e parseia o parâmetro; lógica de negócio específica por PDV ainda não implementada (fase 2)
 
-### 9.2 filtroFilial
+### 10.2 filtroFilial
 - Campo por entrada em `tabelas.js` (padrão `null`)
 - Quando definido (ex.: `'ID_LOJA'`), adiciona `AND <coluna> = idLoja` na query do servidor
 - Restringe o pull a registros pertencentes à loja local — útil para tabelas com dados por filial
 
 ---
 
-## 10. Gestão de Conexões
+## 11. Gestão de Conexões
 
-### 10.1 Servidor (PostgreSQL — `src/db.js`)
+### 11.1 Servidor (PostgreSQL — `src/db.js`)
 - Usa `pg.Pool`; API pública: `withConnection(fn)`, `query(client, sql, params)`, `execute(client, sql, params)`
 - Parâmetros posicionais `$1, $2, ...` (estilo PostgreSQL)
 - Resultados normalizados para **UPPERCASE** por `pg.Pool`
 - Colunas computadas detectadas via `information_schema.columns WHERE is_generated = 'ALWAYS'` — nunca incluídas em UPSERT
 - Upsert via `INSERT ... ON CONFLICT (pk) DO UPDATE SET col = EXCLUDED.col`
 
-### 10.2 Cliente (Firebird — `src/client/db.js`)
-- Usa `node-firebird`; `withConnection(fn)` garante `closeConnection()` em `finally`
+### 11.2 Cliente (Firebird — `src/client/db.js`)
+- Usa `node-firebird`; **não expõe `withConnection`** — conexões gerenciadas manualmente com `try/finally → closeConnection(db)`
 - Nomes de colunas retornados em **UPPERCASE** pelo node-firebird — manter todas as referências em maiúsculas
 - Colunas computadas (`COMPUTED BY`) detectadas via `RDB$RELATION_FIELDS JOIN RDB$FIELDS` e cacheadas por tabela
 - Upsert via `UPDATE OR INSERT ... MATCHING (pk_columns)` — sintaxe nativa Firebird
@@ -251,7 +287,7 @@ Interface Express + EJS acessível em tempo real durante a execução do cliente
 
 ---
 
-## 11. Tabelas Sincronizadas (Grupos)
+## 12. Tabelas Sincronizadas (Grupos)
 
 Tabelas em `tabelas.js`, organizadas na ordem abaixo (respeita dependências de FK). A **ordem importa**.
 

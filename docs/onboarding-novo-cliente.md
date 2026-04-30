@@ -11,7 +11,7 @@ O sincronizador tem dois lados:
 | Lado | Processo | Banco |
 |---|---|---|
 | **Servidor (Matriz)** | `npm start` (já em execução) | PostgreSQL |
-| **Cliente (Filial)** | `npm run client` (instalado na máquina da loja) | Firebird `.fdb` |
+| **Cliente (Filial)** | `npm run client` ou `client.exe` (instalado na máquina da loja) | Firebird `.fdb` |
 
 Cada filial se identifica com um **token único** (`SYNC_TOKEN`). O servidor usa esse token para rotear os dados para o schema PostgreSQL correto da empresa.
 
@@ -50,75 +50,94 @@ node scripts/create-empresa.js \
 
 ### 2.1 Pré-requisitos na máquina da filial
 
-- Node.js 18 ou superior instalado
 - Firebird instalado e o arquivo `.fdb` acessível localmente
 - Acesso de rede ao servidor (porta configurada em `PORT`, padrão `8080`)
+- **Se usar `npm run client`:** Node.js 18 ou superior instalado
+- **Se usar `client.exe`:** nenhuma dependência adicional
 
-### 2.2 Copiar os arquivos do cliente
+### 2.2 Obter o cliente
 
-Copie para a máquina da filial apenas os arquivos necessários:
+**Opção A — Executável** (recomendado para produção): copie o `client.exe` gerado pelo build para uma pasta na máquina da filial.
 
-```
-ProjetoSincronizadorNode/
-├── src/
-│   └── client/          ← pasta completa do cliente
-├── package.json
-├── package-lock.json
-└── node_modules/        ← rodar npm install na máquina de destino
-```
-
-Ou clone o repositório completo e instale as dependências:
+**Opção B — Node.js**: clone o repositório e instale as dependências:
 
 ```bash
 npm install
 ```
 
-### 2.3 Criar o arquivo de configuração do cliente
+### 2.3 Configurar o cliente
 
-Crie o arquivo `src/client/.env` com base no exemplo:
+Na primeira execução, o cliente inicia automaticamente um **assistente de configuração** interativo no terminal. Basta responder às perguntas:
 
-```bash
-cp src/client/.env.example src/client/.env
+```
++--------------------------------------+
+|   Configuracao inicial do Cliente    |
++--------------------------------------+
+
+SYNC_TOKEN (fornecido pelo administrador do servidor):
+> a3f8c2d1e9b4...
+
+URL do servidor
+  ex: http://192.168.1.100:8080
+> http://192.168.1.100:8080
+
+Caminho do banco Firebird
+  ex: C:\FDBS\FILIAL.FDB
+> C:\FDBS\KR_FILIAL.FDB
+
+Senha do Firebird:
+> masterkey
+
+Host do Firebird [localhost]:
+>
+
+Porta do Firebird [3050]:
+>
+
+Usuario do Firebird [SYSDBA]:
+>
+
+Intervalo entre ciclos em ms [30000]:
+>
 ```
 
-Edite `src/client/.env` com os dados da filial:
+Campos entre `[colchetes]` têm valor padrão — pressione Enter para aceitar. **Ctrl+V** funciona para colar (Windows).
+
+O wizard cria `src/client/.env` (ou `.env` ao lado do `client.exe`) e grava a URL do servidor em `PARAMETROS(60024)` no banco Firebird automaticamente.
+
+> Para reconfigurar, apague o `.env` e reinicie o cliente.
+
+**Configuração manual** (alternativa ao wizard): crie o arquivo `.env` diretamente:
 
 ```env
-# Token gerado no Passo 1 — deve ser idêntico ao cadastrado no servidor
 SYNC_TOKEN=a3f8c2d1e9b4...
-
-# Endereço do servidor (Matriz)
-# Substitua pelo IP ou hostname real do servidor
-# Não inclua barra no final
-SERVER_URL=http://192.168.1.100:8080
-
-# Conexão com o Firebird local
 FIREBIRD_HOST=localhost
 FIREBIRD_PORT=3050
 FIREBIRD_DATABASE=C:\FDBS\KR_FILIAL.FDB
-FIREBIRD_VERSION=3
-# FIREBIRD_PASSWORD=senha-customizada   # opcional
-
-# Intervalo do ciclo de sync em milissegundos (padrão: 30000 = 30s)
+FIREBIRD_USER=SYSDBA
+FIREBIRD_PASSWORD=masterkey
 INTERVALO_MS=30000
 ```
 
-> **Atenção:** `SYNC_TOKEN` precisa ser exatamente igual ao cadastrado com `create-empresa.js` no Passo 1.
+> `FIREBIRD_PASSWORD` é **obrigatório** — o cliente falha na conexão sem ele.
 
 ---
 
 ## Passo 3 — Iniciar o cliente
 
 ```bash
-# Produção
+# Produção (Node.js)
 npm run client
 
 # Com auto-reload (desenvolvimento)
 npm run client:dev
+
+# Executável
+client.exe
 ```
 
 **Na primeira execução**, o cliente:
-1. Valida `SYNC_TOKEN` e `FIREBIRD_DATABASE` — encerra com mensagem clara se ausentes
+1. Executa o wizard de configuração (se `.env` ausente)
 2. Conecta ao Firebird e executa `setup.js` — cria tabelas e triggers de rastreamento (`SYNC_ALTERACOES_PENDENTES`, `SYNC_VERSOES_SERVIDOR`, etc.) — operação idempotente
 3. Inicia a WebUI de conflitos em `http://localhost:3001`
 4. Executa o primeiro ciclo pull → push
@@ -129,6 +148,23 @@ npm run client:dev
 [HH:MM:SS] Iniciando ciclo — servidor: http://192.168.1.100:8080 | loja: 1
 [HH:MM:SS] Ciclo concluído.
 ```
+
+### 3.1 Modo em segundo plano (`client.exe`)
+
+Ao fechar a janela do CMD, o cliente continua rodando silenciosamente com apenas o ícone na **bandeja do sistema** (canto inferior direito do Windows). Os logs passam a ser gravados em `client.log` na mesma pasta do executável.
+
+Para interagir com o cliente em segundo plano, clique com o botão direito no ícone da bandeja:
+
+| Item | Ação |
+|---|---|
+| **Abrir Console** | Abre um CMD mostrando o `client.log` em tempo real |
+| **Abrir Web UI** | Abre `http://localhost:3001` no navegador |
+| **Iniciar com o Windows** | Liga/desliga a inicialização automática na próxima vez que o Windows ligar (✓ = ativo) |
+| **Parar cliente** | Encerra o processo completamente |
+
+### 3.2 Inicialização automática com o Windows
+
+Para que o cliente suba automaticamente ao ligar o computador, clique com o botão direito no ícone da bandeja → **Iniciar com o Windows**. Um ✓ confirma que está ativo. O cliente iniciará em segundo plano (sem CMD) na próxima vez que o Windows for ligado.
 
 ---
 
@@ -194,18 +230,18 @@ Resposta:
 ## Troubleshooting
 
 ### `[ERRO] SYNC_TOKEN não configurado`
-O arquivo `src/client/.env` não existe ou está vazio. Verifique se foi criado corretamente.
+O arquivo `.env` não existe ou está vazio. Execute o cliente sem `.env` para que o wizard de configuração seja iniciado automaticamente.
 
 ### `[ERRO] FIREBIRD_DATABASE não definido`
-Adicione `FIREBIRD_DATABASE=C:\caminho\para\banco.fdb` no `src/client/.env`.
+Adicione `FIREBIRD_DATABASE=C:\caminho\para\banco.fdb` no `.env`.
 
 ### `Error: Connection refused` ao conectar no servidor
 - Verifique se o servidor está rodando (`npm start` na matriz)
-- Confirme o IP/porta em `SERVER_URL` no `.env` do cliente
+- Confirme o IP/porta que foi informado no wizard (ou em `PARAMETROS(60024)` no banco Firebird)
 - Verifique firewall da máquina do servidor liberando a porta `PORT`
 
 ### Token rejeitado (HTTP 401 ou 403)
-- Confirme que o token em `SYNC_TOKEN` do cliente é **idêntico** ao cadastrado com `create-empresa.js`
+- Confirme que o `SYNC_TOKEN` no `.env` do cliente é **idêntico** ao cadastrado com `create-empresa.js`
 - Verifique se a empresa está ativa: `SELECT ativo FROM public.sync_tenants WHERE token = '...'`
 - Se o token foi cadastrado recentemente sem reiniciar o servidor, force o reload: `POST /admin/reload-empresas`
 
@@ -215,3 +251,6 @@ O número da loja está na tabela `filiais_bloqueadas` do schema. Para desbloque
 ```sql
 DELETE FROM empresa_kr.filiais_bloqueadas WHERE id_filial_bloqueada = <numero_loja>;
 ```
+
+### Ícone da bandeja não aparece
+O ícone da bandeja só é exibido quando o cliente roda como `client.exe` (modo empacotado). Em `npm run client` o ícone não é carregado.

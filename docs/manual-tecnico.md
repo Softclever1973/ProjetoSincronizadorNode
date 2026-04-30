@@ -34,52 +34,77 @@ O sincronizador mantém dados consistentes entre o banco central (**Matriz** —
 SYNC_TOKEN=token-secreto-aqui
 DATABASE_URL=postgresql://postgres:senha@localhost:5432/matriz
 PORT=8080
+JWT_SECRET=...
+ADMIN_TOKEN=...
 ```
 O token deve ser idêntico no servidor e no cliente. Toda requisição HTTP inclui `?token=<SYNC_TOKEN>`. `DATABASE_URL` é usado apenas pelo servidor. Ver `.env.example`.
 
-**`sirius-client.ini`** (filial — mesmo diretório):
+**`src/client/.env`** (filial — ou ao lado de `client.exe` quando empacotado):
 ```
-localhost/3050:C:\FDBS\FILIAL.FDB
-3
+SYNC_TOKEN=token-secreto-aqui
+FIREBIRD_HOST=localhost
+FIREBIRD_PORT=3050
+FIREBIRD_DATABASE=C:\FDBS\FILIAL.FDB
+FIREBIRD_USER=SYSDBA
+FIREBIRD_PASSWORD=masterkey
+INTERVALO_MS=30000
 ```
-- Linha 1: `host/porta_firebird:caminho_do_banco`
-- Linha 2: versão do Firebird
+`FIREBIRD_PASSWORD` é **obrigatório**. Todos os outros campos têm padrão exceto `FIREBIRD_DATABASE`. Ver `src/client/.env.example`.
 
-> **Nota:** `sirius.ini` ainda é referenciado no README, mas o servidor atual usa `.env` + PostgreSQL. Ignorar `sirius.ini` para configuração do servidor.
+### 2.2 Wizard de configuração automático
 
-### 2.2 Parâmetros lidos do banco da filial
+Se `src/client/.env` (ou `.env` ao lado do `client.exe`) não existir ao iniciar o cliente, um **assistente interativo** é executado automaticamente antes de qualquer outra inicialização (`src/client/setup-wizard.js`). Ele solicita token, URL do servidor, caminho do banco Firebird e credenciais, cria o `.env` e grava a URL do servidor em `PARAMETROS(60024)` no banco Firebird. Suporta Ctrl+V para colar no Windows.
+
+Para reconfigurar, apague o `.env` e reinicie o cliente.
+
+### 2.3 Parâmetros lidos do banco da filial
 
 O cliente lê da tabela `PARAMETROS` (pré-existente no banco Firebird da filial):
 
 | ID_PARAMETRO | Significado |
 |---|---|
-| `60024` | URL base do servidor (ex.: `http://192.168.1.1:8080`) |
+| `60024` | URL base do servidor (ex.: `http://192.168.1.1:8080`) — gravada pelo wizard |
 | `50003` | Número identificador desta filial/loja (`idLoja`) |
 | `50004` | Número do PDV (`idPDV`) — opcional; `null` se ausente |
 
-### 2.3 Startup da filial
+### 2.4 Startup da filial
 
 ```bash
 npm run client   # ou npm run client:dev para auto-reload
+# ou
+client.exe
 ```
 
-1. Lê `sirius-client.ini` e conecta ao Firebird local
-2. Lê `PARAMETROS` para obter `baseURI`, `idLoja` e `idPDV`
-3. Chama `setup()` — cria tabelas e triggers de infraestrutura (idempotente)
-4. Inicia a WebUI em `http://localhost:3001`
-5. Executa o primeiro ciclo imediatamente
-6. Agenda ciclos a cada 30 segundos
+1. Executa wizard de configuração se `.env` ausente
+2. Carrega `.env` via `dotenv` e conecta ao Firebird local
+3. Lê `PARAMETROS` para obter `baseURI`, `idLoja` e `idPDV`
+4. Chama `setup()` — cria tabelas e triggers de infraestrutura (idempotente)
+5. Inicia a WebUI em `http://localhost:3001`
+6. Executa o primeiro ciclo imediatamente; agenda ciclos a cada `INTERVALO_MS`
 
-### 2.4 Startup do servidor
+### 2.5 Startup do servidor
 
 ```bash
 npm start   # ou npm run dev para auto-reload
 ```
 
-1. Lê `.env` (`DATABASE_URL`, `PORT`, `SYNC_TOKEN`)
-2. Chama `db-init.js` — cria `seq_atualizacao_matriz`, `FILIAIS_BLOQUEADAS` e `REGISTROS_DELETADOS` no PostgreSQL se não existirem
+1. Lê `.env` (`DATABASE_URL`, `PORT`, `SYNC_TOKEN`, `JWT_SECRET`, `ADMIN_TOKEN`)
+2. Chama `db-init.js` — cria tabelas de controle em `public` se não existirem
 3. Sobe o Express nas rotas `/datasnap/rest/TSM*`
 4. Aceita chamadas de qualquer filial com token válido
+
+### 2.6 Modo em segundo plano e bandeja do sistema (`client.exe`)
+
+Ao fechar a janela do CMD, o processo captura `SIGHUP` e se relança silenciosamente com `SINCRONIZADOR_BG=1` — nenhuma janela de console fica aberta. A partir desse ponto todos os logs são gravados em `client.log` (máx. 5 MB; truncado ao ultrapassar).
+
+O ícone na **bandeja do sistema** fica visível o tempo todo quando empacotado. Menu de contexto:
+
+| Item | Comportamento |
+|---|---|
+| **Abrir Console** | Abre `cmd.exe` com `Get-Content -Wait -Tail 100` no `client.log` (tail em tempo real) |
+| **Abrir Web UI** | Abre `http://localhost:3001` no navegador padrão |
+| **Iniciar com o Windows** | Toggle: grava/remove `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` para auto-start com `--background` |
+| **Parar cliente** | Encerra o processo Node.js |
 
 ---
 
@@ -380,13 +405,14 @@ Acessível em `http://localhost:3001`. Iniciada por `webui.js`. Templates EJS em
 
 ## 9. Arquivos de Estado em Runtime
 
-Ficam no diretório de trabalho (`cwd`, ao lado de `package.json`):
+Ficam no diretório de trabalho (`cwd`, ao lado de `package.json` ou do `client.exe`):
 
 | Arquivo | Conteúdo | Limite |
 |---|---|---|
 | `conflitos.json` | Conflitos pendentes de resolução. Escrita atômica (`.tmp` → rename) | Sem limite |
 | `erros.json` | Últimos 200 erros de sync | 200 registros |
 | `tabelas-config.json` | Estado enable/disable por tabela | Sem limite |
+| `client.log` | Log do processo em segundo plano (`SINCRONIZADOR_BG=1`) | 5 MB (truncado ao exceder) |
 
 ---
 
@@ -419,7 +445,7 @@ Acesse `http://localhost:3001/configuracoes`. O toggle persiste em `tabelas-conf
 
 ### 12.1 Firebird (cliente — `src/client/db.js`)
 - **Nomes de coluna:** sempre em UPPERCASE — `node-firebird` retorna colunas em maiúsculas
-- **Conexões:** sempre libere com `try/finally → closeConnection(db)`. Use o helper `withConnection(fn)`
+- **Conexões:** sempre libere com `try/finally → closeConnection(db)` manualmente — o `db.js` do cliente **não** expõe `withConnection`
 - **Scripts multi-statement:** use `EXECUTE BLOCK AS BEGIN ... END` (não `SET TERM`)
 - **Generators:** `GEN_ID(nome, 0)` para ler sem avançar; `SET GENERATOR nome TO valor` para definir diretamente
 
