@@ -400,6 +400,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor.has(k)
       );
 
+      let novoId = null;
       if (colunas.length > 0) {
         const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
         // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes
@@ -417,9 +418,15 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
            ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
           valores
         );
+        // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
+        const [linha] = await query(db,
+          `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE ${whereParts}`,
+          whereValores
+        ).catch(() => [null]);
+        novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
       }
 
-      res.json({ ok: true });
+      res.json({ ok: true, novoId });
     });
   } catch (e) {
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });

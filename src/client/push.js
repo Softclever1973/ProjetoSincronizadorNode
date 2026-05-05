@@ -1,6 +1,7 @@
 const { query, execute } = require('./db');
 const { enviarRegistro } = require('./http');
 const { atualizarOuSalvarConflito } = require('./conflitos');
+const { registrarEcho } = require('./echos');
 
 /**
  * Envia ao servidor os registros locais que foram alterados desde o último sync.
@@ -97,6 +98,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
           `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
           [nome, pkValor]
         );
+        if (resultado.novoId) registrarEcho(nome, pkValor, resultado.novoId);
         totalEnviados++;
       }
     } catch (e) {

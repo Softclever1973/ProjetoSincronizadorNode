@@ -1,5 +1,6 @@
 const { execute, query } = require('./db');
 const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('./cursor');
+const { consumirEcho } = require('./echos');
 const {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
@@ -387,6 +388,19 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             if (novoId) await salvarCursor(db, nome, novoId, 0);
             continue; // Não aplica o upsert — usuário decide na webui
           }
+        }
+
+        // Eco de push: o servidor devolveu um registro que acabamos de enviar.
+        // O conteúdo já está correto localmente; basta avançar o cursor.
+        const idServidor = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+        if (idServidor && pendentes.length === 0 && consumirEcho(nome, pkValor, idServidor)) {
+          await salvarCursor(db, nome, idServidor, 0).catch(() => {});
+          await execute(db,
+            `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+             VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+            [nome, pkValor, idServidor]
+          ).catch(() => {});
+          continue;
         }
 
         await upsertRegistro(db, nome, pk, registro);
