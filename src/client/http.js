@@ -96,14 +96,17 @@ function get(url) {
  * Se colunaData estiver preenchida, o servidor aplica adicionalmente
  * WHERE <colunaData> >= NOW() - INTERVAL '2 years' — política de retenção.
  */
-function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null, colunaData = null) {
+function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null, colunaData = null, nomeFilial = '') {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
   if (idLoja != null && filtroFilial) {
     url += `&idLoja=${idLoja}&filtroFilial=${encodeURIComponent(filtroFilial)}`;
+  } else if (idLoja != null) {
+    url += `&idLoja=${idLoja}`;
   }
-  if (idPDV != null) url += `&idPDV=${idPDV}`;
-  if (colunaData)    url += `&colunaData=${encodeURIComponent(colunaData)}`;
+  if (idPDV != null)  url += `&idPDV=${idPDV}`;
+  if (colunaData)     url += `&colunaData=${encodeURIComponent(colunaData)}`;
+  if (nomeFilial)     url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
   return get(url);
 }
 
@@ -111,9 +114,10 @@ function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMa
  * Busca registros para deletar de uma tabela.
  * Rota: /datasnap/rest/TSMSincronizacao/RegistrosParaDeletar
  */
-function buscarRegistrosParaDeletar(baseURI, nomeTabela, idUltimoRegistroDeletado) {
-  const url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaDeletar` +
+function buscarRegistrosParaDeletar(baseURI, nomeTabela, idUltimoRegistroDeletado, nomeFilial = '') {
+  let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaDeletar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimoRegistroDeletado=${idUltimoRegistroDeletado}`;
+  if (nomeFilial) url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
   return get(url);
 }
 
@@ -121,10 +125,11 @@ function buscarRegistrosParaDeletar(baseURI, nomeTabela, idUltimoRegistroDeletad
  * Busca produtos para atualizar (endpoint específico com preço por loja).
  * Rota: /datasnap/rest/TSMProdutos/ProdutosParaAtualizar
  */
-function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz, idPDV = null) {
+function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz, idPDV = null, nomeFilial = '') {
   let url = `${baseURI}/datasnap/rest/TSMProdutos/ProdutosParaAtualizar` +
     `?token=${TOKEN}&idLoja=${idLoja}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
   if (idPDV != null) url += `&idPDV=${idPDV}`;
+  if (nomeFilial)    url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
   return get(url);
 }
 
@@ -133,10 +138,11 @@ function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz,
  * Se forcar=true, o servidor aplica sem verificar conflito.
  * Retorna { ok: true } ou { conflito: true, versaoServidor: {...} }
  */
-function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false, idPDV = null) {
+function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false, idPDV = null, nomeFilial = '') {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/ReceberRegistro` +
     `?token=${TOKEN}&idLoja=${idLoja}`;
   if (idPDV != null) url += `&idPDV=${idPDV}`;
+  if (nomeFilial)    url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
   return post(url, { tabela, pk, registro, ultimaVersaoConhecida, forcar });
 }
 

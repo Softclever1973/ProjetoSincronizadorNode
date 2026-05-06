@@ -142,6 +142,8 @@ async function main() {
       const idLoja = parseInt(await getParam(db, 50003), 10);
       const idPDVRaw = await getParam(db, 50004);
       const idPDV = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
+      const nomeFilialParam = await getParam(db, 50005);
+      const nomeFilial = nomeFilialParam || process.env.NOME_FILIAL || '';
 
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
       for (const tabelaAusente of tabelasAusentes) {
@@ -164,14 +166,15 @@ async function main() {
       contextoSync.baseURI = baseURI;
       contextoSync.idLoja = idLoja;
       contextoSync.idPDV = idPDV;
+      contextoSync.nomeFilial = nomeFilial;
 
-      log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
+      log(`Iniciando ciclo — servidor: ${baseURI} | loja: ${idLoja}${nomeFilial ? ` (${nomeFilial})` : ''}${idPDV ? ` | PDV: ${idPDV}` : ''}`);
 
       const tabelasParaSincronizar = TABELAS.filter(t => tabelaAtiva(t.nome) && tabelasExistentes.has(t.nome));
 
       for (const tabela of tabelasParaSincronizar) {
         try {
-          await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV);
+          await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log(`[${tabela.nome}] Erro no pull: ${msg}`);
@@ -181,7 +184,7 @@ async function main() {
 
       for (const tabela of tabelasParaSincronizar) {
         try {
-          await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV);
+          await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log(`[${tabela.nome}] Erro no push: ${msg}`);

@@ -66,6 +66,20 @@ O cliente lê da tabela `PARAMETROS` (pré-existente no banco Firebird da filial
 | `60024` | URL base do servidor (ex.: `http://192.168.1.1:8080`) — gravada pelo wizard |
 | `50003` | Número identificador desta filial/loja (`idLoja`) |
 | `50004` | Número do PDV (`idPDV`) — opcional; `null` se ausente |
+| `50005` | Nome desta filial (ex.: `Loja Centro`) — opcional; gravado pelo wizard ou manualmente |
+
+> **ATENCAO — Identificacao de Filiais no Dashboard**
+>
+> O `NOME_FILIAL` (parâmetro `50005`) é o identificador usado pelo servidor para registrar
+> cada filial que se conecta na tabela `sync_filiais` do schema da empresa. Esse registro
+> é a fonte de dados para dashboards que precisam saber "quanto cada filial vendeu".
+>
+> **Regra crítica: cada filial DEVE ter um `idLoja` (parâmetro `50003`) único dentro da
+> empresa.** Se duas filiais usarem o mesmo `idLoja`, o registro de uma sobrescreverá o da
+> outra em `sync_filiais`, e os dados no dashboard serão mesclados incorretamente.
+>
+> Verifique os valores de `PARAMETROS(50003)` em cada banco Firebird antes de colocar
+> uma nova filial em produção.
 
 ### 2.4 Startup da filial
 

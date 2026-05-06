@@ -51,6 +51,11 @@ function ddlTenant(schema) {
        RETURN NEW;
      END;
      $$ LANGUAGE plpgsql`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.sync_filiais (
+      id_loja     INTEGER   PRIMARY KEY,
+      nome        TEXT,
+      ultimo_sync TIMESTAMP NOT NULL DEFAULT NOW()
+    )`,
   ];
 }
 

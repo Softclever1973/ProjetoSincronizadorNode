@@ -86,6 +86,18 @@ async function getColunasComputadas(db, nomeTabela, schemaName) {
   return cacheComputadas[key];
 }
 
+async function registrarFilial(db, idLoja, nomeFilial) {
+  if (!idLoja) return;
+  await execute(db,
+    `INSERT INTO sync_filiais (id_loja, nome, ultimo_sync)
+     VALUES ($1, $2, NOW())
+     ON CONFLICT (id_loja) DO UPDATE
+       SET ultimo_sync = NOW(),
+           nome = COALESCE(EXCLUDED.nome, sync_filiais.nome)`,
+    [idLoja, nomeFilial || null]
+  );
+}
+
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 const COLUNAS_IGNORADAS_SERVIDOR = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ',
@@ -149,6 +161,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const idUltimaAtualizacaoMatriz = parseInt(req.query.idUltimaAtualizacaoMatriz, 10) || 0;
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
   const idLoja = req.query.idLoja ? parseInt(req.query.idLoja, 10) : null;
+  const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
   const filtroFilial = req.query.filtroFilial
     ? String(req.query.filtroFilial).trim().toUpperCase()
     : null;
@@ -176,6 +189,8 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
 
   try {
     const rows = await withTenantConnection(req.schemaName, async (db) => {
+      try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
+
       const params = [idUltimaAtualizacaoMatriz];
       let whereExtra = '';
 
@@ -345,6 +360,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
 router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
   const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false } = req.body || {};
 
   if (!idLoja) {
@@ -361,6 +377,8 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
   try {
     await withTenantConnection(req.schemaName, async (db) => {
+      try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
+
       if (await isFilialBloqueada(idLoja, db)) {
         res.status(401).send();
         return;

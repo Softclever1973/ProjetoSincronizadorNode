@@ -33,24 +33,24 @@ function habilitarCtrlV() {
   };
 }
 
-function gravarParametroServidor(connOpts, serverUrl) {
+function gravarParametro(connOpts, idParametro, valor) {
   return new Promise((resolve) => {
     Firebird.attach(connOpts, (err, db) => {
       if (err) {
         console.log(`  [!] Nao foi possivel conectar ao Firebird: ${err.message}`);
-        console.log('      Configure manualmente: PARAMETROS onde ID_PARAMETRO=60024, PARAMETRO=<url>\n');
+        console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
         return resolve();
       }
       db.query(
         'UPDATE OR INSERT INTO PARAMETROS (ID_PARAMETRO, PARAMETRO) VALUES (?, ?) MATCHING (ID_PARAMETRO)',
-        [60024, serverUrl],
+        [idParametro, valor],
         (err2) => {
           db.detach(() => {});
           if (err2) {
             console.log(`  [!] Erro ao atualizar PARAMETROS: ${err2.message}`);
-            console.log('      Configure manualmente: PARAMETROS onde ID_PARAMETRO=60024, PARAMETRO=<url>\n');
+            console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
           } else {
-            console.log('  [OK] PARAMETROS(60024) atualizado: ' + serverUrl);
+            console.log(`  [OK] PARAMETROS(${idParametro}) atualizado: ${valor}`);
           }
           resolve();
         }
@@ -113,6 +113,9 @@ async function runSetupWizard(envPath) {
     const intervaloRaw = await pergunta(rl, '\nIntervalo entre ciclos em ms [30000]:\n> ');
     const intervalo = intervaloRaw || '30000';
 
+    const nomeFilialRaw = await pergunta(rl, '\nNome desta filial (ex: Loja Centro) [opcional]:\n> ');
+    const nomeFilial = nomeFilialRaw.trim();
+
     const conteudo = [
       `SYNC_TOKEN=${syncToken}`,
       `FIREBIRD_HOST=${fbHost}`,
@@ -121,16 +124,21 @@ async function runSetupWizard(envPath) {
       `FIREBIRD_USER=${fbUser}`,
       `FIREBIRD_PASSWORD=${fbPassword}`,
       `INTERVALO_MS=${intervalo}`,
+      `NOME_FILIAL=${nomeFilial}`,
     ].join('\n') + '\n';
 
     fs.writeFileSync(envPath, conteudo, 'utf8');
     console.log('\n  [OK] .env criado em: ' + envPath);
 
+    const connOpts = { host: fbHost, port: parseInt(fbPort, 10), database: fbDatabase, user: fbUser, password: fbPassword };
+
     console.log('  Gravando URL do servidor no banco Firebird...');
-    await gravarParametroServidor(
-      { host: fbHost, port: parseInt(fbPort, 10), database: fbDatabase, user: fbUser, password: fbPassword },
-      serverUrl
-    );
+    await gravarParametro(connOpts, 60024, serverUrl);
+
+    if (nomeFilial) {
+      console.log('  Gravando nome da filial no banco Firebird...');
+      await gravarParametro(connOpts, 50005, nomeFilial);
+    }
 
     console.log('  Para reconfigurar, delete o .env e execute novamente.\n');
   } finally {

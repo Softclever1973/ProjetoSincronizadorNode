@@ -302,7 +302,7 @@ async function gerarNovoPK(db, tabela, pkColuna, registro) {
 /**
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
-async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null) {
+async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
   const { nome, pk, temDelete, endpoint, filtroFilial = null, generator = null, colunaData = null } = configTabela;
 
   // ---- ATUALIZAÇÕES ----
@@ -315,9 +315,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     let registros;
     try {
       if (endpoint === 'TSMProdutos/ProdutosParaAtualizar') {
-        registros = await buscarProdutosParaAtualizar(baseURI, idLoja, cursor, idPDV);
+        registros = await buscarProdutosParaAtualizar(baseURI, idLoja, cursor, idPDV, nomeFilial);
       } else {
-        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV, colunaData);
+        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV, colunaData, nomeFilial);
       }
     } catch (e) {
       log(`[${nome}] Erro ao buscar atualizações: ${e.message || e.code || String(e)}`);
@@ -477,7 +477,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
     let registrosDeletados;
     try {
-      registrosDeletados = await buscarRegistrosParaDeletar(baseURI, nome, cursorDelete);
+      registrosDeletados = await buscarRegistrosParaDeletar(baseURI, nome, cursorDelete, nomeFilial);
     } catch (e) {
       log(`[${nome}] Erro ao buscar deleções: ${e.message || e.code || String(e)}`);
       break;

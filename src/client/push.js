@@ -7,7 +7,7 @@ const { registrarEcho } = require('./echos');
  * Envia ao servidor os registros locais que foram alterados desde o último sync.
  * Detecta conflitos e os salva para resolução manual via interface web.
  */
-async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null) {
+async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
   const { nome, pk } = configTabela;
 
   let pendentes;
@@ -74,7 +74,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
     try {
       log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registro[p]}`).join(', ') : `${pk}=${registro[pk]}`}) ao servidor`);
-      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV);
+      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV, nomeFilial);
 
       if (resultado.conflito) {
         // Remove dos pendentes para não re-enviar indefinidamente no próximo ciclo
