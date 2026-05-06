@@ -11,6 +11,10 @@ const { salvarConflito } = require('./conflitos');
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
 
+// Cache de colunas existentes por tabela — evita falha em UPSERT quando o servidor
+// tem colunas que ainda não foram adicionadas ao schema Firebird da filial
+const cacheColunasExistentes = {};
+
 // Cache de referências FK por "TABELA.COLUNA_PK" — evita consultar system tables toda vez
 const cacheFKRefs = {};
 
@@ -145,6 +149,29 @@ async function getColunasComputadas(db, nomeTabela) {
   return computadas;
 }
 
+/**
+ * Retorna o conjunto de todas as colunas existentes em uma tabela Firebird.
+ * Usado para ignorar silenciosamente colunas recebidas do servidor que ainda
+ * não foram adicionadas ao schema local da filial.
+ */
+async function getColunasExistentes(db, nomeTabela) {
+  if (cacheColunasExistentes[nomeTabela]) {
+    return cacheColunasExistentes[nomeTabela];
+  }
+
+  const rows = await query(
+    db,
+    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+     FROM RDB$RELATION_FIELDS rf
+     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
+    [nomeTabela]
+  );
+
+  const existentes = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheColunasExistentes[nomeTabela] = existentes;
+  return existentes;
+}
+
 // Colunas que nunca devem ser gravadas na filial.
 // Inclui colunas de controle da matriz e colunas populadas por triggers locais
 // que usam generators independentes (sobrescrever causaria divergências de GEN).
@@ -165,13 +192,17 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
 async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
-  const computadas = await getColunasComputadas(db, nomeTabela);
+  const [computadas, existentes] = await Promise.all([
+    getColunasComputadas(db, nomeTabela),
+    getColunasExistentes(db, nomeTabela),
+  ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
   const colunas = Object.keys(registro).filter(k =>
     registro[k] !== undefined &&
     !COLUNAS_SEMPRE_IGNORADAS.has(k) &&
-    !computadas.has(k)
+    !computadas.has(k) &&
+    existentes.has(k)
   );
 
   if (colunas.length === 0) return;

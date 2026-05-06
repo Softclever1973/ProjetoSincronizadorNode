@@ -682,8 +682,28 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   });
 
   // ── CONFIGURAÇÕES DE TABELAS ─────────────────────────────────────────────
-  app.get('/configuracoes', (_req, res) => {
+
+  async function getTabelasExistentesFirebird() {
+    let db;
+    try {
+      db = await getConnection();
+      const rows = await dbQuery(db, `
+        SELECT TRIM(r.RDB$RELATION_NAME) AS NOME
+        FROM RDB$RELATIONS r
+        WHERE r.RDB$SYSTEM_FLAG = 0
+          AND r.RDB$VIEW_SOURCE IS NULL
+      `);
+      return new Set(rows.map(r => r.NOME.trim()));
+    } catch {
+      return new Set();
+    } finally {
+      if (db) closeConnection(db);
+    }
+  }
+
+  app.get('/configuracoes', async (_req, res) => {
     const config = lerConfig();
+    const existentes = await getTabelasExistentesFirebird();
     const grupos = {};
     for (const t of TABELAS) {
       const g = t.grupo || 'Outras';
@@ -692,22 +712,29 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     }
     res.render('configuracoes', {
       grupos, config,
-      totalAtivas: TABELAS.filter(t => config[t.nome] !== false).length,
+      existentes: [...existentes],
+      totalAtivas: TABELAS.filter(t => config[t.nome] === true && existentes.has(t.nome)).length,
       totalTabelas: TABELAS.length,
     });
   });
 
-  app.post('/configuracoes/toggle', (req, res) => {
+  app.post('/configuracoes/toggle', async (req, res) => {
     const { tabela, ativo } = req.body || {};
     if (!tabela || typeof ativo !== 'boolean') {
       return res.status(400).json({ ok: false, message: 'tabela e ativo (boolean) obrigatórios' });
     }
     if (!TABELAS.find(t => t.nome === tabela)) {
-      return res.status(400).json({ ok: false, message: 'Tabela não encontrada' });
+      return res.status(400).json({ ok: false, message: 'Tabela não encontrada na lista de sincronização' });
+    }
+    if (ativo) {
+      const existentes = await getTabelasExistentesFirebird();
+      if (!existentes.has(tabela)) {
+        return res.status(400).json({ ok: false, message: 'Tabela não existe no banco Firebird local' });
+      }
     }
     const config = lerConfig();
     if (ativo) {
-      delete config[tabela]; // ausente = ativo (padrão), evita crescimento desnecessário do arquivo
+      config[tabela] = true;
     } else {
       config[tabela] = false;
     }
@@ -715,16 +742,20 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.json({ ok: true, tabela, ativo });
   });
 
-  app.post('/configuracoes/toggle-todos', (req, res) => {
+  app.post('/configuracoes/toggle-todos', async (req, res) => {
     const { ativo } = req.body || {};
     if (typeof ativo !== 'boolean') {
       return res.status(400).json({ ok: false, message: 'ativo (boolean) obrigatório' });
     }
     const config = {};
-    if (!ativo) {
+    if (ativo) {
+      const existentes = await getTabelasExistentesFirebird();
+      for (const t of TABELAS) {
+        config[t.nome] = existentes.has(t.nome) ? true : false;
+      }
+    } else {
       for (const t of TABELAS) config[t.nome] = false;
     }
-    // ativo = true → arquivo vazio (todos ativos por padrão)
     salvarConfig(config);
     res.json({ ok: true, ativo });
   });

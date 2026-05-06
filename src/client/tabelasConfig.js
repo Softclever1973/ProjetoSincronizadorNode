@@ -5,7 +5,7 @@ const CAMINHO = path.join(process.cwd(), 'tabelas-config.json');
 
 /**
  * Retorna o objeto de configuração { NOME_TABELA: boolean }.
- * Tabelas ausentes são consideradas ATIVAS por padrão.
+ * Tabelas ausentes são consideradas INATIVAS por padrão.
  */
 function lerConfig() {
   try {
@@ -26,11 +26,11 @@ function salvarConfig(config) {
 }
 
 /**
- * Retorna true se a tabela está ativa (default: true se ausente do arquivo).
+ * Retorna true se a tabela está ativa (default: false se ausente do arquivo).
  */
 function tabelaAtiva(nomeTabela) {
   const config = lerConfig();
-  return config[nomeTabela] !== false;
+  return config[nomeTabela] === true;
 }
 
 module.exports = { lerConfig, salvarConfig, tabelaAtiva };
