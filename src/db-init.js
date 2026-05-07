@@ -56,6 +56,41 @@ function ddlTenant(schema) {
       nome        TEXT,
       ultimo_sync TIMESTAMP NOT NULL DEFAULT NOW()
     )`,
+    // Função chamada pelo trigger de DELETE em cada tabela sincronizada.
+    // Registra automaticamente em registros_deletados para que as filiais possam
+    // buscar e aplicar a deleção no próximo ciclo de pull.
+    `CREATE OR REPLACE FUNCTION ${schema}.fn_registrar_delecao()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       v_pk_cols  TEXT[];
+       v_pk_valor TEXT;
+       v_json     JSONB;
+     BEGIN
+       v_json := to_jsonb(OLD);
+       SELECT ARRAY_AGG(kcu.column_name::TEXT ORDER BY kcu.ordinal_position)
+       INTO v_pk_cols
+       FROM information_schema.key_column_usage kcu
+       JOIN information_schema.table_constraints tc
+         ON tc.constraint_name  = kcu.constraint_name
+        AND tc.table_schema     = kcu.table_schema
+        AND tc.table_name       = kcu.table_name
+       WHERE kcu.table_schema   = TG_TABLE_SCHEMA
+         AND kcu.table_name     = TG_TABLE_NAME
+         AND tc.constraint_type = 'PRIMARY KEY';
+       IF v_pk_cols IS NULL THEN
+         RETURN OLD;
+       END IF;
+       SELECT STRING_AGG(v_json->>t.col, '|' ORDER BY t.ord)
+       INTO v_pk_valor
+       FROM unnest(v_pk_cols) WITH ORDINALITY AS t(col, ord);
+       IF v_pk_valor IS NULL THEN
+         RETURN OLD;
+       END IF;
+       INSERT INTO ${schema}.registros_deletados (nome_da_tabela, id_registros, criado_em)
+       VALUES (UPPER(TG_TABLE_NAME), v_pk_valor, NOW());
+       RETURN OLD;
+     END;
+     $$ LANGUAGE plpgsql`,
   ];
 }
 
@@ -83,4 +118,99 @@ async function initializeTenantSchema(schemaName) {
   console.log(`Banco: schema '${schemaName}' verificado/criado.`);
 }
 
-module.exports = { initializeDatabase, initializeTenantSchema };
+async function migrarTriggersDelecao(schemaName) {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      ALTER TABLE IF EXISTS ${schemaName}.registros_deletados
+      ADD COLUMN IF NOT EXISTS criado_em TIMESTAMP DEFAULT NOW()
+    `);
+
+    await client.query(`CREATE OR REPLACE FUNCTION ${schemaName}.fn_registrar_delecao()
+     RETURNS TRIGGER AS $$
+     DECLARE
+       v_pk_cols  TEXT[];
+       v_pk_valor TEXT;
+       v_json     JSONB;
+     BEGIN
+       v_json := to_jsonb(OLD);
+       SELECT ARRAY_AGG(kcu.column_name::TEXT ORDER BY kcu.ordinal_position)
+       INTO v_pk_cols
+       FROM information_schema.key_column_usage kcu
+       JOIN information_schema.table_constraints tc
+         ON tc.constraint_name  = kcu.constraint_name
+        AND tc.table_schema     = kcu.table_schema
+        AND tc.table_name       = kcu.table_name
+       WHERE kcu.table_schema   = TG_TABLE_SCHEMA
+         AND kcu.table_name     = TG_TABLE_NAME
+         AND tc.constraint_type = 'PRIMARY KEY';
+       IF v_pk_cols IS NULL THEN
+         RETURN OLD;
+       END IF;
+       SELECT STRING_AGG(v_json->>t.col, '|' ORDER BY t.ord)
+       INTO v_pk_valor
+       FROM unnest(v_pk_cols) WITH ORDINALITY AS t(col, ord);
+       IF v_pk_valor IS NULL THEN
+         RETURN OLD;
+       END IF;
+       INSERT INTO ${schemaName}.registros_deletados (nome_da_tabela, id_registros, criado_em)
+       VALUES (UPPER(TG_TABLE_NAME), v_pk_valor, NOW());
+       RETURN OLD;
+     END;
+     $$ LANGUAGE plpgsql`);
+
+    const { rows: tabelas } = await client.query(`
+      SELECT pt.tablename
+      FROM pg_tables pt
+      LEFT JOIN pg_trigger pgt
+        ON pgt.tgname  = 'tg_' || pt.tablename || '_del'
+       AND pgt.tgrelid = (pt.schemaname || '.' || pt.tablename)::regclass
+      WHERE pt.schemaname = $1
+        AND pt.tablename NOT IN ('sync_filiais', 'filiais_bloqueadas', 'registros_deletados')
+        AND pgt.tgname IS NULL
+    `, [schemaName]);
+
+    if (tabelas.length === 0) {
+      console.log(`[${schemaName}] Triggers de deleção: todos já instalados`);
+      return;
+    }
+
+    console.log(`[${schemaName}] Instalando triggers de deleção em ${tabelas.length} tabela(s)...`);
+    let criados = 0;
+    for (const { tablename } of tabelas) {
+      try {
+        await client.query(`
+          CREATE TRIGGER tg_${tablename}_del
+          AFTER DELETE ON ${schemaName}.${tablename}
+          FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_registrar_delecao()
+        `);
+        criados++;
+      } catch (e) {
+        console.error(`[${schemaName}] Erro ao criar trigger para '${tablename}': ${e.message}`);
+      }
+    }
+    console.log(`[${schemaName}] ${criados}/${tabelas.length} trigger(s) de deleção criado(s)`);
+  } finally {
+    client.release();
+  }
+}
+
+async function migrarTodosSchemas() {
+  const client = await pool.connect();
+  let tenants;
+  try {
+    const { rows } = await client.query(
+      `SELECT schema_name FROM public.sync_tenants WHERE ativo = TRUE`
+    );
+    tenants = rows;
+  } finally {
+    client.release();
+  }
+  for (const { schema_name } of tenants) {
+    await migrarTriggersDelecao(schema_name).catch(e =>
+      console.error(`[migração deleção] ${schema_name}: ${e.message}`)
+    );
+  }
+}
+
+module.exports = { initializeDatabase, initializeTenantSchema, migrarTodosSchemas };

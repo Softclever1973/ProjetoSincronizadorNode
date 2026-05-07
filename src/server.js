@@ -11,7 +11,7 @@ const path = require('path');
 
   const express = require('express');
   const config  = require('./config');
-  const { initializeDatabase } = require('./db-init');
+  const { initializeDatabase, migrarTodosSchemas } = require('./db-init');
   const { recarregarEmpresas } = require('./empresas');
   const { agendarLimpeza }     = require('./limpeza');
 
@@ -72,6 +72,7 @@ const path = require('path');
   // ---------------------------------------------------------------------------
   try {
     await initializeDatabase();
+    await migrarTodosSchemas().catch(e => console.error(`[migração] ${e.message}`));
     app.listen(config.portaHttp, () => {
       console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
       console.log(`Banco: ${config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@')}`);

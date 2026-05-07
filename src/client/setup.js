@@ -1,15 +1,6 @@
 const { query, execute, tabelaExiste } = require('./db');
 const TABELAS = require('./tabelas');
 
-async function triggerExiste(db, nome) {
-  const rows = await query(
-    db,
-    `SELECT COUNT(*) AS CNT FROM RDB$TRIGGERS WHERE TRIM(RDB$TRIGGER_NAME) = ?`,
-    [nome]
-  );
-  return (rows[0].CNT || 0) > 0;
-}
-
 async function generatorExiste(db, nome) {
   const rows = await query(
     db,
@@ -127,30 +118,39 @@ async function setup(db, log = console.log) {
     }
 
     const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
-    const pkExpressao = pks.map(p => `CAST(NEW.${p} AS VARCHAR(100))`).join(" || '|' || ");
+    const pkExpressaoNEW = pks.map(p => `CAST(NEW.${p} AS VARCHAR(100))`).join(" || '|' || ");
+    const pkExpressaoOLD = pks.map(p => `CAST(OLD.${p} AS VARCHAR(100))`).join(" || '|' || ");
 
     // Nomes de trigger no Firebird têm limite de 31 caracteres
     const triggerNome = `SYNC_${tabela.nome}`.substring(0, 31);
 
-    if (await triggerExiste(db, triggerNome)) continue;
-
+    // RECREATE TRIGGER recria silenciosamente se já existir (Firebird 3+),
+    // garantindo que instalações existentes recebam suporte a DELETE.
     const sql = `
-      CREATE TRIGGER ${triggerNome} AFTER INSERT OR UPDATE ON ${tabela.nome}
-      AS BEGIN
+      RECREATE TRIGGER ${triggerNome} AFTER INSERT OR UPDATE OR DELETE ON ${tabela.nome}
+      AS
+      DECLARE VARIABLE v_pk VARCHAR(250);
+      BEGIN
         IF (RDB$GET_CONTEXT('USER_SESSION', 'SYNC_SKIP') IS NULL) THEN
+        BEGIN
+          IF (DELETING) THEN
+            v_pk = ${pkExpressaoOLD};
+          ELSE
+            v_pk = ${pkExpressaoNEW};
           UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES
             (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
           VALUES
-            ('${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP)
+            ('${tabela.nome}', :v_pk, CURRENT_TIMESTAMP)
           MATCHING (NOME_TABELA, PK_VALOR);
+        END
       END
     `;
 
     try {
       await execute(db, sql);
-      log(`[SETUP] Trigger ${triggerNome} criada (${tabela.nome})`);
+      log(`[SETUP] Trigger ${triggerNome} atualizada (${tabela.nome})`);
     } catch (e) {
-      log(`[SETUP] Aviso: não foi possível criar trigger ${triggerNome}: ${e.message}`);
+      log(`[SETUP] Aviso: não foi possível atualizar trigger ${triggerNome}: ${e.message}`);
     }
   }
 

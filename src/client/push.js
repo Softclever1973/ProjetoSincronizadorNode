@@ -49,7 +49,15 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     }
 
     if (registros.length === 0) {
-      // Registro foi deletado localmente — remove dos pendentes sem enviar
+      const registroDelete = {};
+      pks.forEach((coluna, i) => { registroDelete[coluna] = pkValores[i]; });
+      try {
+        log(`[${nome}] Enviando deleção (${pkValor}) ao servidor`);
+        await enviarRegistro(baseURI, idLoja, nome, pk, registroDelete, 0, false, idPDV, nomeFilial, true);
+        totalEnviados++;
+      } catch (e) {
+        log(`[${nome}] Erro ao enviar deleção (${pkValor}): ${e.message}`);
+      }
       await execute(db,
         `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
         [nome, pkValor]

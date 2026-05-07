@@ -172,6 +172,10 @@ async function main() {
 
       const tabelasParaSincronizar = TABELAS.filter(t => tabelaAtiva(t.nome) && tabelasExistentes.has(t.nome));
 
+      if (tabelasParaSincronizar.length === 0) {
+        log('Nenhuma tabela ativa — acesse http://localhost:3001/configuracoes para ativar tabelas.');
+      }
+
       for (const tabela of tabelasParaSincronizar) {
         try {
           await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);

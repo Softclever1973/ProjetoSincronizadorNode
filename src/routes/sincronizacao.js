@@ -45,6 +45,13 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
     BEFORE INSERT OR UPDATE ON ${nomeTabela}
     FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_seq_atualizacao()
   `);
+  const delTriggerName = `tg_${nomeTabela.toLowerCase()}_del`;
+  await execute(db, `DROP TRIGGER IF EXISTS ${delTriggerName} ON ${nomeTabela}`);
+  await execute(db, `
+    CREATE TRIGGER ${delTriggerName}
+    AFTER DELETE ON ${nomeTabela}
+    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_registrar_delecao()
+  `);
   console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
 }
 
@@ -361,7 +368,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
   const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
-  const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false } = req.body || {};
+  const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false } = req.body || {};
 
   if (!idLoja) {
     return res.status(400).json({ message: 'idLoja não informado' });
@@ -385,6 +392,22 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       }
 
       const pks = Array.isArray(pk) ? pk : [pk];
+
+      if (deletar) {
+        const whereValores = pks.map(p => registro[p]);
+        const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+        try {
+          await execute(db, `DELETE FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+          await execute(db,
+            `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
+            [nomeTabela, whereValores.join('|')]
+          );
+        } catch (e) {
+          if (!isMissingTableError(e)) throw e;
+        }
+        res.json({ ok: true });
+        return;
+      }
 
       // Garante que a tabela existe antes de qualquer query nela.
       // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.

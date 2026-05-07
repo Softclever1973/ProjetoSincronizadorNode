@@ -354,6 +354,24 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           ).catch(() => []);
 
           if (versaoConhecida.length === 0) {
+            // Verifica se o registro local ainda existe — pode ter sido deletado
+            // depois do push, re-enfileirando o pendente como deleção via trigger.
+            // Se não existe, o correto é deixar o push enviar o delete ao servidor.
+            const wherePartsLocal = pks.map(p => `${p} = ?`).join(' AND ');
+            const existeLocal = await query(db,
+              `SELECT 1 FROM ${nome} WHERE ${wherePartsLocal}`,
+              pks.map(p => registro[p])
+            ).catch(() => [null]);
+
+            if (existeLocal.length === 0) {
+              // Registro deletado localmente — pendente é uma deleção, não colisão.
+              // Avança o cursor e deixa a fase de push propagar o delete ao servidor.
+              const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+              if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
+              log(`[${nome}] Registro ${pkValor} deletado localmente — aguardando push de deleção`);
+              continue;
+            }
+
             // ── Colisão de PK: dois registros distintos com mesmo PK ──────────
             // O registro local foi criado independentemente; renomeia o PK local
             // para liberar o PK original para o registro do servidor.
@@ -488,6 +506,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
       break;
     }
 
+    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
+
     for (const rd of registrosDeletados) {
       try {
         await deletarRegistro(db, nome, pk, rd.ID_REGISTROS);
@@ -501,6 +521,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         log(`[${nome}] Erro ao deletar registro (${pk}=${rd.ID_REGISTROS}): ${e.message}`);
       }
     }
+
+    await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => { });
   }
 
   if (totalDeletados > 0) {
