@@ -207,6 +207,9 @@ async function migrarTodosSchemas() {
     client.release();
   }
   for (const { schema_name } of tenants) {
+    await initializeTenantSchema(schema_name).catch(e =>
+      console.error(`[migração schema] ${schema_name}: ${e.message}`)
+    );
     await migrarTriggersDelecao(schema_name).catch(e =>
       console.error(`[migração deleção] ${schema_name}: ${e.message}`)
     );

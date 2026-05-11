@@ -208,7 +208,11 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
   if (colunas.length === 0) return;
 
   const placeholders = colunas.map(() => '?').join(', ');
-  const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
+  // Firebird rejeita string vazia em colunas numéricas/data — converte para null
+  const valores = colunas.map(c => {
+    const v = registro[c];
+    return (v === undefined || v === '') ? null : v;
+  });
 
   const sql =
     `UPDATE OR INSERT INTO ${nomeTabela} (${colunas.join(', ')})` +

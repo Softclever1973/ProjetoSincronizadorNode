@@ -22,8 +22,18 @@ const path = require('path');
   const distribuicaoRoutes       = require('./routes/distribuicao');
   const authRoutes               = require('./routes/auth');
   const userEmpresasRoutes       = require('./routes/userEmpresas');
+  const tabelasRoutes            = require('./routes/tabelas');
 
   const app = express();
+
+  app.use((req, res, next) => {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
+    if (req.method === 'OPTIONS') return res.sendStatus(204);
+    next();
+  });
+
   app.use(express.json());
 
   // ---------------------------------------------------------------------------
@@ -36,6 +46,7 @@ const path = require('path');
   app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
   app.use('/auth',          authRoutes);
   app.use('/user/empresas', userEmpresasRoutes);
+  app.use('/api',           tabelasRoutes);
 
   // ---------------------------------------------------------------------------
   // Rota raiz — útil para confirmar que o servidor está ativo
