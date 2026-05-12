@@ -566,7 +566,8 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       }
       if (ate < totalPaginas) partes.push(`<span style="color:#aaa">…</span>`);
       if (pagina < totalPaginas) partes.push(`<a href="${linkPagina(pagina + 1)}" style="padding:4px 10px;border:1px solid #3498db;border-radius:4px;color:#3498db;text-decoration:none">Próxima →</a>`);
-      return `<div style="display:flex;align-items:center;gap:6px;margin-top:20px;flex-wrap:wrap">${partes.join('')}<span style="margin-left:8px;font-size:12px;color:#888">${inicio + 1}–${fim} de ${total}</span></div>`;
+      const irParaForm = `<form method="get" action="${base.split('?')[0]}" style="display:inline-flex;align-items:center;gap:4px;margin-left:12px">${mostrarResolvidos ? '<input type="hidden" name="todos" value="1">' : ''}<label style="font-size:12px;color:#888">Ir para:</label><input type="number" name="pagina" min="1" max="${totalPaginas}" value="${pagina}" style="width:54px;padding:3px 6px;border:1px solid #ccc;border-radius:4px;font-size:13px;text-align:center"><button type="submit" style="padding:3px 8px;border:1px solid #3498db;border-radius:4px;background:#3498db;color:white;font-size:12px;cursor:pointer">→</button></form>`;
+      return `<div style="display:flex;align-items:center;gap:6px;margin-top:20px;flex-wrap:wrap">${partes.join('')}<span style="margin-left:8px;font-size:12px;color:#888">${inicio + 1}–${fim} de ${total}</span>${irParaForm}</div>`;
     })();
 
     const conflitos = lista.map(c => ({ ...c, rendered: renderCampos(c.versaoLocal, c.versaoServidor, c.id) }));

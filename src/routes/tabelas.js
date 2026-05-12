@@ -77,28 +77,51 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
 router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
-  const page     = Math.max(1, parseInt(req.query.page)     || 1);
-  const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize) || 50));
-  const q        = req.query.q?.trim() || '';
+  const page      = Math.max(1, parseInt(req.query.page)     || 1);
+  const pageSize  = Math.min(500, Math.max(1, parseInt(req.query.pageSize) || 50));
+  const q         = req.query.q?.trim() || '';
+  const cols      = req.query.cols?.trim() || '';
+  const statusCol = req.query.statusCol?.trim() || '';
+  const statusVal = req.query.statusVal?.trim() || '';
+
+  if (cols) {
+    const lista = cols.split(',').map(c => c.trim()).filter(Boolean);
+    if (lista.some(c => !NOME_VALIDO.test(c))) return res.status(400).json({ erro: 'cols inválido' });
+  }
+  if (statusCol && !NOME_VALIDO.test(statusCol)) return res.status(400).json({ erro: 'statusCol inválido' });
+  if (statusVal && !['A', 'I'].includes(statusVal)) return res.status(400).json({ erro: 'statusVal inválido' });
 
   try {
     const result = await withTenantConnection(schema, async db => {
       const params = [];
-      let where = '';
+      const conditions = [];
 
       if (q) {
-        const textCols = await query(db, `
-          SELECT column_name FROM information_schema.columns
-          WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
-          AND data_type IN ('character varying', 'text', 'character')
-          ORDER BY ordinal_position LIMIT 8
-        `, [schema, tabela]);
+        let searchCols;
+        if (cols) {
+          searchCols = cols.split(',').map(c => c.trim().toUpperCase()).filter(Boolean);
+        } else {
+          const textCols = await query(db, `
+            SELECT column_name FROM information_schema.columns
+            WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
+            AND data_type IN ('character varying', 'text', 'character')
+            ORDER BY ordinal_position LIMIT 8
+          `, [schema, tabela]);
+          searchCols = textCols.map(c => c.COLUMN_NAME);
+        }
 
-        if (textCols.length) {
+        if (searchCols.length) {
           params.push(`%${q}%`);
-          where = 'WHERE ' + textCols.map(c => `CAST(${c.COLUMN_NAME} AS TEXT) ILIKE $1`).join(' OR ');
+          conditions.push('(' + searchCols.map(c => `CAST(${c} AS TEXT) ILIKE $1`).join(' OR ') + ')');
         }
       }
+
+      if (statusCol && statusVal) {
+        params.push(statusVal);
+        conditions.push(`TRIM(${statusCol}::TEXT) = $${params.length}`);
+      }
+
+      const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
       const total     = parseInt(countRows[0].CNT);
@@ -150,6 +173,14 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
         VALUES (${ph.join(', ')})
         ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updates.join(', ')}
       `, vals);
+
+      if (allowed.has('ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
+        const where = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+        await execute(db,
+          `UPDATE ${tabela} SET ID_ULTIMA_ATUALIZACAO_MATRIZ = nextval('${schema}.seq_atualizacao_matriz') WHERE ${where}`,
+          pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
+        );
+      }
     });
     res.json({ ok: true });
   } catch (e) {
@@ -296,13 +327,14 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
   const page     = Math.max(1, parseInt(req.query.page)     || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 50));
   const q        = req.query.q?.trim() || '';
+  const status   = req.query.status?.trim() || '';
   try {
     const result = await withTenantConnection(schema, async db => {
       const [colsP, colsI] = await Promise.all([
         colunasTabela(db, schema, 'PEDIDOS').catch(() => []),
         colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
       ]);
-      if (!colsP.length) return { total: 0, registros: [] };
+      if (!colsP.length) return { total: 0, registros: [], statusOptions: [] };
 
       const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
       const colNamesI = new Set(colsI.map(c => c.COLUMN_NAME));
@@ -316,14 +348,23 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
         select.push(`(SELECT COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO) AS VALOR_TOTAL`);
       }
 
+      const statusOptions = colNamesP.has('STATUS')
+        ? (await query(db, `SELECT DISTINCT STATUS FROM PEDIDOS WHERE STATUS IS NOT NULL ORDER BY STATUS`, [])).map(r => r.STATUS)
+        : [];
+
       const params = [];
-      const conditions = [];
+      const whereParts = [];
       if (q) {
         params.push(`%${q}%`);
-        conditions.push(`p.ID_PEDIDO::TEXT ILIKE $${params.length}`);
-        if (colNamesP.has('NOME_CLIENTE')) conditions.push(`p.NOME_CLIENTE ILIKE $${params.length}`);
+        const qConds = [`p.ID_PEDIDO::TEXT ILIKE $${params.length}`];
+        if (colNamesP.has('NOME_CLIENTE')) qConds.push(`p.NOME_CLIENTE ILIKE $${params.length}`);
+        whereParts.push(`(${qConds.join(' OR ')})`);
       }
-      const where = conditions.length ? `WHERE (${conditions.join(' OR ')})` : '';
+      if (status && colNamesP.has('STATUS')) {
+        params.push(status);
+        whereParts.push(`p.STATUS = $${params.length}`);
+      }
+      const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM PEDIDOS p ${where}`, params);
       const total  = parseInt(countRows[0].CNT);
@@ -333,7 +374,7 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
         `SELECT ${select.join(', ')} FROM PEDIDOS p ${where} ORDER BY p.ID_PEDIDO DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
       );
-      return { total, registros };
+      return { total, registros, statusOptions };
     });
     res.json(result);
   } catch (e) {
