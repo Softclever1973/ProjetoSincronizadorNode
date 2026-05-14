@@ -67,6 +67,13 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
     const registro = registros[0];
 
+    // Se o registro tem ID_LOJA mas está nulo, preenche com o ID da filial.
+    // Garante que registros criados localmente pelo Delphi (sem ID_LOJA explícito)
+    // sejam identificados corretamente no servidor.
+    if ((registro.ID_LOJA == null || registro.ID_LOJA === '') && idLoja) {
+      registro.ID_LOJA = idLoja;
+    }
+
     // Última versão conhecida do servidor para este registro (para detecção de conflito)
     let ultimaVersaoConhecida = 0;
     try {

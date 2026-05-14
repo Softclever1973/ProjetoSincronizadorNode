@@ -426,6 +426,89 @@ router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) 
   }
 });
 
+/* ── GET /api/:schema/dashboard/faturamento-por-loja ── */
+router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes } = req.query;
+
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const [colsP, colsI, colsAG, colsSF] = await Promise.all([
+        colunasTabela(db, schema, 'PEDIDOS').catch(() => []),
+        colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
+        colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []),
+        colunasTabela(db, schema, 'sync_filiais').catch(() => []),
+      ]);
+      if (!colsP.length) return [];
+
+      const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
+      const colNamesI = new Set(colsI.map(c => c.COLUMN_NAME));
+      if (!colNamesP.has('ID_LOJA')) return [];
+
+      // Detectar coluna de data e seu tipo real (pode ter sido migrado como text)
+      const DATA_COLS = ['DATA_DO_PEDIDO', 'DATA_HORA', 'DATA_EMISSAO'];
+      const dataCol   = DATA_COLS.find(c => colNamesP.has(c)) ?? null;
+      const dataType  = dataCol ? colsP.find(c => c.COLUMN_NAME === dataCol)?.DATA_TYPE ?? 'text' : null;
+      const isNativeDate = dataType && (dataType.startsWith('timestamp') || dataType === 'date');
+      const dateExpr  = dataCol
+        ? (isNativeDate ? `p.${dataCol}` : `NULLIF(p.${dataCol}, '')::DATE`)
+        : null;
+
+      const hasValor  = colsI.length && colNamesI.has('VALOR_UNITARIO') && colNamesI.has('QUANTIDADE');
+      const hasSF     = colsSF.length > 0;  // sync_filiais — preenchida automaticamente pelo cliente
+      const hasAuxGen = colsAG.length > 0;  // AUX_GENERICA — fallback configurado manualmente
+
+      const params = [];
+      const whereParts = [];
+      if (dateExpr && ano && /^\d{4}$/.test(ano)) {
+        params.push(parseInt(ano));
+        whereParts.push(`EXTRACT(YEAR FROM ${dateExpr}) = $${params.length}`);
+      }
+      const mesInt = parseInt(mes);
+      if (dateExpr && mes && /^\d{1,2}$/.test(mes) && mesInt >= 1 && mesInt <= 12) {
+        params.push(mesInt);
+        whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
+      }
+      const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+      // Prioridade do nome: sync_filiais (auto) > AUX_GENERICA (manual) > 'Loja N'
+      const nomeLojaExpr = [
+        hasSF     && `MAX(sf.nome)`,
+        hasAuxGen && `MAX(ag.DESCRICAO)`,
+        `'Loja ' || COALESCE(p.ID_LOJA::TEXT, '?')`,
+      ].filter(Boolean).reduce((acc, expr) => `COALESCE(${acc}, ${expr})`);
+
+      const joinSF = hasSF
+        ? `LEFT JOIN sync_filiais sf ON sf.id_loja = p.ID_LOJA`
+        : '';
+      const joinAG = hasAuxGen
+        ? `LEFT JOIN AUX_GENERICA ag ON ag.SUB_TABELA = 'Lojas' AND CAST(ag.ID_SUB_TABELA AS TEXT) = CAST(p.ID_LOJA AS TEXT)`
+        : '';
+
+      return query(db, `
+        SELECT
+          p.ID_LOJA,
+          ${nomeLojaExpr} AS NOME_LOJA,
+          COUNT(DISTINCT p.ID_PEDIDO) AS QTD_PEDIDOS,
+          ${hasValor
+            ? 'COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) AS FATURAMENTO'
+            : '0 AS FATURAMENTO'}
+        FROM PEDIDOS p
+        ${hasValor ? 'LEFT JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO' : ''}
+        ${joinSF}
+        ${joinAG}
+        ${where}
+        GROUP BY p.ID_LOJA
+        ORDER BY p.ID_LOJA
+      `, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 /* ── GET /api/:schema/pedidos/:id/pagamentos ── */
 router.get('/:schema/pedidos/:id/pagamentos', authJwt, checkSchema, async (req, res) => {
   const { schema, id } = req.params;
