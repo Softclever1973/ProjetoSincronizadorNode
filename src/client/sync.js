@@ -15,6 +15,9 @@ const cacheColunasComputadas = {};
 // tem colunas que ainda não foram adicionadas ao schema Firebird da filial
 const cacheColunasExistentes = {};
 
+// Cache de colunas NOT NULL por tabela — evita escrever null em coluna com constraint
+const cacheColunasNaoNulas = {};
+
 // Cache de referências FK por "TABELA.COLUNA_PK" — evita consultar system tables toda vez
 const cacheFKRefs = {};
 
@@ -150,6 +153,25 @@ async function getColunasComputadas(db, nomeTabela) {
 }
 
 /**
+ * Retorna o conjunto de colunas NOT NULL de uma tabela Firebird.
+ * Colunas NOT NULL com valor null recebido do servidor são excluídas do UPSERT
+ * — o Firebird usa o DEFAULT da DDL no INSERT e preserva o valor no UPDATE.
+ */
+async function getColunasNaoNulas(db, nomeTabela) {
+  if (cacheColunasNaoNulas[nomeTabela]) return cacheColunasNaoNulas[nomeTabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ?
+      AND COALESCE(rf.RDB$NULL_FLAG, f.RDB$NULL_FLAG) = 1
+  `, [nomeTabela]);
+  const set = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheColunasNaoNulas[nomeTabela] = set;
+  return set;
+}
+
+/**
  * Retorna o conjunto de todas as colunas existentes em uma tabela Firebird.
  * Usado para ignorar silenciosamente colunas recebidas do servidor que ainda
  * não foram adicionadas ao schema local da filial.
@@ -192,9 +214,10 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
 async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
-  const [computadas, existentes] = await Promise.all([
+  const [computadas, existentes, naoNulas] = await Promise.all([
     getColunasComputadas(db, nomeTabela),
     getColunasExistentes(db, nomeTabela),
+    getColunasNaoNulas(db, nomeTabela),
   ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
@@ -202,7 +225,8 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
     registro[k] !== undefined &&
     !COLUNAS_SEMPRE_IGNORADAS.has(k) &&
     !computadas.has(k) &&
-    existentes.has(k)
+    existentes.has(k) &&
+    !(registro[k] === null && naoNulas.has(k))  // não escreve null em coluna NOT NULL
   );
 
   if (colunas.length === 0) return;
