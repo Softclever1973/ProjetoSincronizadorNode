@@ -109,7 +109,7 @@ npm start   # ou npm run dev para auto-reload
 
 ### 2.6 Modo em segundo plano e bandeja do sistema (`client.exe`)
 
-Ao fechar a janela do CMD, o processo captura `SIGHUP` e se relança silenciosamente com `SINCRONIZADOR_BG=1` — nenhuma janela de console fica aberta. A partir desse ponto todos os logs são gravados em `client.log` (máx. 5 MB; truncado ao ultrapassar).
+O modo background é ativado explicitamente com `client.exe --background` (mecanismo primário). Quando empacotado e o usuário fecha a janela do CMD, o processo captura `SIGHUP` e se relança silenciosamente com `SINCRONIZADOR_BG=1` (mecanismo secundário, apenas no executável). Em ambos os casos nenhuma janela de console fica aberta e todos os logs são gravados em `client.log` (máx. 5 MB; truncado ao ultrapassar).
 
 O ícone na **bandeja do sistema** fica visível o tempo todo quando empacotado. Menu de contexto:
 
@@ -287,12 +287,16 @@ Para cada tabela ativa:
   1. Lê SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = tabela
   2. Para cada pendente:
      a. Busca registro completo no banco local
-     b. Se não encontrar (foi deletado localmente): remove dos pendentes, não envia
+     b. Se não encontrar (foi deletado localmente):
+          → envia { deletar: true } ao servidor
+          → servidor faz DELETE na linha e insere em REGISTROS_DELETADOS
+          → outras filiais recebem a deleção no próximo pull via RegistrosParaDeletar
+          → remove dos pendentes
      c. Lê versão conhecida em SYNC_VERSOES_SERVIDOR
      d. POST /ReceberRegistro { tabela, pk, registro, ultimaVersaoConhecida }
-        → 200 { ok: true }:       remove dos pendentes
-        → 200 { conflito: true }: remove dos pendentes + salva conflito em conflitos.json
-        → erro de rede:           mantém nos pendentes (tentará no próximo ciclo)
+        → 200 { ok: true, idAtualizacaoMatriz: N }: remove dos pendentes; registra N como echo
+        → 200 { conflito: true }:                   remove dos pendentes + salva conflito em conflitos.json
+        → erro de rede:                             mantém nos pendentes (tentará no próximo ciclo)
 ```
 
 ### 5.1 Detecção de conflito no servidor
@@ -305,6 +309,17 @@ versaoServidor > ultimaVersaoConhecida → conflito
 ```
 
 Para forçar a aplicação (resolução "manter local"), o cliente envia `forcar: true`.
+
+### 5.1.1 Propagação de deleção local
+
+Quando o registro foi deletado localmente após ter sido enfileirado em `SYNC_ALTERACOES_PENDENTES`:
+
+1. `push.js` detecta que o banco Firebird não tem mais o registro
+2. Envia `POST /ReceberRegistro` com flag `{ deletar: true }` — sem conteúdo de colunas
+3. `sincronizacao.js` no servidor:
+   - Executa `DELETE FROM <tabela> WHERE <pk> = ...`
+   - Insere em `REGISTROS_DELETADOS` para que outras filiais recebam a deleção no próximo pull (`RegistrosParaDeletar`)
+4. O cliente remove o pendente de `SYNC_ALTERACOES_PENDENTES`
 
 ### 5.2 Colunas nunca sobrescritas pelo servidor ao receber push (`COLUNAS_IGNORADAS_SERVIDOR`)
 
@@ -389,6 +404,32 @@ Base: `/datasnap/rest/{Classe}/{Metodo}?token=<SYNC_TOKEN>`
 | GET | `/ListarDistribuicaoDeMercadoriasPorID` | Registro único |
 | GET | `/QuantidadeDeRegistros` | Contagem por status |
 | POST | `/acceptAlterarStatus` | Atualiza status da distribuição |
+
+### 7.6 API Web Frontend (`/api/`) (`src/routes/tabelas.js`)
+
+Rotas para a interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <jwt>`. Schema da empresa no path — o middleware `checkSchema` verifica que o usuário tem acesso ao schema solicitado.
+
+**CRUD genérico:**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/tabelas/:tabela/colunas` | Introspecção via `information_schema.columns` |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | `MAX(pk) + 1` — query: `?pk=COL` |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro por PK — query: `?pk=COL&value=VAL` |
+| GET | `/api/:schema/tabelas/:tabela` | Paginação + busca (`?q=`) + filtro de status (`?statusCol=&statusVal=`) |
+| POST | `/api/:schema/tabelas/:tabela` | Upsert `{ pk, registro }` (pk pode ser array); incrementa `seq_atualizacao_matriz` se a coluna existir |
+| DELETE | `/api/:schema/tabelas/:tabela` | Delete `{ pk, pkValores }` |
+
+**Pedidos:**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` (subquery `SUM(VALOR_UNITARIO × QUANTIDADE)`); suporta `?q=` e `?status=` |
+| GET | `/api/:schema/pedidos-completo` | JOIN flat das 3 tabelas de pedido + PRODUTOS; colunas ausentes ignoradas |
+| GET | `/api/:schema/pedidos/:id/itens` | Itens com JOIN em PRODUTOS (descrição, unidade, valor total do item) |
+| GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
+Todas as rotas validam nomes de tabela e colunas via `NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/` antes de qualquer query, prevenindo SQL injection.
 
 ---
 
@@ -511,7 +552,7 @@ Aplicado nas rotas: `pedidos.js`, `movimentacaoCaixas.js`, `distribuicao.js`.
 | Área | Limitação |
 |---|---|
 | Estoque | Nenhuma tabela de saldo/movimentação de estoque é sincronizada |
-| Pedidos | INSERT de pedido via push não implementado (somente UPDATE de status) |
+| Pedidos (sync Delphi) | INSERT de pedido via sync Delphi não implementado (somente UPDATE de status via `/updatePedido`); inserção é possível via API web genérica `POST /api/:schema/tabelas/PEDIDOS` |
 | PDV | `idPDV` é repassado ao servidor mas sem lógica de negócio por PDV implementada (fase 2) |
 | Multi-CNPJ | Sync não trafega CNPJ — cada banco é 1 empresa |
 | Cancelamentos | Sem fluxo de cancelamento de NF-e/NFC-e |

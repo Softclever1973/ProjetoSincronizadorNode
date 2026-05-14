@@ -50,7 +50,8 @@ node scripts/create-empresa.js \
 
 ### 2.1 Pré-requisitos na máquina da filial
 
-- Firebird instalado e o arquivo `.fdb` acessível localmente
+- Firebird instalado e em execução
+- **O arquivo `.fdb` da filial já deve existir** — o sincronizador **não cria** o banco de dados. Ele conecta a um banco Firebird pré-existente (o banco da filial já em uso pelo sistema Sirius/Delphi). Se o banco ainda não existir na máquina, ele precisa ser criado ou copiado antes de continuar
 - Acesso de rede ao servidor (porta configurada em `PORT`, padrão `8080`)
 - **Se usar `npm run client`:** Node.js 18 ou superior instalado
 - **Se usar `client.exe`:** nenhuma dependência adicional

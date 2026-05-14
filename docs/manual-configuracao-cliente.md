@@ -55,6 +55,7 @@ Caminho do banco Firebird
 Caminho absoluto do arquivo `.FDB` da filial no sistema operacional local.
 
 - Campo obrigatório.
+- O arquivo `.fdb` **deve existir previamente** — o sincronizador não cria o banco de dados, apenas se conecta a ele.
 - Use o caminho como ele aparece no sistema de arquivos do servidor Firebird (pode ser diferente do caminho visto pelo cliente se o Firebird for remoto).
 
 ---

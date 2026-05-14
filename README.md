@@ -86,7 +86,8 @@ npm install
 │       ├── movimentacaoCaixas.js
 │       ├── distribuicao.js
 │       ├── auth.js            # Login JWT + /me
-│       └── userEmpresas.js    # CRUD de empresas por usuário
+│       ├── userEmpresas.js    # CRUD de empresas por usuário
+│       └── tabelas.js         # CRUD genérico + endpoints de pedidos para web frontend (/api/)
 │
 ├── src/client/
 │   ├── index.js               # Loop principal de sync
@@ -172,6 +173,12 @@ Na primeira inicialização, o servidor cria automaticamente as seguintes tabela
 | `usuarios` | Usuários da API web (login JWT) |
 | `usuarios_empresas` | Relação N:N usuário ↔ empresa |
 
+Cada schema de empresa provisionado via `create-empresa.js` recebe também:
+
+| Tabela | Descrição |
+|---|---|
+| `sync_filiais` | Rastreamento das filiais conectadas: `id_loja`, `nome`, `ultimo_sync` — atualizado a cada ciclo de pull/push |
+
 ### 4. Criar a primeira empresa
 
 Cada empresa (grupo de filiais) precisa de um **schema** próprio no PostgreSQL e um **token** de autenticação para os clientes.
@@ -234,8 +241,11 @@ O cliente lê as seguintes configurações da tabela `PARAMETROS` do banco Fireb
 | ID | Exemplo de valor | Descrição |
 |---|---|---|
 | `60024` | `http://192.168.1.100:8080` | URL base do servidor (sem barra no final) |
-| `50003` | `1` | Número da loja (`idLoja`) |
+| `50003` | `1` | Número da loja (`idLoja`) — **deve ser único por filial dentro da empresa** |
 | `50004` | `1` | Número do PDV (`idPDV`) — opcional |
+| `50005` | `Loja Centro` | Nome desta filial — gravado pelo wizard ou manualmente; identifica a filial em `sync_filiais` no servidor |
+
+> **Atenção:** o parâmetro `50005` é essencial para que o servidor identifique corretamente cada filial na tabela `sync_filiais`. Se duas filiais usarem o mesmo `idLoja` (parâmetro `50003`), os dados se sobrescreverão. Verifique os valores em cada banco Firebird antes de colocar uma nova filial em produção.
 
 ### 3. Iniciar o cliente
 
@@ -389,6 +399,43 @@ O schema deve ter apenas letras minúsculas, números e underscore, e começar c
 
 ---
 
+## API Web Frontend (`/api/`)
+
+Rotas usadas pela interface **SiriusWebFrontend** para CRUD genérico e consulta de pedidos. Requerem `Authorization: Bearer <jwt>` (mesmo JWT do `/auth/login`). O schema da empresa é parte do path — o usuário só acessa schemas vinculados à sua conta.
+
+### CRUD genérico de tabelas
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/tabelas/:tabela/colunas` | Introspecção de colunas (nome, tipo, is_generated) |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | Próximo valor de PK disponível (`?pk=COLUNA`) |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro único por PK (`?pk=COL&value=VAL`) |
+| GET | `/api/:schema/tabelas/:tabela` | Listagem paginada com busca e filtro de status |
+| POST | `/api/:schema/tabelas/:tabela` | Upsert — body: `{ pk, registro }` (pk pode ser array para PK composta) |
+| DELETE | `/api/:schema/tabelas/:tabela` | Deleção por PK — body: `{ pk, pkValores }` |
+
+Parâmetros de listagem (`GET`):
+
+| Parâmetro | Descrição |
+|---|---|
+| `page`, `pageSize` | Paginação (pageSize máx. 500) |
+| `q` | Busca textual |
+| `cols` | Colunas onde buscar, separadas por vírgula (padrão: primeiras 8 colunas texto) |
+| `statusCol`, `statusVal` | Filtro de status (`statusVal` aceita apenas `A` ou `I`) |
+
+O upsert incrementa automaticamente `ID_ULTIMA_ATUALIZACAO_MATRIZ` via `seq_atualizacao_matriz` quando a coluna existe na tabela, garantindo que a alteração seja propagada para as filiais no próximo pull.
+
+### Endpoints de pedidos
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado (soma `VALOR_UNITARIO × QUANTIDADE`); suporta `?q=` e `?status=` |
+| GET | `/api/:schema/pedidos-completo` | JOIN flat das 3 tabelas de pedido (PEDIDOS + PEDIDOS_ITENS + PEDIDOS_PARCELAS_PAGAMENTOS + PRODUTOS); colunas ausentes no banco são ignoradas silenciosamente |
+| GET | `/api/:schema/pedidos/:id/itens` | Itens de um pedido com JOIN em PRODUTOS (resolve `DESCRICAO`, `UNIDADE`, `VALOR_TOTAL_ITEM`) |
+| GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas de pagamento de um pedido (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
+---
+
 ## Interface Web da Filial
 
 Após iniciar o cliente, acesse `http://localhost:3001` no navegador da filial.
@@ -456,10 +503,13 @@ A cada ciclo, para cada tabela ativa:
    | Sem alteração local pendente | Upsert normal no Firebird, atualiza cursor |
    | Pendente + registro **nunca recebido do servidor** | **Colisão de PK** → renomeia PK local (MAX+1 para numérico, `val_1` para texto), aplica registro do servidor |
    | Pendente + registro **já recebido anteriormente** | **Conflito de conteúdo** → salva em `conflitos.json`, avança cursor sem upsert |
+   | **Echo de push** (registro enviado por esta filial neste ciclo) | Avança cursor sem re-aplicar upsert — o dado já está correto localmente |
 
 3. Busca registros deletados (`REGISTROS_DELETADOS`) e remove do Firebird local
 
 > Os triggers do Firebird são desabilitados durante o pull via `RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1')` para evitar que registros vindos do servidor gerem novas entradas em `SYNC_ALTERACOES_PENDENTES`.
+
+> **Echo registry:** quando o servidor retorna um registro cujo `ID_ULTIMA_ATUALIZACAO_MATRIZ` foi registrado como echo no push anterior (mesma filial, mesmo ciclo), o pull avança o cursor sem re-escrever o dado no Firebird. Isso evita uma escrita desnecessária por registro por ciclo.
 
 ### Push (Filial → Servidor)
 
@@ -468,9 +518,10 @@ A cada ciclo, para cada tabela ativa:
 1. Lê todos os registros de `SYNC_ALTERACOES_PENDENTES` para a tabela
 2. Para cada pendente:
    - Busca o dado completo no Firebird
-   - Envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida do servidor
+   - Se o registro **não existe mais localmente** (foi deletado): envia `{ deletar: true }` ao servidor. O servidor deleta o registro e insere em `REGISTROS_DELETADOS`, propagando a deleção para as demais filiais no próximo pull
+   - Se existe: envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida do servidor
 3. O servidor verifica se houve alteração no servidor desde `ultimaVersaoConhecida`:
-   - **Sem conflito** → aplica o upsert e retorna `{ ok: true }`
+   - **Sem conflito** → aplica o upsert e retorna `{ ok: true, idAtualizacaoMatriz: N }`; o cliente registra `N` como echo
    - **Com conflito** → retorna `{ conflito: true, versaoServidor: {...} }` e o cliente salva em `conflitos.json`
 4. Registros enviados com sucesso são removidos de `SYNC_ALTERACOES_PENDENTES`
 

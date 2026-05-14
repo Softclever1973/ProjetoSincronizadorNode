@@ -10,15 +10,59 @@ async function generatorExiste(db, nome) {
   return (rows[0].CNT || 0) > 0;
 }
 
+async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFiltro = null) {
+  const lista = tabelasFiltro && tabelasFiltro.length > 0
+    ? TABELAS.filter(t => tabelasFiltro.includes(t.nome))
+    : TABELAS;
+  const total = lista.length;
+  let totalEnfileirados = 0;
+
+  for (let i = 0; i < total; i++) {
+    const tabela = lista[i];
+    let enfileiradosNaTabela = 0;
+
+    if (!(await tabelaExiste(db, tabela.nome))) {
+      log(`[SETUP] Tabela ${tabela.nome} não existe — pulando enfileiramento`);
+    } else {
+      const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
+      const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
+      try {
+        await execute(db,
+          `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+           SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP FROM ${tabela.nome}`
+        );
+        const cnt = await query(db,
+          `SELECT COUNT(*) AS CNT FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
+          [tabela.nome]
+        );
+        enfileiradosNaTabela = Number(cnt[0]?.CNT || 0);
+        if (enfileiradosNaTabela > 0) {
+          log(`[SETUP] ${tabela.nome}: ${enfileiradosNaTabela} registro(s) enfileirado(s)`);
+          totalEnfileirados += enfileiradosNaTabela;
+        }
+      } catch (e) {
+        log(`[SETUP] Aviso: não foi possível enfileirar ${tabela.nome}: ${e.message}`);
+      }
+    }
+
+    if (onProgresso) {
+      onProgresso({ processadas: i + 1, total, tabela: tabela.nome, enfileiradosNaTabela, totalEnfileirados, porcentagem: Math.round(((i + 1) / total) * 100) });
+    }
+  }
+
+  log(`[SETUP] Total enfileirado para envio: ${totalEnfileirados} registro(s)`);
+  return totalEnfileirados;
+}
+
 /**
- * Cria a infraestrutura de sync bidirecional no banco da filial:
- *   - SYNC_ALTERACOES_PENDENTES: registros modificados localmente aguardando envio
- *   - SYNC_VERSOES_SERVIDOR: última versão conhecida do servidor por registro
- *   - Triggers AFTER INSERT OR UPDATE em cada tabela sincronizada
+ * Cria a infraestrutura de sync bidirecional no banco da filial.
+ * Ao detectar troca de empresa (token diferente do armazenado em SYNC_CONFIG),
+ * limpa todos os pendentes e cursores para que nenhum dado da empresa anterior
+ * seja enviado ao novo servidor. O envio inicial é 100% manual via botão
+ * "Forçar Carga Inicial" em http://localhost:3001/configuracoes.
  */
-async function setup(db, log = console.log) {
+async function setup(db, log = console.log, token = null) {
   // 1. Generator e tabela de cursores de sync (ULTIMOS_REGISTROS_MATRIZ)
-  //    Existiam no banco Delphi pré-existente; criados aqui para instalações novas.
   if (!(await generatorExiste(db, 'NOVO_ULTIMOS_REGISTROS_MATRIZ'))) {
     await execute(db, 'CREATE SEQUENCE NOVO_ULTIMOS_REGISTROS_MATRIZ');
     log('[SETUP] Generator NOVO_ULTIMOS_REGISTROS_MATRIZ criado');
@@ -50,9 +94,19 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_ERROS criada');
   }
 
-  // 3. Tabela de pendentes de envio ao servidor
-  const primeiraInstalacao = !(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'));
-  if (primeiraInstalacao) {
+  // 3. Config interna — armazena o token para detectar troca de empresa
+  if (!(await tabelaExiste(db, 'SYNC_CONFIG'))) {
+    await execute(db, `
+      CREATE TABLE SYNC_CONFIG (
+        CHAVE VARCHAR(50)  NOT NULL PRIMARY KEY,
+        VALOR VARCHAR(500)
+      )
+    `);
+    log('[SETUP] Tabela SYNC_CONFIG criada');
+  }
+
+  // 4. Tabela de pendentes de envio ao servidor
+  if (!(await tabelaExiste(db, 'SYNC_ALTERACOES_PENDENTES'))) {
     await execute(db, `
       CREATE TABLE SYNC_ALTERACOES_PENDENTES (
         NOME_TABELA         VARCHAR(50)  NOT NULL,
@@ -62,42 +116,9 @@ async function setup(db, log = console.log) {
       )
     `);
     log('[SETUP] Tabela SYNC_ALTERACOES_PENDENTES criada');
-
-    // Enfileira todos os registros existentes para envio inicial ao servidor.
-    // Feito aqui (antes de criar os triggers) para evitar colisão de PK.
-    log('[SETUP] Primeira instalação — enfileirando registros existentes para envio inicial...');
-    let totalEnfileirados = 0;
-    for (const tabela of TABELAS) {
-      if (!(await tabelaExiste(db, tabela.nome))) {
-        log(`[SETUP] Tabela ${tabela.nome} não existe — pulando enfileiramento inicial`);
-        continue;
-      }
-
-      const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
-      const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
-      try {
-        await execute(db,
-          `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
-           SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP FROM ${tabela.nome}`
-        );
-        const cnt = await query(db,
-          `SELECT COUNT(*) AS CNT FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
-          [tabela.nome]
-        );
-        const n = Number(cnt[0]?.CNT || 0);
-        if (n > 0) {
-          log(`[SETUP] ${tabela.nome}: ${n} registro(s) enfileirado(s)`);
-          totalEnfileirados += n;
-        }
-      } catch (e) {
-        log(`[SETUP] Aviso: não foi possível enfileirar ${tabela.nome}: ${e.message}`);
-      }
-    }
-    log(`[SETUP] Total enfileirado para envio inicial: ${totalEnfileirados} registro(s)`);
   }
 
-  // 4. Tabela que rastreia a última versão recebida do servidor por registro
-  //    (usada para detectar conflito na hora do envio)
+  // 5. Tabela que rastreia a última versão recebida do servidor por registro
   if (!(await tabelaExiste(db, 'SYNC_VERSOES_SERVIDOR'))) {
     await execute(db, `
       CREATE TABLE SYNC_VERSOES_SERVIDOR (
@@ -110,7 +131,34 @@ async function setup(db, log = console.log) {
     log('[SETUP] Tabela SYNC_VERSOES_SERVIDOR criada');
   }
 
-  // 5. Triggers em cada tabela para detectar alterações locais
+  // 6. Detecta troca de empresa — ao mudar o token, limpa tudo para que nenhum
+  //    dado da empresa anterior chegue ao novo servidor. O envio inicial fica
+  //    a cargo do operador via botão "Forçar Carga Inicial".
+  if (token) {
+    const configRows = await query(db,
+      `SELECT VALOR FROM SYNC_CONFIG WHERE CHAVE = 'SYNC_TOKEN'`
+    ).catch(() => []);
+    const tokenArmazenado = configRows.length > 0 ? (configRows[0].VALOR || '').trim() : null;
+
+    if (tokenArmazenado !== token) {
+      log('[SETUP] Token alterado — limpando pendentes da empresa anterior...');
+      await execute(db, `DELETE FROM SYNC_ALTERACOES_PENDENTES`).catch(() => {});
+      await execute(db, `DELETE FROM SYNC_VERSOES_SERVIDOR`).catch(() => {});
+      await execute(db,
+        `UPDATE ULTIMOS_REGISTROS_MATRIZ SET ULTIMO_REGISTRO_ATUALIZADO = 0, ULTIMO_REGISTRO_DELETADO = 0`
+      ).catch(() => {});
+      await execute(db, `DELETE FROM SYNC_ERROS`).catch(() => {});
+      try { require('./conflitos').clearConflitos(); } catch {}
+      log('[SETUP] Pendentes limpos. Use "Forçar Carga Inicial" na web UI para enviar os dados.');
+
+      await execute(db,
+        `UPDATE OR INSERT INTO SYNC_CONFIG (CHAVE, VALOR) VALUES ('SYNC_TOKEN', ?) MATCHING (CHAVE)`,
+        [token]
+      ).catch(() => {});
+    }
+  }
+
+  // 7. Triggers em cada tabela para detectar alterações locais
   for (const tabela of TABELAS) {
     if (!(await tabelaExiste(db, tabela.nome))) {
       log(`[SETUP] Tabela ${tabela.nome} não existe — pulando trigger`);
@@ -157,4 +205,4 @@ async function setup(db, log = console.log) {
   log('[SETUP] Infraestrutura de sync bidirecional pronta');
 }
 
-module.exports = { setup };
+module.exports = { setup, enfileirarTodosRegistros };

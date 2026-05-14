@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const authJwt = require('../middleware/authJwt');
-const { withTenantConnection, query, execute } = require('../db');
+const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
 
 const NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
@@ -69,6 +69,7 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
     );
     res.json(rows[0] || null);
   } catch (e) {
+    if (isMissingTableError(e)) return res.json(null);
     res.status(500).json({ erro: e.message });
   }
 });
@@ -135,6 +136,7 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
     });
     res.json(result);
   } catch (e) {
+    if (isMissingTableError(e)) return res.json({ total: 0, registros: [] });
     res.status(500).json({ erro: e.message });
   }
 });

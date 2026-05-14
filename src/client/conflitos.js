@@ -105,6 +105,13 @@ function salvarLoteConflitos(lote) {
   return IDs;
 }
 
+/**
+ * Apaga todos os conflitos (usada na troca de empresa para limpar dados da empresa anterior).
+ */
+function clearConflitos() {
+  try { salvar([]); } catch { /* falha silenciosa */ }
+}
+
 module.exports = {
   salvarConflito,
   atualizarOuSalvarConflito,
@@ -112,5 +119,6 @@ module.exports = {
   listarPendentes,
   resolverConflito,
   lerTodos,
+  clearConflitos,
   emitter,
 };

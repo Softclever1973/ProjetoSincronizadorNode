@@ -476,7 +476,16 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
         if (novoId) await salvarCursor(db, nome, novoId, 0);
       } catch (e) {
-        log(`[${nome}] Erro ao aplicar registro (${pk}=${registro[pk]}): ${e.message}`);
+        const pkValorLog = Array.isArray(pk)
+          ? pk.map(k => `${k}=${registro[k]}`).join(',')
+          : `${pk}=${registro[pk]}`;
+        if (e.message && e.message.includes('FOREIGN KEY')) {
+          log(`[${nome}] FK pendente (${pkValorLog}) — pai ausente na filial, pulando`);
+          const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+          if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
+        } else {
+          log(`[${nome}] Erro ao aplicar registro (${pkValorLog}): ${e.message}`);
+        }
       }
     }
 

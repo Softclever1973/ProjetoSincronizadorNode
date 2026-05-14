@@ -215,7 +215,7 @@ async function main() {
   while (true) {
     try {
       const db = await getConnection();
-      try { await setup(db, log); } finally { await closeConnection(db); }
+      try { await setup(db, log, process.env.SYNC_TOKEN); } finally { await closeConnection(db); }
       break;
     } catch (e) {
       log(`Firebird indisponível: ${e.message} — tentando novamente em 30s...`);

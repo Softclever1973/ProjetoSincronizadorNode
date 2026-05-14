@@ -31,6 +31,7 @@ const TABELAS = [
   { nome: 'AUX_GENERICA',                    pk: ['SUB_TABELA', 'ID_SUB_TABELA'],    temDelete: false, filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
   { nome: 'AUX_PAISES_BACEN',                pk: 'ID_AUX_PAIS_BACEN',                temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
   { nome: 'AUX_PARCELAS_PAGAMENTOS',         pk: 'ID_AUX_PARCELA_PAGAMENTO',         temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
+  { nome: 'FORMAS_DE_PAGAMENTOS',           pk: 'ID_FORMA_DE_PAGAMENTO',            temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
   { nome: 'AUX_SITUACOES_TRIBUTARIAS',       pk: 'ID_SITUACAO_TRIBUTARIA',           temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
   { nome: 'AUX_SUB_GRUPOS',                  pk: 'ID_AUX_SUB_GRUPO',                 temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
   { nome: 'AUX_MOEDAS',                      pk: 'SIGLA_MOEDA',                      temDelete: true,  filtroFilial: null, grupo: 'Auxiliares',      generator: null,                            colunaData: null },
@@ -82,7 +83,7 @@ const TABELAS = [
 
   // --- Pedidos ---
   // colunaData: 'DATA_HORA' — coluna timestamp do pedido. Ajuste se o nome diferir no seu banco.
-  { nome: 'PEDIDOS',                     pk: 'ID_PEDIDO',                       temDelete: true,  filtroFilial: 'ID_LOJA', grupo: 'Pedidos', generator: 'NOVO_PEDIDO',      colunaData: 'DATA_HORA' },
+  { nome: 'PEDIDOS',                     pk: 'ID_PEDIDO',                       temDelete: true,  filtroFilial: null,      grupo: 'Pedidos', generator: 'NOVO_PEDIDO',      colunaData: 'DATA_HORA' },
   { nome: 'PEDIDOS_ITENS',               pk: 'ID_PEDIDO_ITEM',                  temDelete: true,  filtroFilial: null,      grupo: 'Pedidos', generator: 'NOVO_PEDIDO_ITEM', colunaData: null },
   { nome: 'PEDIDOS_PARCELAS_PAGAMENTOS', pk: ['ID_PEDIDO', 'PARCELA'],          temDelete: false, filtroFilial: null,      grupo: 'Pedidos', generator: null,               colunaData: null },
 

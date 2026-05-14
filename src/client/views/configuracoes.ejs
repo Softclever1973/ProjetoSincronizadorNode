@@ -15,9 +15,41 @@
   &nbsp;<strong style="color:#333"><%= totalAtivas %>/<%= totalTabelas %></strong> ativas.
 </p>
 
-<div style="margin-bottom:20px;display:flex;gap:8px">
+<div style="margin-bottom:12px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <button onclick="toggleTodos(true)"  style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Ativar todas</button>
   <button onclick="toggleTodos(false)" style="padding:7px 16px;background:#e74c3c;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Desativar todas</button>
+  <span style="color:#ddd">|</span>
+  <button id="btn-carga-inicial" onclick="abrirModalCarga()" style="padding:7px 16px;background:#e67e22;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px">Forçar Carga Inicial</button>
+  <span style="font-size:12px;color:#888">Use ao conectar em uma nova empresa para enviar todos os dados ao servidor.</span>
+</div>
+
+<div id="painel-carga" style="display:none;margin-bottom:20px;padding:16px;background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span id="carga-tabela" style="font-size:13px;color:#555;font-family:monospace">Preparando...</span>
+    <span id="carga-pct" style="font-size:14px;font-weight:bold;color:#e67e22">0%</span>
+  </div>
+  <div style="background:#eee;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px">
+    <div id="carga-barra" style="height:100%;width:0%;background:#e67e22;transition:width 0.25s ease;border-radius:4px"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:#888">
+    <span id="carga-contador">0 / 0 tabelas</span>
+    <span id="carga-tempo">calculando...</span>
+  </div>
+  <div id="carga-resultado" style="display:none;margin-top:12px;padding:10px;border-radius:4px;font-size:13px"></div>
+</div>
+
+<div id="painel-envio" style="display:none;margin-bottom:20px;padding:16px;background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12)">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+    <span style="font-size:13px;font-weight:bold;color:#555">Enviando ao servidor...</span>
+    <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
+  </div>
+  <div style="background:#eee;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px">
+    <div id="envio-barra" style="height:100%;width:0%;background:#2980b9;transition:width 0.5s ease;border-radius:4px"></div>
+  </div>
+  <div style="display:flex;justify-content:space-between;font-size:12px;color:#888">
+    <span id="envio-contador">0 enviados de 0</span>
+    <span id="envio-tempo"></span>
+  </div>
 </div>
 
 <% for (const [grupo, tabelas] of Object.entries(grupos)) { %>
@@ -64,7 +96,147 @@
   </div>
 <% } %>
 
+<!-- Modal Forçar Carga Inicial -->
+<div id="modal-carga" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:1000;overflow-y:auto;padding:24px 16px">
+  <div style="background:white;border-radius:10px;max-width:580px;margin:0 auto;box-shadow:0 8px 32px rgba(0,0,0,.3)">
+    <div style="padding:18px 24px 14px;border-bottom:1px solid #eee;display:flex;justify-content:space-between;align-items:center">
+      <h3 style="margin:0;font-size:16px;color:#333">Forçar Carga Inicial</h3>
+      <button onclick="fecharModalCarga()" style="background:none;border:none;font-size:22px;cursor:pointer;color:#999;line-height:1">×</button>
+    </div>
+    <div style="padding:16px 24px">
+      <p style="font-size:13px;color:#555;margin:0 0 14px">Selecione as tabelas para re-enfileirar. Os cursores e pendentes dessas tabelas serão resetados e os dados enviados ao servidor nos próximos ciclos.</p>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button onclick="marcarTodas(true)"  style="font-size:12px;padding:4px 12px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;cursor:pointer">Marcar todas</button>
+        <button onclick="marcarTodas(false)" style="font-size:12px;padding:4px 12px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;cursor:pointer">Desmarcar todas</button>
+      </div>
+      <div id="carga-lista" style="max-height:340px;overflow-y:auto;border:1px solid #eee;border-radius:6px"></div>
+    </div>
+    <div style="padding:12px 24px 20px;display:flex;justify-content:flex-end;gap:8px;border-top:1px solid #eee">
+      <button onclick="fecharModalCarga()" style="padding:8px 20px;background:#f5f5f5;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:13px">Cancelar</button>
+      <button onclick="confirmarCargaInicial()" style="padding:8px 20px;background:#e67e22;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:bold">Iniciar Carga</button>
+    </div>
+  </div>
+</div>
+
 <script>
+  var GRUPOS_TABELAS = <%- JSON.stringify(
+    Object.entries(grupos).map(function([g, ts]) {
+      return {
+        grupo: g,
+        tabelas: ts.map(function(t) {
+          return {
+            nome: t.nome,
+            existe: existentes.includes(t.nome),
+            ativo: existentes.includes(t.nome) && config[t.nome] === true
+          };
+        })
+      };
+    })
+  ) %>;
+
+  function abrirModalCarga() {
+    var lista = document.getElementById('carga-lista');
+    lista.innerHTML = GRUPOS_TABELAS.map(function(g) {
+      var linhas = g.tabelas.map(function(t) {
+        var bloqueada = !t.existe;
+        return '<label style="display:flex;align-items:center;padding:7px 14px;gap:10px;cursor:' + (bloqueada ? 'default' : 'pointer') + ';' + (bloqueada ? 'opacity:.4;' : '') + '">' +
+          '<input type="checkbox" name="carga-tabela" value="' + t.nome + '"' + (t.ativo ? ' checked' : '') + (bloqueada ? ' disabled' : '') + '>' +
+          '<span style="font-family:monospace;font-size:12px;flex:1">' + t.nome + '</span>' +
+          (bloqueada ? '<span style="font-size:11px;color:#aaa">não encontrada</span>' : '') +
+          '</label>';
+      }).join('');
+      return '<div style="padding:8px 14px 4px;font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#aaa;font-weight:bold;background:#fafafa;border-bottom:1px solid #f0f0f0">' + g.grupo + '</div>' + linhas;
+    }).join('');
+    document.getElementById('modal-carga').style.display = 'block';
+  }
+
+  function fecharModalCarga() {
+    document.getElementById('modal-carga').style.display = 'none';
+  }
+
+  function marcarTodas(val) {
+    document.querySelectorAll('#carga-lista input[type="checkbox"]:not([disabled])').forEach(function(cb) { cb.checked = val; });
+  }
+
+  async function confirmarCargaInicial() {
+    var selecionadas = Array.from(document.querySelectorAll('#carga-lista input[type="checkbox"]:checked')).map(function(cb) { return cb.value; });
+    if (!selecionadas.length) { alert('Selecione ao menos uma tabela.'); return; }
+    fecharModalCarga();
+
+    var btn      = document.getElementById('btn-carga-inicial');
+    var painel   = document.getElementById('painel-carga');
+    var barra    = document.getElementById('carga-barra');
+    var pct      = document.getElementById('carga-pct');
+    var tabela   = document.getElementById('carga-tabela');
+    var contador = document.getElementById('carga-contador');
+    var tempo    = document.getElementById('carga-tempo');
+    var resultado = document.getElementById('carga-resultado');
+
+    btn.disabled = true;
+    btn.textContent = 'Processando...';
+    painel.style.display = 'block';
+    resultado.style.display = 'none';
+    barra.style.width = '0%';
+    pct.textContent = '0%';
+    tempo.textContent = 'calculando...';
+
+    try {
+      var response = await fetch('/configuracoes/carga-inicial', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tabelas: selecionadas })
+      });
+      var reader   = response.body.getReader();
+      var decoder  = new TextDecoder();
+      var buffer   = '';
+
+      while (true) {
+        var chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder.decode(chunk.value, { stream: true });
+
+        var partes = buffer.split('\n\n');
+        buffer = partes.pop();
+
+        for (var i = 0; i < partes.length; i++) {
+          var linhas = partes[i].split('\n');
+          var tipo = '', dadosStr = '';
+          for (var j = 0; j < linhas.length; j++) {
+            if (linhas[j].startsWith('event: ')) tipo = linhas[j].slice(7).trim();
+            if (linhas[j].startsWith('data: '))  dadosStr = linhas[j].slice(6).trim();
+          }
+          if (!dadosStr) continue;
+          var dados = JSON.parse(dadosStr);
+
+          if (tipo === 'progresso') {
+            barra.style.width = dados.porcentagem + '%';
+            pct.textContent   = dados.porcentagem + '%';
+            tabela.textContent = dados.tabela + (dados.enfileiradosNaTabela > 0 ? ' (' + dados.enfileiradosNaTabela + ' registros)' : '');
+            contador.textContent = dados.processadas + ' / ' + dados.total + ' tabelas — ' + dados.totalEnfileirados + ' registros enfileirados';
+            tempo.textContent  = formatarTempo(dados.restanteSegundos);
+          } else if (tipo === 'concluido') {
+            barra.style.width = '100%';
+            pct.textContent   = '100%';
+            tabela.textContent = 'Concluído';
+            tempo.textContent  = 'Finalizado em ' + dados.duracaoSegundos + 's';
+            resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#d4edda;color:#155724';
+            resultado.textContent = dados.totalEnfileirados + ' registro(s) enfileirados para envio. Os dados serão sincronizados nos próximos ciclos.';
+            if (dados.totalEnfileirados > 0) iniciarPollingEnvio();
+          } else if (tipo === 'erro') {
+            resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#f8d7da;color:#721c24';
+            resultado.textContent = 'Erro: ' + dados.message;
+          }
+        }
+      }
+    } catch(e) {
+      resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#f8d7da;color:#721c24';
+      resultado.textContent = 'Erro de rede: ' + e.message;
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Forçar Carga Inicial';
+    }
+  }
+
   async function toggleTabela(tabela, ativo) {
     var el = document.getElementById('status-' + tabela);
     if (el) el.innerHTML = '<span style="color:#888">Salvando...</span>';
@@ -85,6 +257,48 @@
     } catch(e) {
       if (el) el.innerHTML = '<span style="color:#e74c3c">Erro de rede</span>';
     }
+  }
+
+  function formatarTempo(seg) {
+    if (seg === null || seg === undefined) return 'calculando...';
+    if (seg < 1) return 'menos de 1s';
+    if (seg < 60) return seg + 's restantes';
+    var m = Math.floor(seg / 60), s = seg % 60;
+    return m + 'min ' + (s > 0 ? s + 's ' : '') + 'restantes';
+  }
+
+  function iniciarPollingEnvio() {
+    var painel   = document.getElementById('painel-envio');
+    var barra    = document.getElementById('envio-barra');
+    var pct      = document.getElementById('envio-pct');
+    var contador = document.getElementById('envio-contador');
+    var tempo    = document.getElementById('envio-tempo');
+    painel.style.display = 'block';
+
+    var timer = setInterval(async function() {
+      try {
+        var r = await fetch('/api/carga-inicial/progresso');
+        var d = await r.json();
+        if (!d.ativo) {
+          barra.style.width = '100%';
+          pct.textContent   = '100%';
+          contador.textContent = 'Todos enviados!';
+          tempo.textContent = 'Concluído em ' + (d.decorrido || '') + 's';
+          clearInterval(timer);
+          return;
+        }
+        barra.style.width   = d.porcentagem + '%';
+        pct.textContent     = d.porcentagem + '%';
+        contador.textContent = d.enviados + ' enviados de ' + d.total + ' (' + d.pendentes + ' aguardando)';
+        var restante = d.decorrido > 0 && d.enviados > 0
+          ? Math.round((d.decorrido / d.enviados) * (d.total - d.enviados))
+          : null;
+        tempo.textContent = formatarTempo(restante);
+        if (d.porcentagem >= 100) clearInterval(timer);
+      } catch(e) {
+        clearInterval(timer);
+      }
+    }, 3000);
   }
 
   async function toggleTodos(ativo) {

@@ -52,7 +52,13 @@ Documento de referência descrevendo todas as funcionalidades implementadas no s
 - Sobrescreve `PRECO_VENDA` com o preço específico da filial consultado em `PRODUTOS_PRECOS_LOJAS`
 - Ativado nas tabelas com `endpoint` customizado em `tabelas.js`
 
-### 2.4 Supressão de Triggers durante Pull
+### 2.5 Echo Registry — Supressão de Re-pull de Registros Recém-Enviados
+- Após cada push bem-sucedido, o servidor retorna o `ID_ULTIMA_ATUALIZACAO_MATRIZ` que foi atribuído ao registro pelo trigger PostgreSQL
+- O cliente armazena esse valor como echo em memória (`src/client/echos.js`), associado a `(tabela, pkValor, idServidor)`
+- Durante o pull seguinte, se um registro recebido corresponder a um echo registrado, o cliente avança o cursor e atualiza `SYNC_VERSOES_SERVIDOR` **sem re-aplicar o upsert** no Firebird
+- Evita uma escrita desnecessária no banco local por registro por ciclo, sem risco para pushes concorrentes de outras filiais (que não terão o echo)
+
+### 2.6 Supressão de Triggers durante Pull
 - Antes de cada lote de upserts, executa:
   ```sql
   EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END
@@ -72,15 +78,23 @@ Documento de referência descrevendo todas as funcionalidades implementadas no s
 
 ### 3.1 Envio de Alterações Locais
 - Lê `SYNC_ALTERACOES_PENDENTES` para cada tabela ativa
-- Para cada registro pendente: busca o dado completo localmente e envia via `POST /ReceberRegistro`
-- Inclui `ultimaVersaoConhecida` (de `SYNC_VERSOES_SERVIDOR`) para detecção de conflito no servidor
-- Remove da fila após envio bem-sucedido
+- Para cada registro pendente:
+  - Busca o dado completo localmente
+  - Se o registro **não existe mais no Firebird** (foi deletado localmente): envia `{ deletar: true }` ao servidor (ver §3.4)
+  - Se existe: envia via `POST /ReceberRegistro` com `ultimaVersaoConhecida` (de `SYNC_VERSOES_SERVIDOR`) para detecção de conflito
+  - Resposta com sucesso inclui `idAtualizacaoMatriz` — registrado como echo para o pull (ver §2.5)
+- Remove da fila após envio bem-sucedido ou após envio de deleção
 
 ### 3.2 Detecção de Conflito no Servidor
 - O servidor retorna `{ conflito: true, versaoServidor: {...} }` quando a versão no servidor é mais nova que `ultimaVersaoConhecida`
 - O cliente registra o conflito via `atualizarOuSalvarConflito()` e remove o registro da fila de pendentes (evita re-envios em loop)
 
-### 3.3 Forçar Envio (Resolução de Conflito)
+### 3.4 Propagação de Deleção Local
+- Quando um registro está em `SYNC_ALTERACOES_PENDENTES` mas não é encontrado no banco Firebird local (deletado após ter sido enfileirado), o push envia `{ deletar: true }` ao servidor
+- O servidor executa `DELETE` na linha correspondente e insere em `REGISTROS_DELETADOS`, propagando a deleção para as demais filiais no próximo pull
+- Garante consistência bidirecional: deleções locais são refletidas no servidor e nas demais filiais
+
+### 3.5 Forçar Envio (Resolução de Conflito)
 - Push com `forcar: true` bypassa a verificação de versão no servidor
 - Usado pela Web UI quando o usuário escolhe "manter versão local" na resolução de conflito
 
@@ -156,6 +170,30 @@ Todos os endpoints requerem `?token=<SYNC_TOKEN>`. URL base: `/datasnap/rest/`.
 | GET | `/QuantidadeDeRegistros` | Contagem total com JOIN |
 | POST | `/acceptAlterarStatus` | Atualiza status de distribuição |
 
+### 5.6 API Web Frontend (`/api/`) (`routes/tabelas.js`)
+
+Rotas para a interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <jwt>` (mesmo JWT do `/auth/login`). O schema da empresa é parte do path.
+
+**CRUD genérico de tabelas:**
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | `/api/:schema/tabelas/:tabela/colunas` | Introspecção de colunas (nome, tipo, is_generated) |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | Próximo valor de PK disponível (`?pk=COLUNA`) |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro único por PK (`?pk=COL&value=VAL`) |
+| GET | `/api/:schema/tabelas/:tabela` | Listagem paginada com busca textual e filtro de status |
+| POST | `/api/:schema/tabelas/:tabela` | Upsert — body `{ pk, registro }`; suporta PK composta (array); incrementa `seq_atualizacao_matriz` automaticamente |
+| DELETE | `/api/:schema/tabelas/:tabela` | Deleção por PK — body `{ pk, pkValores }` |
+
+**Endpoints de pedidos:**
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado; suporta `?q=` e `?status=` |
+| GET | `/api/:schema/pedidos-completo` | JOIN flat PEDIDOS + PEDIDOS_ITENS + PRODUTOS + PEDIDOS_PARCELAS_PAGAMENTOS; colunas ausentes ignoradas silenciosamente |
+| GET | `/api/:schema/pedidos/:id/itens` | Itens com JOIN em PRODUTOS (resolve descrição, unidade, valor total do item) |
+| GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas de pagamento (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
 ---
 
 ## 6. Web UI da Filial (`http://localhost:3001`)
@@ -196,10 +234,10 @@ Interface Express + EJS acessível em tempo real durante a execução do cliente
 ## 7. Modo em Segundo Plano e Bandeja do Sistema (`client.exe`)
 
 ### 7.1 Modo Background
-- Ao fechar a janela do CMD, o processo captura `SIGHUP` e se relança com `SINCRONIZADOR_BG=1` e `windowsHide: true`
-- Todos os logs (`console.log` / `console.error`) passam a ser gravados em `client.log` (máx. 5 MB; truncado ao exceder)
+- Iniciado explicitamente com `client.exe --background` (mecanismo primário — funciona tanto em desenvolvimento quanto em produção empacotada)
+- Quando empacotado (`client.exe`) e o usuário fecha a janela do CMD, o processo captura `SIGHUP` e se relança automaticamente com `SINCRONIZADOR_BG=1` e `windowsHide: true` (mecanismo secundário, apenas no executável)
+- Em ambos os casos: todos os logs (`console.log` / `console.error`) passam a ser gravados em `client.log` (máx. 5 MB; truncado ao exceder)
 - O processo continua rodando sem janela visível
-- Também pode ser iniciado diretamente com `client.exe --background`
 
 ### 7.2 Ícone na Bandeja do Sistema (`tray.js`)
 - Disponível apenas quando empacotado como `client.exe` (usa `systray2`)

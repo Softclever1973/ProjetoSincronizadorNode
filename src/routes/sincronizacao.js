@@ -111,51 +111,19 @@ const COLUNAS_IGNORADAS_SERVIDOR = new Set([
   'ID_ULTIMA_ATUALIZACAO_WEB',
 ]);
 
-// Tabelas permitidas para sincronização — equivalente ao case/AnsiIndexStr do Delphi
-const TABELAS_PERMITIDAS = new Set([
-  'AUX_CLASSIFICACOES_FISCAIS',
-  'AUX_CODIFICACAO_GRUPOS',
-  'AUX_ESPECIES_EMBALAGENS',
-  'AUX_GENERICA',
-  'AUX_PAISES_BACEN',
-  'AUX_PARCELAS_PAGAMENTOS',
-  'AUX_SITUACOES_TRIBUTARIAS',
-  'AUX_SUB_GRUPOS',
-  'CENTROS_DE_CUSTO',
-  'CLASSIFICACOES',
-  'CLIENTES',
-  'CLIENTES_X_ENTREGA',
-  'CODIGOS_REGIMES_TRIBUTARIOS',
-  'CONTAS',
-  'DEPARTAMENTOS',
-  'ENDERECOS_DE_RETIRADA',
-  'FORMAS_DE_PAGAMENTOS_SISPAG',
-  'FORN_CONTATOS_ADICIONAIS',
-  'FORNECEDORES',
-  'LISTA_PRECOS',
-  'PRODUTOS',
-  'PRODUTOS_GRADES',
-  'PRODUTOS_X_LISTA',
-  'REPRESENTANTES',
-  'SUPERVISORES',
-  'TIPOS_PRODUTOS',
-  'TRANSP_CONTATOS_ADICIONAIS',
-  'TRANSPORTADORES',
-  'TRANSPORTADORES_PLACAS',
-  'UNIDADES',
-  'VENDEDORES',
-  'SYNC_4M_PRODUTOS',
-  'SYNC_4M_PROD_CANAIS',
-  'SYNC_4M_PROD_IMGS',
-  'SYNC_4M_PROMOCOES',
-  'AUX_MOEDAS',
-  'KITS_PRODUTOS',
-  'KITS_ITENS_PROD',
-  'KITS_ITENS_SUB_PROD',
-  'PEDIDOS',
-  'PEDIDOS_ITENS',
-  'PEDIDOS_PARCELAS_PAGAMENTOS',
+// Tabelas internas do servidor que nunca devem ser lidas ou escritas pela filial
+const TABELAS_INTERNAS = new Set([
+  'REGISTROS_DELETADOS',
+  'FILIAIS_BLOQUEADAS',
+  'SYNC_FILIAIS',
 ]);
+
+// Valida nome de tabela: sem SQL injection e não é tabela interna do servidor
+function validarNomeTabela(nomeTabela) {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nomeTabela)) return false;
+  if (TABELAS_INTERNAS.has(nomeTabela)) return false;
+  return true;
+}
 
 /**
  * GET /datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar
@@ -182,7 +150,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     });
   }
 
-  if (!TABELAS_PERMITIDAS.has(nomeTabela)) {
+  if (!validarNomeTabela(nomeTabela)) {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não é permitida para sincronização` });
   }
 
@@ -252,6 +220,10 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
     });
   }
 
+  if (!validarNomeTabela(nomeTabela)) {
+    return res.status(400).json({ message: `Tabela '${nomeTabela}' não é permitida para sincronização` });
+  }
+
   try {
     const rows = await withTenantConnection(req.schemaName, (db) =>
       query(
@@ -284,9 +256,17 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
 router.get('/StatusTabelas', auth, async (req, res) => {
   try {
     const resultado = await withTenantConnection(req.schemaName, async (db) => {
-      const tabelas = [...TABELAS_PERMITIDAS];
-      const status = [];
+      const tabelasRows = await query(db,
+        `SELECT table_name FROM information_schema.tables
+         WHERE table_schema = lower($1) AND table_type = 'BASE TABLE'
+         ORDER BY table_name`,
+        [req.schemaName]
+      );
+      const tabelas = tabelasRows
+        .map(r => r.TABLE_NAME.trim().toUpperCase())
+        .filter(t => !TABELAS_INTERNAS.has(t));
 
+      const status = [];
       for (const tabela of tabelas) {
         try {
           const rows = await query(db,
@@ -299,7 +279,7 @@ router.get('/StatusTabelas', auth, async (req, res) => {
             maxId: rows[0].MAX_ID || 0,
           });
         } catch {
-          // Tabela pode não existir no banco do servidor
+          // Tabela pode não ter a coluna ID_ULTIMA_ATUALIZACAO_MATRIZ ou outro erro
           status.push({ tabela, total: null, maxId: null, erro: true });
         }
       }
@@ -329,7 +309,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
   if (!nomeTabela || !pk) {
     return res.status(400).json({ message: 'nomeTabela e pk são obrigatórios' });
   }
-  if (!TABELAS_PERMITIDAS.has(nomeTabela)) {
+  if (!validarNomeTabela(nomeTabela)) {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
   }
 
@@ -378,7 +358,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
   }
 
   const nomeTabela = tabela.toUpperCase().trim();
-  if (!TABELAS_PERMITIDAS.has(nomeTabela)) {
+  if (!validarNomeTabela(nomeTabela)) {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
   }
 
