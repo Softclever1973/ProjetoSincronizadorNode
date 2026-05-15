@@ -2,7 +2,6 @@ const readline = require('readline');
 const fs       = require('fs');
 const path     = require('path');
 const Firebird = require('node-firebird');
-
 async function pergunta(rl, texto) {
   return new Promise(resolve => rl.question(texto, answer => resolve(answer.trim())));
 }
@@ -31,6 +30,30 @@ function habilitarCtrlV() {
     }
     return _emit(event, ...args);
   };
+}
+
+function httpGetJson(url, timeoutMs = 10000) {
+  return new Promise((resolve, reject) => {
+    const lib = url.startsWith('https') ? require('https') : require('http');
+    const req = lib.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve(JSON.parse(data)); } catch { resolve([]); }
+        } else {
+          reject(new Error(`HTTP ${res.statusCode}`));
+        }
+      });
+    });
+    req.setTimeout(timeoutMs, () => { req.destroy(); reject(new Error('Timeout')); });
+    req.on('error', reject);
+  });
+}
+
+async function buscarFiliaisServidor(serverUrl, syncToken) {
+  const url = `${serverUrl}/datasnap/rest/TSMSincronizacao/FiliaisRegistradas?token=${encodeURIComponent(syncToken)}`;
+  return await httpGetJson(url);
 }
 
 function lerParametro(connOpts, idParametro) {
@@ -106,6 +129,28 @@ async function runSetupWizard(envPath) {
     }
     serverUrl = serverUrl.replace(/\/+$/, '');
 
+    let filiaisServidor = [];
+    while (true) {
+      process.stdout.write('\n  Verificando conexao com o servidor...');
+      try {
+        filiaisServidor = await buscarFiliaisServidor(serverUrl, syncToken);
+        console.log(' Conectado com sucesso!');
+        if (filiaisServidor.length > 0) {
+          const lista = filiaisServidor
+            .map(f => `${f.ID_LOJA}${f.NOME ? ` (${f.NOME})` : ''}`)
+            .join(', ');
+          console.log(`  Filiais ja registradas: ${lista}`);
+        } else {
+          console.log('  Nenhuma filial registrada ainda.');
+        }
+        break;
+      } catch (e) {
+        console.log(` Falhou: ${e.message}`);
+        const tentar = await pergunta(rl, '  Tentar novamente? [S/n]: ');
+        if (tentar.toLowerCase() === 'n') break;
+      }
+    }
+
     let fbDatabase = '';
     while (!fbDatabase) {
       fbDatabase = await pergunta(rl, '\nCaminho do banco Firebird\n  ex: C:\\FDBS\\FILIAL.FDB\n> ');
@@ -134,14 +179,23 @@ async function runSetupWizard(envPath) {
     const nomeFilial = nomeFilialRaw.trim();
 
     const connOptsTemp = { host: fbHost, port: parseInt(fbPort, 10), database: fbDatabase, user: fbUser, password: fbPassword };
-    const idLojaAtual = await lerParametro(connOptsTemp, 50003);
-    const idLojaPrompt = idLojaAtual
-      ? `\nID desta loja — atual no Firebird: ${idLojaAtual} (Enter para manter):\n> `
-      : '\nID desta loja (numero inteiro, ex: 1):\n> ';
+    const idLojaFirebird = await lerParametro(connOptsTemp, 50003);
+    const ultimoIdServidor = filiaisServidor.length > 0
+      ? Math.max(...filiaisServidor.map(f => Number(f.ID_LOJA) || 0))
+      : 0;
+
+    // Padrão: Firebird se já configurado, senão próximo disponível no servidor, senão 1
+    const idLojaPadrao = idLojaFirebird || (ultimoIdServidor > 0 ? String(ultimoIdServidor + 1) : '1');
+
+    // Hint: sempre mostra o último do servidor quando disponível
+    const parteServidor = ultimoIdServidor > 0 ? `ultimo no servidor: ${ultimoIdServidor}` : null;
+    const parteFirebird = idLojaFirebird ? `Firebird: ${idLojaFirebird}` : null;
+    const idLojaHint = [parteServidor, parteFirebird].filter(Boolean).join(' | ') || 'padrao';
+
     let idLojaStr = '';
     while (true) {
-      idLojaStr = (await pergunta(rl, idLojaPrompt)).trim();
-      if (!idLojaStr && idLojaAtual) { idLojaStr = String(idLojaAtual); break; }
+      idLojaStr = (await pergunta(rl, `\nID desta loja — ${idLojaHint} (Enter para aceitar ${idLojaPadrao}):\n> `)).trim();
+      if (!idLojaStr) { idLojaStr = idLojaPadrao; break; }
       if (/^\d+$/.test(idLojaStr) && parseInt(idLojaStr, 10) > 0) break;
       console.log('  [!] Informe um numero inteiro positivo.\n');
     }

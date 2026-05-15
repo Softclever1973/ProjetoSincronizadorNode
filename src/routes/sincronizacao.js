@@ -454,4 +454,19 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
   }
 });
 
+/**
+ * GET /datasnap/rest/TSMSincronizacao/FiliaisRegistradas
+ * Retorna filiais que já se conectaram ao servidor (usada pelo wizard do cliente).
+ */
+router.get('/FiliaisRegistradas', auth, async (req, res) => {
+  try {
+    const rows = await withTenantConnection(req.schemaName, db =>
+      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
+    );
+    res.json(rows);
+  } catch {
+    res.json([]);
+  }
+});
+
 module.exports = router;
