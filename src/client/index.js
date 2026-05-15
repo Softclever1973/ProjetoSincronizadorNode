@@ -142,8 +142,8 @@ async function main() {
       const idLoja = parseInt(await getParam(db, 50003), 10);
       const idPDVRaw = await getParam(db, 50004);
       const idPDV = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
-      const nomeFilialParam = await getParam(db, 50005);
-      const nomeFilial = nomeFilialParam || process.env.NOME_FILIAL || '';
+      const nomeFilialFirebird = await getParam(db, 50005);
+      const nomeFilial = process.env.NOME_FILIAL || nomeFilialFirebird || '';
 
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
       for (const tabelaAusente of tabelasAusentes) {
