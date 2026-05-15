@@ -364,7 +364,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
   try {
     await withTenantConnection(req.schemaName, async (db) => {
-      try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
+      try { await registrarFilial(db, idLoja, null); } catch { /* não bloqueia a resposta */ }
 
       if (await isFilialBloqueada(idLoja, db)) {
         res.status(401).send();

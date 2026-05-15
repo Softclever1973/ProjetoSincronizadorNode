@@ -33,6 +33,23 @@ function habilitarCtrlV() {
   };
 }
 
+function lerParametro(connOpts, idParametro) {
+  return new Promise((resolve) => {
+    Firebird.attach(connOpts, (err, db) => {
+      if (err) return resolve(null);
+      db.query(
+        'SELECT PARAMETRO FROM PARAMETROS WHERE ID_PARAMETRO = ?',
+        [idParametro],
+        (err2, rows) => {
+          db.detach(() => {});
+          if (err2 || !rows || !rows.length) return resolve(null);
+          resolve(rows[0].PARAMETRO ?? null);
+        }
+      );
+    });
+  });
+}
+
 function gravarParametro(connOpts, idParametro, valor) {
   return new Promise((resolve) => {
     Firebird.attach(connOpts, (err, db) => {
@@ -116,6 +133,20 @@ async function runSetupWizard(envPath) {
     const nomeFilialRaw = await pergunta(rl, '\nNome desta filial (ex: Loja Centro) [opcional]:\n> ');
     const nomeFilial = nomeFilialRaw.trim();
 
+    const connOptsTemp = { host: fbHost, port: parseInt(fbPort, 10), database: fbDatabase, user: fbUser, password: fbPassword };
+    const idLojaAtual = await lerParametro(connOptsTemp, 50003);
+    const idLojaPrompt = idLojaAtual
+      ? `\nID desta loja — atual no Firebird: ${idLojaAtual} (Enter para manter):\n> `
+      : '\nID desta loja (numero inteiro, ex: 1):\n> ';
+    let idLojaStr = '';
+    while (true) {
+      idLojaStr = (await pergunta(rl, idLojaPrompt)).trim();
+      if (!idLojaStr && idLojaAtual) { idLojaStr = String(idLojaAtual); break; }
+      if (/^\d+$/.test(idLojaStr) && parseInt(idLojaStr, 10) > 0) break;
+      console.log('  [!] Informe um numero inteiro positivo.\n');
+    }
+    const idLoja = parseInt(idLojaStr, 10);
+
     const conteudo = [
       `SYNC_TOKEN=${syncToken}`,
       `FIREBIRD_HOST=${fbHost}`,
@@ -134,6 +165,9 @@ async function runSetupWizard(envPath) {
 
     console.log('  Gravando URL do servidor no banco Firebird...');
     await gravarParametro(connOpts, 60024, serverUrl);
+
+    console.log('  Gravando ID da loja no banco Firebird...');
+    await gravarParametro(connOpts, 50003, String(idLoja));
 
     if (nomeFilial) {
       console.log('  Gravando nome da filial no banco Firebird...');
