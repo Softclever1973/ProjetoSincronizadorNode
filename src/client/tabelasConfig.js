@@ -1,12 +1,11 @@
-const fs   = require('fs');
-const path = require('path');
+const fs     = require('fs');
+const path   = require('path');
+const TABELAS = require('./tabelas');
 
 const CAMINHO = path.join(process.cwd(), 'tabelas-config.json');
 
-/**
- * Retorna o objeto de configuração { NOME_TABELA: boolean }.
- * Tabelas ausentes são consideradas INATIVAS por padrão.
- */
+const _defaultAtivo = new Map(TABELAS.map(t => [t.nome, t.defaultAtivo === true]));
+
 function lerConfig() {
   try {
     return JSON.parse(fs.readFileSync(CAMINHO, 'utf8'));
@@ -15,10 +14,6 @@ function lerConfig() {
   }
 }
 
-/**
- * Persiste o objeto de configuração no arquivo.
- * Usa write-then-rename para evitar corrupção em caso de falha.
- */
 function salvarConfig(config) {
   const tmp = CAMINHO + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(config, null, 2), 'utf8');
@@ -26,11 +21,15 @@ function salvarConfig(config) {
 }
 
 /**
- * Retorna true se a tabela está ativa (default: false se ausente do arquivo).
+ * Retorna true se a tabela está ativa.
+ * Prioridade: valor salvo no JSON > defaultAtivo definido em tabelas.js > false.
  */
 function tabelaAtiva(nomeTabela) {
   const config = lerConfig();
-  return config[nomeTabela] === true;
+  if (Object.prototype.hasOwnProperty.call(config, nomeTabela)) {
+    return config[nomeTabela] === true;
+  }
+  return _defaultAtivo.get(nomeTabela) ?? false;
 }
 
-module.exports = { lerConfig, salvarConfig, tabelaAtiva };
+module.exports = { lerConfig, salvarConfig, tabelaAtiva, defaultAtivo: _defaultAtivo };

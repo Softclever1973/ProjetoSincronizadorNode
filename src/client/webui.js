@@ -8,7 +8,7 @@ const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
 const { getUltimaAtualizacao } = require('./cursor');
 const TABELAS = require('./tabelas');
-const { lerConfig, salvarConfig } = require('./tabelasConfig');
+const { lerConfig, salvarConfig, defaultAtivo } = require('./tabelasConfig');
 
 const TOKEN = process.env.SYNC_TOKEN;
 
@@ -706,8 +706,15 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   }
 
   app.get('/configuracoes', async (_req, res) => {
-    const config = lerConfig();
+    const salvo = lerConfig();
     const existentes = await getTabelasExistentesFirebird();
+    // Mescla: valor salvo no JSON tem prioridade; senão usa defaultAtivo de tabelas.js
+    const config = {};
+    for (const t of TABELAS) {
+      config[t.nome] = Object.prototype.hasOwnProperty.call(salvo, t.nome)
+        ? salvo[t.nome]
+        : (defaultAtivo.get(t.nome) ?? false);
+    }
     const grupos = {};
     for (const t of TABELAS) {
       const g = t.grupo || 'Outras';
