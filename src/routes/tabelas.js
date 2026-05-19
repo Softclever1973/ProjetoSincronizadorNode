@@ -84,6 +84,8 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   const cols      = req.query.cols?.trim() || '';
   const statusCol = req.query.statusCol?.trim() || '';
   const statusVal = req.query.statusVal?.trim() || '';
+  const sortCol   = req.query.sortCol?.trim() || '';
+  const sortDir   = (req.query.sortDir?.trim() || 'ASC').toUpperCase();
 
   if (cols) {
     const lista = cols.split(',').map(c => c.trim()).filter(Boolean);
@@ -91,6 +93,8 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   }
   if (statusCol && !NOME_VALIDO.test(statusCol)) return res.status(400).json({ erro: 'statusCol inválido' });
   if (statusVal && !['A', 'I'].includes(statusVal)) return res.status(400).json({ erro: 'statusVal inválido' });
+  if (sortCol && !NOME_VALIDO.test(sortCol)) return res.status(400).json({ erro: 'sortCol inválido' });
+  if (!['ASC', 'DESC'].includes(sortDir)) return res.status(400).json({ erro: 'sortDir inválido' });
 
   try {
     const result = await withTenantConnection(schema, async db => {
@@ -127,9 +131,10 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
       const total     = parseInt(countRows[0].CNT);
       const offset    = (page - 1) * pageSize;
+      const orderBy   = sortCol ? `${sortCol} ${sortDir}` : '1';
       params.push(pageSize, offset);
       const registros = await query(db,
-        `SELECT * FROM ${tabela} ${where} ORDER BY 1 LIMIT $${params.length - 1} OFFSET $${params.length}`,
+        `SELECT * FROM ${tabela} ${where} ORDER BY ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
         params
       );
       return { total, registros };
@@ -250,12 +255,10 @@ router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) =
 
   try {
     const result = await withTenantConnection(schema, async db => {
-      const [colsP, colsI, colsPP, colsPR] = await Promise.all([
-        colunasTabela(db, schema, 'PEDIDOS').catch(() => []),
-        colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
-        colunasTabela(db, schema, 'PEDIDOS_PARCELAS_PAGAMENTOS').catch(() => []),
-        colunasTabela(db, schema, 'PRODUTOS').catch(() => []),
-      ]);
+      const colsP  = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI  = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      const colsPP = await colunasTabela(db, schema, 'PEDIDOS_PARCELAS_PAGAMENTOS').catch(() => []);
+      const colsPR = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
 
       if (!colsP.length) return { total: 0, registros: [], colunas: [] };
 
@@ -332,10 +335,8 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
   const status   = req.query.status?.trim() || '';
   try {
     const result = await withTenantConnection(schema, async db => {
-      const [colsP, colsI] = await Promise.all([
-        colunasTabela(db, schema, 'PEDIDOS').catch(() => []),
-        colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
-      ]);
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
       if (!colsP.length) return { total: 0, registros: [], statusOptions: [] };
 
       const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
@@ -390,10 +391,8 @@ router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) 
   if (!/^\d+$/.test(id)) return res.status(400).json({ erro: 'id inválido' });
   try {
     const rows = await withTenantConnection(schema, async db => {
-      const [colsI, colsPR] = await Promise.all([
-        colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
-        colunasTabela(db, schema, 'PRODUTOS').catch(() => []),
-      ]);
+      const colsI  = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      const colsPR = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
       if (!colsI.length) return [];
 
       const colNamesI  = new Set(colsI .map(c => c.COLUMN_NAME));
@@ -433,12 +432,10 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, asyn
 
   try {
     const result = await withTenantConnection(schema, async db => {
-      const [colsP, colsI, colsAG, colsSF] = await Promise.all([
-        colunasTabela(db, schema, 'PEDIDOS').catch(() => []),
-        colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []),
-        colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []),
-        colunasTabela(db, schema, 'sync_filiais').catch(() => []),
-      ]);
+      const colsP  = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI  = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      const colsAG = await colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []);
+      const colsSF = await colunasTabela(db, schema, 'sync_filiais').catch(() => []);
       if (!colsP.length) return [];
 
       const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
