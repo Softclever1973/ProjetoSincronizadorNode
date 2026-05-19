@@ -1,9 +1,13 @@
 const express = require('express');
 const router  = express.Router();
 const authJwt = require('../middleware/authJwt');
-const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
+const { requireRole } = require('../middleware/checkRole');
+const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../db');
 
 const NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
+// Só essas tabelas recebem filtro obrigatório de ID_LOJA para gerente/vendedor
+const TABELAS_FILTRO_LOJA = new Set(['PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS']);
 
 const COLS_OCULTAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ', 'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -86,6 +90,11 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   const statusVal = req.query.statusVal?.trim() || '';
   const sortCol   = req.query.sortCol?.trim() || '';
   const sortDir   = (req.query.sortDir?.trim() || 'ASC').toUpperCase();
+  // Filtro de loja: só para tabelas transacionais (PEDIDOS e afins)
+  const usaFiltroLoja   = TABELAS_FILTRO_LOJA.has(tabela.toUpperCase());
+  const idLojaObrigatorio = usaFiltroLoja ? (req.userLojas?.[schema] ?? null) : null;
+  const filtroLojaParam   = usaFiltroLoja && req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
+  const idLojaFiltro      = idLojaObrigatorio ?? filtroLojaParam;
 
   if (cols) {
     const lista = cols.split(',').map(c => c.trim()).filter(Boolean);
@@ -126,6 +135,20 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
         conditions.push(`TRIM(${statusCol}::TEXT) = $${params.length}`);
       }
 
+      // Filtro de loja: aplica somente se a tabela tiver coluna ID_LOJA
+      if (idLojaFiltro !== null) {
+        const temIdLoja = await query(db, `
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
+            AND UPPER(column_name) = 'ID_LOJA'
+          LIMIT 1
+        `, [schema, tabela]);
+        if (temIdLoja.length) {
+          params.push(idLojaFiltro);
+          conditions.push(`ID_LOJA = $${params.length}`);
+        }
+      }
+
       const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
@@ -156,6 +179,16 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
 
   const pks = Array.isArray(pk) ? pk : [pk];
   if (pks.some(p => !NOME_VALIDO.test(p))) return res.status(400).json({ erro: 'pk inválido' });
+
+  // Verificação de loja para gerente/vendedor — só em tabelas transacionais
+  if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
+    const idLojaObrigatorio = req.userLojas?.[schema] ?? null;
+    if (idLojaObrigatorio !== null) {
+      const idLojaRegistro = registro.ID_LOJA ?? registro.id_loja ?? null;
+      if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaObrigatorio)
+        return res.status(403).json({ erro: 'não é permitido salvar registros de outra loja' });
+    }
+  }
 
   try {
     await withTenantConnection(schema, async db => {
@@ -189,6 +222,15 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
         );
       }
     });
+
+    // Audit log universal (fire-and-forget)
+    const pkStr = pks.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p.toUpperCase())]).join('|');
+    pool.query(
+      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, ip_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [req.userId, schema, tabela.toUpperCase(), 'INSERT', pkStr, registro, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
+    ).catch(() => {});
+
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -196,7 +238,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
 });
 
 /* ── DELETE /api/:schema/tabelas/:tabela ── */
-router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
+router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 
@@ -211,7 +253,49 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res)
       const where = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
       return execute(db, `DELETE FROM ${tabela} WHERE ${where}`, pkValores);
     });
+
+    // Audit log universal (fire-and-forget)
+    const pkStr = (Array.isArray(pkValores) ? pkValores : [pkValores]).join('|');
+    pool.query(
+      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, ip_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [req.userId, schema, tabela.toUpperCase(), 'DELETE', pkStr, { pk: pks, pkValores }, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
+    ).catch(() => {});
+
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/audit-log ── */
+router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+  const { schema } = req.params;
+  const limit  = Math.min(500, Math.max(1, parseInt(req.query.limit)  || 200));
+  const offset = Math.max(0, parseInt(req.query.offset) || 0);
+  const idLojaUsuario = req.userLojas?.[schema] ?? null;
+
+  try {
+    const rows = await pool.query(
+      `SELECT al.id, al.id_usuario, u.email, al.tabela, al.operacao, al.pk_valor, al.dados, al.ip_cliente, al.criado_em
+       FROM public.audit_log al
+       LEFT JOIN public.usuarios u ON u.id = al.id_usuario
+       WHERE al.schema_name = $1
+       ORDER BY al.criado_em DESC
+       LIMIT $2 OFFSET $3`,
+      [schema, limit, offset]
+    );
+
+    let result = rows.rows;
+    // Gerente vê apenas registros da sua loja (filtra pelo campo ID_LOJA dentro de dados)
+    if (idLojaUsuario !== null) {
+      result = result.filter(r => {
+        const idLoja = r.dados?.ID_LOJA ?? r.dados?.id_loja ?? null;
+        return idLoja === null || Number(idLoja) === idLojaUsuario;
+      });
+    }
+
+    res.json(result);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -333,6 +417,13 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
   const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 50));
   const q        = req.query.q?.trim() || '';
   const status   = req.query.status?.trim() || '';
+  const sortCol  = req.query.sortCol?.trim() || '';
+  const sortDir  = (req.query.sortDir?.trim() || 'DESC').toUpperCase();
+  if (sortCol && !NOME_VALIDO.test(sortCol)) return res.status(400).json({ erro: 'sortCol inválido' });
+  if (!['ASC', 'DESC'].includes(sortDir))   return res.status(400).json({ erro: 'sortDir inválido' });
+  const idLojaObrigatorio = req.userLojas?.[schema] ?? null;
+  const filtroLojaParam   = req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
+  const idLojaFiltro      = idLojaObrigatorio ?? filtroLojaParam;
   try {
     const result = await withTenantConnection(schema, async db => {
       const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
@@ -367,16 +458,37 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
         params.push(status);
         whereParts.push(`p.STATUS = $${params.length}`);
       }
+      if (idLojaFiltro !== null && colNamesP.has('ID_LOJA')) {
+        params.push(idLojaFiltro);
+        whereParts.push(`p.ID_LOJA = $${params.length}`);
+      }
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+      const SORT_COLS_DIRETOS = new Set(['ID_PEDIDO', 'ID_CLIENTE', 'NOME_CLIENTE', 'DATA_DO_PEDIDO', 'STATUS', 'ID_LOJA']);
+      const sortUpper = sortCol.toUpperCase();
+      const sortByValorTotal = sortUpper === 'VALOR_TOTAL' && select.some(s => s.includes('VALOR_TOTAL'));
 
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM PEDIDOS p ${where}`, params);
       const total  = parseInt(countRows[0].CNT);
       const offset = (page - 1) * pageSize;
       params.push(pageSize, offset);
-      const registros = await query(db,
-        `SELECT ${select.join(', ')} FROM PEDIDOS p ${where} ORDER BY p.ID_PEDIDO DESC LIMIT $${params.length - 1} OFFSET $${params.length}`,
-        params
-      );
+
+      let registros;
+      if (sortByValorTotal) {
+        // VALOR_TOTAL é alias de subquery — envolver num derived table para ordenar
+        registros = await query(db,
+          `SELECT * FROM (SELECT ${select.join(', ')} FROM PEDIDOS p ${where}) _sub ORDER BY VALOR_TOTAL ${sortDir} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+          params
+        );
+      } else {
+        const orderBy = (sortCol && SORT_COLS_DIRETOS.has(sortUpper) && colNamesP.has(sortUpper))
+          ? `p.${sortCol} ${sortDir}`
+          : 'p.ID_PEDIDO DESC';
+        registros = await query(db,
+          `SELECT ${select.join(', ')} FROM PEDIDOS p ${where} ORDER BY ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
+          params
+        );
+      }
       return { total, registros, statusOptions };
     });
     res.json(result);

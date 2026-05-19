@@ -23,6 +23,26 @@ const DDL_CONTROLE = [
     schema_name TEXT    NOT NULL REFERENCES public.sync_tenants(schema_name),
     PRIMARY KEY (id_usuario, schema_name)
   )`,
+  // Migrações idempotentes para sistema de permissões
+  `ALTER TABLE public.usuarios_empresas
+     ADD COLUMN IF NOT EXISTS role TEXT NOT NULL DEFAULT 'dono'
+     CHECK (role IN ('vendedor', 'gerente', 'dono'))`,
+  `ALTER TABLE public.usuarios_empresas
+     ADD COLUMN IF NOT EXISTS id_loja INTEGER`,
+  `CREATE TABLE IF NOT EXISTS public.audit_log (
+    id          SERIAL       PRIMARY KEY,
+    id_usuario  INTEGER      REFERENCES public.usuarios(id),
+    schema_name TEXT         NOT NULL,
+    tabela      TEXT         NOT NULL,
+    operacao    TEXT         NOT NULL CHECK (operacao IN ('INSERT', 'UPDATE', 'DELETE')),
+    pk_valor    TEXT,
+    dados       JSONB,
+    ip_cliente  TEXT,
+    criado_em   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_schema ON public.audit_log(schema_name)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON public.audit_log(criado_em DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON public.audit_log(id_usuario)`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)

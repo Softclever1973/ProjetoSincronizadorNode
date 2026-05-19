@@ -23,6 +23,7 @@ const path = require('path');
   const authRoutes               = require('./routes/auth');
   const userEmpresasRoutes       = require('./routes/userEmpresas');
   const tabelasRoutes            = require('./routes/tabelas');
+  const usuariosRoutes           = require('./routes/usuarios');
 
   const app = express();
 
@@ -46,6 +47,7 @@ const path = require('path');
   app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
   app.use('/auth',          authRoutes);
   app.use('/user/empresas', userEmpresasRoutes);
+  app.use('/api',           usuariosRoutes);
   app.use('/api',           tabelasRoutes);
 
   // ---------------------------------------------------------------------------

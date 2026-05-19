@@ -49,8 +49,8 @@ router.post('/', authJwt, async (req, res) => {
     );
 
     await client.query(
-      'INSERT INTO public.usuarios_empresas (id_usuario, schema_name) VALUES ($1, $2)',
-      [req.userId, schema]
+      'INSERT INTO public.usuarios_empresas (id_usuario, schema_name, role) VALUES ($1, $2, $3)',
+      [req.userId, schema, 'dono']
     );
 
     res.status(201).json({ ok: true, schema });
