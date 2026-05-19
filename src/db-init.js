@@ -111,6 +111,13 @@ function ddlTenant(schema) {
        RETURN OLD;
      END;
      $$ LANGUAGE plpgsql`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.sync_config (
+  chave TEXT PRIMARY KEY,
+  valor TEXT
+)`,
+    `INSERT INTO ${schema}.sync_config (chave, valor)
+ VALUES ('filtro_filial_clientes', NULL)
+ ON CONFLICT (chave) DO NOTHING`,
   ];
 }
 

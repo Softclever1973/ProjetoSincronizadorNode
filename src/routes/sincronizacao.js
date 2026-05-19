@@ -169,9 +169,24 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       const params = [idUltimaAtualizacaoMatriz];
       let whereExtra = '';
 
-      if (filtroFilial && idLoja) {
+      // CLIENTES: usa config do servidor (admin-configurável) em vez do parâmetro do cliente
+      // Outros: usa o filtroFilial enviado pelo cliente
+      let filtroFilialEfetivo = filtroFilial;
+      if (nomeTabela === 'CLIENTES') {
+        try {
+          const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
+          filtroFilialEfetivo = cfg?.VALOR ?? null;
+          if (filtroFilialEfetivo && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilialEfetivo)) {
+            filtroFilialEfetivo = null;
+          }
+        } catch {
+          filtroFilialEfetivo = null;
+        }
+      }
+
+      if (filtroFilialEfetivo && idLoja) {
         params.push(idLoja);
-        whereExtra += ` AND ${filtroFilial} = $${params.length}`;
+        whereExtra += ` AND ${filtroFilialEfetivo} = $${params.length}`;
       }
 
       // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.

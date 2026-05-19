@@ -7,7 +7,7 @@ const { pool, withTenantConnection, query, execute, isMissingTableError } = requ
 const NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // Só essas tabelas recebem filtro obrigatório de ID_LOJA para gerente/vendedor
-const TABELAS_FILTRO_LOJA = new Set(['PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS']);
+const TABELAS_FILTRO_LOJA = new Set(['PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES']);
 
 const COLS_OCULTAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ', 'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -82,18 +82,24 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
 router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
-  const page      = Math.max(1, parseInt(req.query.page)     || 1);
-  const pageSize  = Math.min(500, Math.max(1, parseInt(req.query.pageSize) || 50));
+  const exportAll = req.query.all === 'true';
+  const page      = exportAll ? 1 : Math.max(1, parseInt(req.query.page) || 1);
+  const pageSize  = exportAll ? 10000 : Math.min(500, Math.max(1, parseInt(req.query.pageSize) || 50));
   const q         = req.query.q?.trim() || '';
   const cols      = req.query.cols?.trim() || '';
   const statusCol = req.query.statusCol?.trim() || '';
-  const statusVal = req.query.statusVal?.trim() || '';
+  const userRole          = req.userRoles?.[schema];
+  // Vendedor sempre vê apenas registros ativos — ignora qualquer statusVal enviado
+  const statusVal = userRole === 'vendedor' && statusCol
+    ? 'A'
+    : (req.query.statusVal?.trim() || '');
   const sortCol   = req.query.sortCol?.trim() || '';
   const sortDir   = (req.query.sortDir?.trim() || 'ASC').toUpperCase();
-  // Filtro de loja: só para tabelas transacionais (PEDIDOS e afins)
-  const usaFiltroLoja   = TABELAS_FILTRO_LOJA.has(tabela.toUpperCase());
-  const idLojaObrigatorio = usaFiltroLoja ? (req.userLojas?.[schema] ?? null) : null;
-  const filtroLojaParam   = usaFiltroLoja && req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
+  // Loja obrigatória: gerente/vendedor só veem sua loja nas tabelas transacionais; dono sem restrição
+  const usaFiltroLoja     = TABELAS_FILTRO_LOJA.has(tabela.toUpperCase());
+  const idLojaObrigatorio = (usaFiltroLoja && userRole !== 'dono') ? (req.userLojas?.[schema] ?? null) : null;
+  // Filtro opcional: qualquer tabela aceita ?filtroLoja=N (ex: dono filtrando clientes por filial)
+  const filtroLojaParam   = req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
   const idLojaFiltro      = idLojaObrigatorio ?? filtroLojaParam;
 
   if (cols) {
@@ -180,24 +186,33 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
   const pks = Array.isArray(pk) ? pk : [pk];
   if (pks.some(p => !NOME_VALIDO.test(p))) return res.status(400).json({ erro: 'pk inválido' });
 
-  // Verificação de loja para gerente/vendedor — só em tabelas transacionais
+  // Verificação e injeção de loja para gerente/vendedor — só em tabelas transacionais
   if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
-    const idLojaObrigatorio = req.userLojas?.[schema] ?? null;
-    if (idLojaObrigatorio !== null) {
+    const userRole = req.userRoles?.[schema];
+    const idLojaJwt = req.userLojas?.[schema] ?? null;
+    if (userRole !== 'dono' && idLojaJwt !== null) {
       const idLojaRegistro = registro.ID_LOJA ?? registro.id_loja ?? null;
-      if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaObrigatorio)
+      if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaJwt)
         return res.status(403).json({ erro: 'não é permitido salvar registros de outra loja' });
+      // Garante que ID_LOJA esteja sempre preenchido com o valor do JWT
+      registro.ID_LOJA = idLojaJwt;
     }
   }
 
   try {
-    await withTenantConnection(schema, async db => {
+    const isUpdate = await withTenantConnection(schema, async db => {
       const serverCols = await query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
       `, [schema, tabela]);
       const allowed = new Set(serverCols.map(r => r.COL));
       const pksUpper = pks.map(p => p.toUpperCase());
+
+      // Detecta se é INSERT ou UPDATE antes do upsert
+      const pkWhere = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      const pkVals  = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
+      const existing = await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
+      const update = existing.length > 0;
 
       const cols = Object.keys(registro).filter(c => NOME_VALIDO.test(c) && allowed.has(c.toUpperCase()));
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
@@ -221,6 +236,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
           pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
         );
       }
+      return update;
     });
 
     // Audit log universal (fire-and-forget)
@@ -228,7 +244,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
     pool.query(
       `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, ip_cliente)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.userId, schema, tabela.toUpperCase(), 'INSERT', pkStr, registro, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
+      [req.userId, schema, tabela.toUpperCase(), isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
     ).catch(() => {});
 
     res.json({ ok: true });
@@ -271,23 +287,42 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('ger
 /* ── GET /api/:schema/audit-log ── */
 router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const limit  = Math.min(500, Math.max(1, parseInt(req.query.limit)  || 200));
-  const offset = Math.max(0, parseInt(req.query.offset) || 0);
+  const pageSize   = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 50));
+  const page       = Math.max(1, parseInt(req.query.page) || 1);
+  const offset     = (page - 1) * pageSize;
+  const tabela     = req.query.tabela?.trim().toUpperCase() || '';
+  const operacao   = req.query.operacao?.trim().toUpperCase() || '';
+  const dataInicio = req.query.dataInicio?.trim() || '';
+  const dataFim    = req.query.dataFim?.trim()    || '';
   const idLojaUsuario = req.userLojas?.[schema] ?? null;
 
+  const conds  = ['al.schema_name = $1'];
+  const params = [schema];
+
+  if (tabela)     { params.push(tabela);     conds.push(`al.tabela = $${params.length}`); }
+  if (operacao && ['INSERT','UPDATE','DELETE'].includes(operacao)) {
+    params.push(operacao); conds.push(`al.operacao = $${params.length}`);
+  }
+  if (dataInicio) { params.push(dataInicio); conds.push(`al.criado_em >= $${params.length}`); }
+  if (dataFim)    { params.push(dataFim + ' 23:59:59'); conds.push(`al.criado_em <= $${params.length}`); }
+
+  const where = conds.join(' AND ');
+
   try {
-    const rows = await pool.query(
-      `SELECT al.id, al.id_usuario, u.email, al.tabela, al.operacao, al.pk_valor, al.dados, al.ip_cliente, al.criado_em
-       FROM public.audit_log al
-       LEFT JOIN public.usuarios u ON u.id = al.id_usuario
-       WHERE al.schema_name = $1
-       ORDER BY al.criado_em DESC
-       LIMIT $2 OFFSET $3`,
-      [schema, limit, offset]
-    );
+    const [rows, countRow] = await Promise.all([
+      pool.query(
+        `SELECT al.id, al.id_usuario, u.email, al.tabela, al.operacao, al.pk_valor, al.dados, al.ip_cliente, al.criado_em
+         FROM public.audit_log al
+         LEFT JOIN public.usuarios u ON u.id = al.id_usuario
+         WHERE ${where}
+         ORDER BY al.criado_em DESC
+         LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+        [...params, pageSize, offset]
+      ),
+      pool.query(`SELECT COUNT(*) FROM public.audit_log al WHERE ${where}`, params),
+    ]);
 
     let result = rows.rows;
-    // Gerente vê apenas registros da sua loja (filtra pelo campo ID_LOJA dentro de dados)
     if (idLojaUsuario !== null) {
       result = result.filter(r => {
         const idLoja = r.dados?.ID_LOJA ?? r.dados?.id_loja ?? null;
@@ -295,7 +330,7 @@ router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'd
       });
     }
 
-    res.json(result);
+    res.json({ registros: result, total: parseInt(countRow.rows[0].count) });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -415,13 +450,16 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   const page     = Math.max(1, parseInt(req.query.page)     || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 50));
-  const q        = req.query.q?.trim() || '';
-  const status   = req.query.status?.trim() || '';
-  const sortCol  = req.query.sortCol?.trim() || '';
-  const sortDir  = (req.query.sortDir?.trim() || 'DESC').toUpperCase();
+  const q          = req.query.q?.trim() || '';
+  const status     = req.query.status?.trim() || '';
+  const dataInicio = req.query.dataInicio?.trim() || '';
+  const dataFim    = req.query.dataFim?.trim()    || '';
+  const sortCol    = req.query.sortCol?.trim() || '';
+  const sortDir    = (req.query.sortDir?.trim() || 'DESC').toUpperCase();
   if (sortCol && !NOME_VALIDO.test(sortCol)) return res.status(400).json({ erro: 'sortCol inválido' });
   if (!['ASC', 'DESC'].includes(sortDir))   return res.status(400).json({ erro: 'sortDir inválido' });
-  const idLojaObrigatorio = req.userLojas?.[schema] ?? null;
+  const _roleP            = req.userRoles?.[schema];
+  const idLojaObrigatorio = _roleP !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
   const filtroLojaParam   = req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
   const idLojaFiltro      = idLojaObrigatorio ?? filtroLojaParam;
   try {
@@ -457,6 +495,14 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       if (status && colNamesP.has('STATUS')) {
         params.push(status);
         whereParts.push(`p.STATUS = $${params.length}`);
+      }
+      if (dataInicio && colNamesP.has('DATA_DO_PEDIDO')) {
+        params.push(dataInicio);
+        whereParts.push(`p.DATA_DO_PEDIDO >= $${params.length}`);
+      }
+      if (dataFim && colNamesP.has('DATA_DO_PEDIDO')) {
+        params.push(dataFim);
+        whereParts.push(`p.DATA_DO_PEDIDO <= $${params.length}`);
       }
       if (idLojaFiltro !== null && colNamesP.has('ID_LOJA')) {
         params.push(idLojaFiltro);
@@ -578,6 +624,12 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, asyn
         params.push(mesInt);
         whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
       }
+      const roleF   = req.userRoles?.[schema];
+      const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
+      if (idLojaF !== null) {
+        params.push(idLojaF);
+        whereParts.push(`p.ID_LOJA = $${params.length}`);
+      }
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
       // Prioridade do nome: sync_filiais (auto) > AUX_GENERICA (manual) > 'Loja N'
@@ -636,6 +688,278 @@ router.get('/:schema/pedidos/:id/pagamentos', authJwt, checkSchema, async (req, 
       return {
         colunas: colsVisiveis.map(c => ({ COLUMN_NAME: c.COLUMN_NAME, DATA_TYPE: c.DATA_TYPE })),
         registros,
+      };
+    });
+    res.json(result);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/admin/sync-config ── */
+router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+  const { schema } = req.params;
+  try {
+    const rows = await withTenantConnection(schema, db =>
+      query(db, 'SELECT chave, valor FROM sync_config ORDER BY chave')
+    );
+    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR])));
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json({});
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── PUT /api/:schema/admin/sync-config ── */
+router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { chave, valor } = req.body;
+
+  const CHAVES_PERMITIDAS = new Set(['filtro_filial_clientes']);
+  if (!chave || !CHAVES_PERMITIDAS.has(chave)) {
+    return res.status(400).json({ erro: 'chave inválida' });
+  }
+  if (valor !== null && valor !== undefined && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(valor)) {
+    return res.status(400).json({ erro: 'valor deve ser null ou nome de coluna válido (ex: ID_LOJA)' });
+  }
+
+  try {
+    await withTenantConnection(schema, db =>
+      execute(db,
+        `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
+         ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+        [chave, valor || null]
+      )
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/filiais ── */
+router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
+  const { schema } = req.params;
+  try {
+    const rows = await withTenantConnection(schema, db =>
+      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
+    );
+    res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
+  } catch {
+    res.json([]);
+  }
+});
+
+/* helper: extrai dateExpr igual ao faturamento-por-loja */
+function _dateExprFromCols(colsP) {
+  const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
+  const DATA_COLS = ['DATA_DO_PEDIDO', 'DATA_HORA', 'DATA_EMISSAO'];
+  const dataCol   = DATA_COLS.find(c => colNamesP.has(c)) ?? null;
+  if (!dataCol) return null;
+  const dataType     = colsP.find(c => c.COLUMN_NAME === dataCol)?.DATA_TYPE ?? 'text';
+  const isNativeDate = dataType.startsWith('timestamp') || dataType === 'date';
+  return isNativeDate ? `p.${dataCol}` : `NULLIF(p.${dataCol}, '')::DATE`;
+}
+
+/* helper: WHERE parts comuns a todos os gráficos */
+function _buildWhere(colsP, { ano, mes, idLojaF }, params) {
+  const colNamesP  = new Set(colsP.map(c => c.COLUMN_NAME));
+  const dateExpr   = _dateExprFromCols(colsP);
+  const whereParts = [];
+  if (dateExpr && ano && /^\d{4}$/.test(ano)) {
+    params.push(parseInt(ano));
+    whereParts.push(`EXTRACT(YEAR FROM ${dateExpr}) = $${params.length}`);
+  }
+  const mesInt = parseInt(mes);
+  if (dateExpr && mes && /^\d{1,2}$/.test(mes) && mesInt >= 1 && mesInt <= 12) {
+    params.push(mesInt);
+    whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
+  }
+  if (idLojaF !== null && colNamesP.has('ID_LOJA')) {
+    params.push(idLojaF);
+    whereParts.push(`p.ID_LOJA = $${params.length}`);
+  }
+  return { whereParts, dateExpr, colNamesP };
+}
+
+/* ── GET /api/:schema/dashboard/evolucao-mensal ── */
+router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes } = req.query;
+  const roleF   = req.userRoles?.[schema];
+  const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      if (!colsP.length) return [];
+      const params = [];
+      const { whereParts, dateExpr } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      if (!dateExpr) return [];
+      const colsI_set = new Set(colsI.map(c => c.COLUMN_NAME));
+      const hasValor  = colsI.length && colsI_set.has('VALOR_UNITARIO') && colsI_set.has('QUANTIDADE');
+      const where     = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+      return query(db, `
+        SELECT
+          TO_CHAR(DATE_TRUNC('month', ${dateExpr}), 'YYYY-MM') AS MES,
+          COUNT(DISTINCT p.ID_PEDIDO) AS QTD_PEDIDOS,
+          ${hasValor ? 'COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0)' : '0'} AS FATURAMENTO
+        FROM PEDIDOS p
+        ${hasValor ? 'LEFT JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO' : ''}
+        ${where}
+        GROUP BY DATE_TRUNC('month', ${dateExpr})
+        ORDER BY DATE_TRUNC('month', ${dateExpr})
+      `, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/dashboard/top-produtos ── */
+router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes } = req.query;
+  const roleF   = req.userRoles?.[schema];
+  const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const colsP  = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI  = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      const colsPR = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
+      if (!colsI.length) return [];
+      const colNamesI  = new Set(colsI.map(c => c.COLUMN_NAME));
+      const colNamesPR = new Set(colsPR.map(c => c.COLUMN_NAME));
+      if (!colNamesI.has('VALOR_UNITARIO') || !colNamesI.has('QUANTIDADE') || !colNamesI.has('ID_PRODUTO')) return [];
+      const params = [];
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const where    = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+      const descCol  = colNamesPR.has('DESCRICAO') ? 'pr.DESCRICAO' : colNamesPR.has('NOME') ? 'pr.NOME' : null;
+      const nomeExpr = descCol ? `COALESCE(${descCol}, pi.ID_PRODUTO::TEXT)` : `pi.ID_PRODUTO::TEXT`;
+      const joinPR   = colsPR.length ? `LEFT JOIN PRODUTOS pr ON pr.ID_PRODUTO = pi.ID_PRODUTO` : '';
+      return query(db, `
+        SELECT
+          pi.ID_PRODUTO,
+          ${nomeExpr} AS NOME_PRODUTO,
+          SUM(pi.QUANTIDADE) AS QTD_TOTAL,
+          COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) AS FATURAMENTO
+        FROM PEDIDOS_ITENS pi
+        ${joinPR}
+        LEFT JOIN PEDIDOS p ON p.ID_PEDIDO = pi.ID_PEDIDO
+        ${where}
+        GROUP BY pi.ID_PRODUTO, ${nomeExpr}
+        ORDER BY FATURAMENTO DESC
+        LIMIT 10
+      `, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/dashboard/pedidos-por-status ── */
+router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes } = req.query;
+  const roleF   = req.userRoles?.[schema];
+  const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      if (!colsP.length || !new Set(colsP.map(c => c.COLUMN_NAME)).has('STATUS')) return [];
+      const params = [];
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+      return query(db, `SELECT STATUS, COUNT(*) AS QTD FROM PEDIDOS p ${where} GROUP BY STATUS ORDER BY QTD DESC`, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/dashboard/faturamento-por-vendedor ── */
+router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes } = req.query;
+  const roleF   = req.userRoles?.[schema];
+  const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      const colsV = await colunasTabela(db, schema, 'VENDEDORES').catch(() => []);
+      if (!colsP.length) return [];
+      const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
+      const colNamesV = new Set(colsV.map(c => c.COLUMN_NAME));
+      if (!colNamesP.has('ID_VENDEDOR')) return [];
+      const colsI_set = new Set(colsI.map(c => c.COLUMN_NAME));
+      const hasValor  = colsI.length && colsI_set.has('VALOR_UNITARIO') && colsI_set.has('QUANTIDADE');
+      const params = [];
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      whereParts.push('p.ID_VENDEDOR IS NOT NULL');
+      const where     = `WHERE ${whereParts.join(' AND ')}`;
+      const nomeCols  = ['NOME', 'RAZAO_SOCIAL', 'FANTASIA', 'NOME_VENDEDOR'].filter(c => colNamesV.has(c)).map(c => `v.${c}`);
+      const nomeExpr  = nomeCols.length ? `COALESCE(${nomeCols.join(', ')}, p.ID_VENDEDOR::TEXT)` : `p.ID_VENDEDOR::TEXT`;
+      const joinV     = colsV.length ? `LEFT JOIN VENDEDORES v ON v.ID_VENDEDOR = p.ID_VENDEDOR` : '';
+      return query(db, `
+        SELECT
+          p.ID_VENDEDOR,
+          ${nomeExpr} AS NOME_VENDEDOR,
+          COUNT(DISTINCT p.ID_PEDIDO) AS QTD_PEDIDOS,
+          ${hasValor ? 'COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0)' : '0'} AS FATURAMENTO
+        FROM PEDIDOS p
+        ${hasValor ? 'LEFT JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO' : ''}
+        ${joinV}
+        ${where}
+        GROUP BY p.ID_VENDEDOR, ${nomeExpr}
+        ORDER BY FATURAMENTO DESC
+        LIMIT 10
+      `, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/* ── GET /api/:schema/dashboard ── */
+router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {
+  const { schema } = req.params;
+  const role        = req.userRoles?.[schema];
+  const idLoja      = role !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
+  const filtroLoja  = req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
+  const lojaFiltro  = idLoja ?? filtroLoja;
+
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const hoje = new Date().toISOString().slice(0, 10);
+
+      const lojaWhere = lojaFiltro !== null ? `AND ID_LOJA = ${lojaFiltro}` : '';
+      const lojaWhereP = lojaFiltro !== null ? `AND p.ID_LOJA = ${lojaFiltro}` : '';
+
+      const [clientes, pedidosHoje, faturamentoHoje, produtosAtivos] = await Promise.all([
+        query(db, `SELECT COUNT(*) AS cnt FROM CLIENTES WHERE TRIM(SITUACAO::TEXT) = 'A' ${lojaWhere}`    , []).catch(() => [{ CNT: 0 }]),
+        query(db, `SELECT COUNT(*) AS cnt FROM PEDIDOS p WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`       , [hoje]).catch(() => [{ CNT: 0 }]),
+        query(db, `
+          SELECT COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) AS total
+          FROM PEDIDOS p
+          JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO
+          WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`, [hoje]).catch(() => [{ TOTAL: 0 }]),
+        query(db, `SELECT COUNT(*) AS cnt FROM PRODUTOS WHERE TRIM(SITUACAO::TEXT) = 'A'`, []).catch(() => [{ CNT: 0 }]),
+      ]);
+
+      return {
+        clientesAtivos:   parseInt(clientes[0]?.CNT      ?? 0),
+        pedidosHoje:      parseInt(pedidosHoje[0]?.CNT   ?? 0),
+        faturamentoHoje:  parseFloat(faturamentoHoje[0]?.TOTAL ?? 0),
+        produtosAtivos:   parseInt(produtosAtivos[0]?.CNT ?? 0),
       };
     });
     res.json(result);
