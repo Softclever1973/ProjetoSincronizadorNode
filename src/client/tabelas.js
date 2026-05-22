@@ -84,9 +84,9 @@ const TABELAS = [
 
   // --- Pedidos ---
   // colunaData: 'DATA_HORA' — coluna timestamp do pedido. Ajuste se o nome diferir no seu banco.
-  { nome: 'PEDIDOS',                     pk: 'ID_PEDIDO',                       temDelete: true,  filtroFilial: null, grupo: 'Pedidos', generator: 'NOVO_PEDIDO',      colunaData: 'DATA_HORA', defaultAtivo: true },
-  { nome: 'PEDIDOS_ITENS',               pk: 'ID_PEDIDO_ITEM',                  temDelete: true,  filtroFilial: null, grupo: 'Pedidos', generator: 'NOVO_PEDIDO_ITEM', colunaData: null,        defaultAtivo: true },
-  { nome: 'PEDIDOS_PARCELAS_PAGAMENTOS', pk: ['ID_PEDIDO', 'PARCELA'],          temDelete: false, filtroFilial: null, grupo: 'Pedidos', generator: null,               colunaData: null,        defaultAtivo: true },
+  { nome: 'PEDIDOS',                     pk: 'ID_PEDIDO',              temDelete: true,  filtroFilial: 'ID_LOJA', filtroFilialViaFK: null,       grupo: 'Pedidos', generator: 'NOVO_PEDIDO',      colunaData: 'DATA_HORA', defaultAtivo: true },
+  { nome: 'PEDIDOS_ITENS',               pk: 'ID_PEDIDO_ITEM',         temDelete: true,  filtroFilial: null,      filtroFilialViaFK: 'ID_PEDIDO', grupo: 'Pedidos', generator: 'NOVO_PEDIDO_ITEM', colunaData: null,        defaultAtivo: true },
+  { nome: 'PEDIDOS_PARCELAS_PAGAMENTOS', pk: ['ID_PEDIDO', 'PARCELA'], temDelete: false, filtroFilial: null,      filtroFilialViaFK: 'ID_PEDIDO', grupo: 'Pedidos', generator: null,               colunaData: null,        defaultAtivo: true },
 
   // --- Kits ---
   { nome: 'KITS_PRODUTOS',                   pk: 'ID_KIT_PRODUTO',                   temDelete: true,  filtroFilial: null, grupo: 'Kits',            generator: null,                            colunaData: null, defaultAtivo: false },

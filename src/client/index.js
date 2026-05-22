@@ -106,7 +106,6 @@ async function main() {
   const TABELAS = require('./tabelas');
   const { tabelaAtiva } = require('./tabelasConfig');
   const { salvarErro } = require('./erros');
-  const { limparRegistrosAntigos } = require('./limpeza');
 
   if (!process.env.SYNC_TOKEN) {
     console.error('[ERRO] SYNC_TOKEN não configurado no .env');
@@ -115,7 +114,6 @@ async function main() {
 
   const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
   const PORTA_WEBUI = 3001;
-  const VINTE_QUATRO_HORAS = 24 * 60 * 60 * 1000;
 
   let rodando = false;
   const contextoSync = { baseURI: null, idLoja: null, idPDV: null };
@@ -226,7 +224,6 @@ async function main() {
 
   await executarCiclo();
   setInterval(executarCiclo, INTERVALO_MS);
-  setInterval(() => limparRegistrosAntigos(log), VINTE_QUATRO_HORAS);
 }
 
 // Reinicia automaticamente se main() lançar erro inesperado

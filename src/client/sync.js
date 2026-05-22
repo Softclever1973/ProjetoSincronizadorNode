@@ -264,6 +264,19 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
     valores = [pkValor];
   }
 
+  // Apaga filhos FK antes do pai para evitar violação de constraint.
+  // Usa apenas a última coluna da PK (principal) como referência de FK.
+  const pkPrincipal  = pks[pks.length - 1];
+  const valPrincipal = valores[valores.length - 1];
+  try {
+    const fkRefs = await getFKRefs(db, nomeTabela, pkPrincipal);
+    for (const { tabela: tabelaFilha, coluna: colunaFK } of fkRefs) {
+      await execute(db, `DELETE FROM ${tabelaFilha} WHERE ${colunaFK} = ?`, [valPrincipal]);
+    }
+  } catch {
+    // Se falhar ao descobrir FKs (ex: permissão), tenta deletar direto mesmo assim
+  }
+
   const where = pks.map(p => `${p} = ?`).join(' AND ');
   await execute(db, `DELETE FROM ${nomeTabela} WHERE ${where}`, valores);
 }
@@ -331,7 +344,7 @@ async function gerarNovoPK(db, tabela, pkColuna, registro) {
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
 async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
-  const { nome, pk, temDelete, endpoint, filtroFilial = null, generator = null, colunaData = null } = configTabela;
+  const { nome, pk, temDelete, endpoint, filtroFilial = null, filtroFilialViaFK = null, generator = null, colunaData = null } = configTabela;
 
   // ---- ATUALIZAÇÕES ----
   let totalAtualizados = 0;
@@ -345,7 +358,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
       if (endpoint === 'TSMProdutos/ProdutosParaAtualizar') {
         registros = await buscarProdutosParaAtualizar(baseURI, idLoja, cursor, idPDV, nomeFilial);
       } else {
-        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV, colunaData, nomeFilial);
+        registros = await buscarRegistrosParaAtualizar(baseURI, nome, cursor, idLoja, filtroFilial, idPDV, colunaData, nomeFilial, filtroFilialViaFK);
       }
     } catch (e) {
       log(`[${nome}] Erro ao buscar atualizações: ${e.message || e.code || String(e)}`);
@@ -519,6 +532,19 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
   if (totalAtualizados > 0) {
     log(`[${nome}] ${totalAtualizados} registro(s) atualizado(s)`);
+  }
+
+  // Verificação final do generator: garante que está à frente do maior ID
+  // presente na tabela local, cobrindo registros que passaram pelo caminho
+  // de echo, conflito ou erro de FK sem acionar o sincronizarGenerator por-registro.
+  if (generator && !Array.isArray(pk)) {
+    try {
+      const rows = await query(db, `SELECT MAX(${pk}) AS MAXIMO FROM ${nome}`);
+      const maximo = rows[0]?.MAXIMO;
+      if (maximo != null && Number.isFinite(Number(maximo))) {
+        await sincronizarGenerator(db, generator, Number(maximo));
+      }
+    } catch { /* tabela pode ainda não existir no banco local */ }
   }
 
   // ---- DELEÇÕES ----

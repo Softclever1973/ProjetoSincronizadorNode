@@ -96,7 +96,7 @@ function get(url) {
  * Se colunaData estiver preenchida, o servidor aplica adicionalmente
  * WHERE <colunaData> >= NOW() - INTERVAL '2 years' — política de retenção.
  */
-function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null, colunaData = null, nomeFilial = '') {
+function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMatriz, idLoja = null, filtroFilial = null, idPDV = null, colunaData = null, nomeFilial = '', filtroFilialViaFK = null) {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar` +
     `?token=${TOKEN}&nomeTabela=${nomeTabela}&idUltimaAtualizacaoMatriz=${idUltimaAtualizacaoMatriz}`;
   if (idLoja != null && filtroFilial) {
@@ -104,9 +104,11 @@ function buscarRegistrosParaAtualizar(baseURI, nomeTabela, idUltimaAtualizacaoMa
   } else if (idLoja != null) {
     url += `&idLoja=${idLoja}`;
   }
-  if (idPDV != null)  url += `&idPDV=${idPDV}`;
-  if (colunaData)     url += `&colunaData=${encodeURIComponent(colunaData)}`;
-  if (nomeFilial)     url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
+  if (idPDV != null)         url += `&idPDV=${idPDV}`;
+  if (colunaData)            url += `&colunaData=${encodeURIComponent(colunaData)}`;
+  if (nomeFilial)            url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
+  if (filtroFilialViaFK && idLoja != null)
+    url += `&filtroFilialViaFK=${encodeURIComponent(filtroFilialViaFK)}`;
   return get(url);
 }
 

@@ -20,20 +20,21 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ erro: 'credenciais inválidas' });
 
     const schemas = await pool.query(
-      'SELECT schema_name, role, id_loja FROM public.usuarios_empresas WHERE id_usuario = $1',
+      'SELECT schema_name, role, id_loja, id_vendedor FROM public.usuarios_empresas WHERE id_usuario = $1',
       [usuario.id]
     );
-    const schemaList = schemas.rows.map(r => r.schema_name);
-    const roles = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.role]));
-    const lojas = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_loja ?? null]));
+    const schemaList  = schemas.rows.map(r => r.schema_name);
+    const roles       = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.role]));
+    const lojas       = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_loja      ?? null]));
+    const vendedores  = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_vendedor  ?? null]));
 
     const token = jwt.sign(
-      { id: usuario.id, schemas: schemaList, roles, lojas },
+      { id: usuario.id, schemas: schemaList, roles, lojas, vendedores },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    res.json({ token, schemas: schemaList, roles, lojas });
+    res.json({ token, schemas: schemaList, roles, lojas, vendedores });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

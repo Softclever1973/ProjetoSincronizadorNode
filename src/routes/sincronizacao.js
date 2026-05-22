@@ -140,6 +140,9 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const filtroFilial = req.query.filtroFilial
     ? String(req.query.filtroFilial).trim().toUpperCase()
     : null;
+  const filtroFilialViaFK = req.query.filtroFilialViaFK
+    ? String(req.query.filtroFilialViaFK).trim().toUpperCase()
+    : null;
   const colunaData = req.query.colunaData
     ? String(req.query.colunaData).trim().toUpperCase()
     : null;
@@ -157,6 +160,9 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   // Valida nomes de coluna para evitar SQL injection
   if (filtroFilial && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilial)) {
     return res.status(400).json({ message: `Nome de coluna inválido: '${filtroFilial}'` });
+  }
+  if (filtroFilialViaFK && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilialViaFK)) {
+    return res.status(400).json({ message: `Nome de coluna inválido: '${filtroFilialViaFK}'` });
   }
   if (colunaData && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(colunaData)) {
     return res.status(400).json({ message: `Nome de coluna inválido: '${colunaData}'` });
@@ -187,6 +193,13 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       if (filtroFilialEfetivo && idLoja) {
         params.push(idLoja);
         whereExtra += ` AND ${filtroFilialEfetivo} = $${params.length}`;
+      }
+
+      // Tabelas filhas sem ID_LOJA próprio: filtra via FK para PEDIDOS
+      // filtroFilialViaFK é a coluna FK local (ex: ID_PEDIDO), sempre apontando para PEDIDOS.ID_PEDIDO
+      if (filtroFilialViaFK && idLoja) {
+        params.push(idLoja);
+        whereExtra += ` AND ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
       }
 
       // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.

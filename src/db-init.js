@@ -29,6 +29,11 @@ const DDL_CONTROLE = [
      CHECK (role IN ('vendedor', 'gerente', 'dono'))`,
   `ALTER TABLE public.usuarios_empresas
      ADD COLUMN IF NOT EXISTS id_loja INTEGER`,
+  `ALTER TABLE public.usuarios_empresas
+     ADD COLUMN IF NOT EXISTS id_vendedor INTEGER`,
+  // Migração: adiciona nome ao perfil do usuário
+  `ALTER TABLE public.usuarios
+     ADD COLUMN IF NOT EXISTS nome TEXT`,
   `CREATE TABLE IF NOT EXISTS public.audit_log (
     id          SERIAL       PRIMARY KEY,
     id_usuario  INTEGER      REFERENCES public.usuarios(id),

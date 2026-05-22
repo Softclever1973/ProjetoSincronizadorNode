@@ -9,6 +9,56 @@ const NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // Só essas tabelas recebem filtro obrigatório de ID_LOJA para gerente/vendedor
 const TABELAS_FILTRO_LOJA = new Set(['PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES']);
 
+// ── Regras de negócio por tabela (aplicadas no upsert do backend) ────────────
+// Campo lookup é case-insensitive para tolerar frontends que enviam lowercase.
+function _campo(registro, nome) {
+  const chave = Object.keys(registro).find(k => k.toUpperCase() === nome);
+  const val   = chave !== undefined ? registro[chave] : undefined;
+  if (val === null || val === undefined || String(val).trim() === '') return undefined;
+  return val;
+}
+
+const REGRAS_TABELA = {
+  CLIENTES: {
+    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA'],
+    validacoes: [
+      r => (!_campo(r, 'CPF') && !_campo(r, 'CNPJ'))
+        ? 'Informe o CPF ou o CNPJ do cliente'
+        : null,
+    ],
+  },
+  PEDIDOS: {
+    obrigatorios: ['ID_CLIENTE', 'STATUS'],
+  },
+  PEDIDOS_ITENS: {
+    obrigatorios: ['ID_PEDIDO', 'ID_PRODUTO', 'QUANTIDADE', 'VALOR_UNITARIO'],
+    validacoes: [
+      r => (Number(_campo(r, 'QUANTIDADE'))    <= 0) ? 'Quantidade deve ser maior que zero'          : null,
+      r => (Number(_campo(r, 'VALOR_UNITARIO')) < 0) ? 'Valor unitário não pode ser negativo'        : null,
+    ],
+  },
+  PEDIDOS_PARCELAS_PAGAMENTOS: {
+    obrigatorios: ['ID_PEDIDO', 'PARCELA', 'VALOR'],
+    validacoes: [
+      r => (Number(_campo(r, 'VALOR')) <= 0) ? 'Valor do pagamento deve ser maior que zero' : null,
+    ],
+  },
+};
+
+function validarRegistro(tabela, registro) {
+  const regras = REGRAS_TABELA[tabela.toUpperCase()];
+  if (!regras) return null;
+  for (const campo of (regras.obrigatorios || [])) {
+    if (_campo(registro, campo) === undefined)
+      return `O campo "${campo}" é obrigatório`;
+  }
+  for (const fn of (regras.validacoes || [])) {
+    const erro = fn(registro);
+    if (erro) return erro;
+  }
+  return null;
+}
+
 const COLS_OCULTAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ', 'ID_ULTIMA_ATUALIZACAO_WEB',
   'ID_ULTIMA_ATT_IFOOD', 'DATA_INCLUSAO_SIRIUS', 'DATA_ALTERACAO_SIRIUS', 'ULTIMA_ALTERACAO',
@@ -78,6 +128,22 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
   }
 });
 
+/* ── GET /api/:schema/tabelas/:tabela/distinct/:col ── */
+router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async (req, res) => {
+  const { schema, tabela, col } = req.params;
+  if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
+  if (!NOME_VALIDO.test(col))    return res.status(400).json({ erro: 'nome de coluna inválido' });
+  try {
+    const rows = await withTenantConnection(schema, db =>
+      query(db, `SELECT DISTINCT ${col} FROM ${tabela} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT 200`, [])
+    );
+    res.json(rows.map(r => r[col.toUpperCase()]));
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 /* ── GET /api/:schema/tabelas/:tabela — lista paginada ── */
 router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
   const { schema, tabela } = req.params;
@@ -101,6 +167,13 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   // Filtro opcional: qualquer tabela aceita ?filtroLoja=N (ex: dono filtrando clientes por filial)
   const filtroLojaParam   = req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null;
   const idLojaFiltro      = idLojaObrigatorio ?? filtroLojaParam;
+
+  // Filtros extras por coluna: ?filtros={"GRUPO":"BEBIDAS"}
+  let filtrosExtras = {};
+  if (req.query.filtros) {
+    try { filtrosExtras = JSON.parse(req.query.filtros); } catch { /* ignora JSON inválido */ }
+    if (typeof filtrosExtras !== 'object' || Array.isArray(filtrosExtras)) filtrosExtras = {};
+  }
 
   if (cols) {
     const lista = cols.split(',').map(c => c.trim()).filter(Boolean);
@@ -155,6 +228,43 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
         }
       }
 
+      // Filtro especial PF/PJ (chave virtual _PF_PJ, não é coluna real)
+      if (filtrosExtras._PF_PJ === 'PF') {
+        conditions.push(`(CPF IS NOT NULL AND TRIM(CPF::TEXT) <> '')`);
+      } else if (filtrosExtras._PF_PJ === 'PJ') {
+        conditions.push(`(CNPJ IS NOT NULL AND TRIM(CNPJ::TEXT) <> '')`);
+      }
+
+      // Filtros extras por coluna — valida nome, ignora chaves especiais (iniciadas com _)
+      // Suporta igualdade (string/número) e range ({ gte, lte })
+      const colsExtrasValidas = Object.keys(filtrosExtras).filter(c => {
+        if (!NOME_VALIDO.test(c) || c.startsWith('_')) return false;
+        const v = filtrosExtras[c];
+        if (v === '' || v === null || v === undefined) return false;
+        if (typeof v === 'object') return (v.gte != null && v.gte !== '') || (v.lte != null && v.lte !== '');
+        return true;
+      });
+      if (colsExtrasValidas.length) {
+        const colsTabela = await query(db, `
+          SELECT UPPER(column_name) AS column_name
+          FROM information_schema.columns
+          WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
+        `, [schema, tabela]);
+        const colsExistentes = new Set(colsTabela.map(r => r.COLUMN_NAME));
+        for (const col of colsExtrasValidas) {
+          if (!colsExistentes.has(col.toUpperCase())) continue;
+          const val = filtrosExtras[col];
+          if (typeof val === 'object' && val !== null) {
+            // Filtro de range: { gte: minimo, lte: maximo }
+            if (val.gte != null && val.gte !== '') { params.push(val.gte); conditions.push(`${col} >= $${params.length}`); }
+            if (val.lte != null && val.lte !== '') { params.push(val.lte); conditions.push(`${col} <= $${params.length}`); }
+          } else {
+            params.push(val);
+            conditions.push(`${col} = $${params.length}`);
+          }
+        }
+      }
+
       const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
 
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
@@ -176,7 +286,7 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
 });
 
 /* ── POST /api/:schema/tabelas/:tabela — upsert ── */
-router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
+router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 
@@ -198,6 +308,10 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =
       registro.ID_LOJA = idLojaJwt;
     }
   }
+
+  // Validações de negócio por tabela
+  const erroValidacao = validarRegistro(tabela, registro);
+  if (erroValidacao) return res.status(400).json({ erro: erroValidacao });
 
   try {
     const isUpdate = await withTenantConnection(schema, async db => {
@@ -371,6 +485,8 @@ router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) =
   const page     = Math.max(1, parseInt(req.query.page)     || 1);
   const pageSize = Math.min(500, Math.max(1, parseInt(req.query.pageSize) || 50));
   const q        = req.query.q?.trim() || '';
+  const rolePC   = req.userRoles?.[schema];
+  const idLojaPC = rolePC !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
 
   try {
     const result = await withTenantConnection(schema, async db => {
@@ -411,11 +527,17 @@ router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) =
       ].filter(Boolean).join(' ');
 
       const params = [];
-      let where = '';
+      const whereParts = [];
       if (q) {
         params.push(`%${q}%`);
-        where = `WHERE p.ID_PEDIDO::TEXT ILIKE $1`;
+        whereParts.push(`p.ID_PEDIDO::TEXT ILIKE $${params.length}`);
       }
+      // Não-donos veem apenas pedidos da sua loja
+      if (idLojaPC !== null && existe.p.has('ID_LOJA')) {
+        params.push(idLojaPC);
+        whereParts.push(`p.ID_LOJA = $${params.length}`);
+      }
+      const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
       const countRows = await query(db,
         `SELECT COUNT(*) AS cnt FROM PEDIDOS p ${joins} ${where}`, params);
@@ -456,6 +578,9 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
   const dataFim    = req.query.dataFim?.trim()    || '';
   const sortCol    = req.query.sortCol?.trim() || '';
   const sortDir    = (req.query.sortDir?.trim() || 'DESC').toUpperCase();
+  const valorMin   = req.query.valorMin?.trim() ? parseFloat(req.query.valorMin) : null;
+  const valorMax   = req.query.valorMax?.trim() ? parseFloat(req.query.valorMax) : null;
+  const idVendedor = req.query.idVendedor?.trim() || '';
   if (sortCol && !NOME_VALIDO.test(sortCol)) return res.status(400).json({ erro: 'sortCol inválido' });
   if (!['ASC', 'DESC'].includes(sortDir))   return res.status(400).json({ erro: 'sortDir inválido' });
   const _roleP            = req.userRoles?.[schema];
@@ -471,18 +596,56 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       const colNamesP = new Set(colsP.map(c => c.COLUMN_NAME));
       const colNamesI = new Set(colsI.map(c => c.COLUMN_NAME));
 
+      // Detecta coluna de vendedor (ID_VENDEDOR ou NOME_VENDEDOR)
+      let vendedorCol = null;
+      if (colNamesP.has('ID_VENDEDOR'))     vendedorCol = 'ID_VENDEDOR';
+      else if (colNamesP.has('NOME_VENDEDOR')) vendedorCol = 'NOME_VENDEDOR';
+
+      const temVtItem    = colsI.length > 0 && colNamesI.has('VALOR_TOTAL_ITEM');
+      const temCalcTotal = colsI.length > 0 && colNamesI.has('VALOR_UNITARIO') && colNamesI.has('QUANTIDADE');
+      const temValorTotal = temVtItem || temCalcTotal;
+      // Prefere a coluna armazenada VALOR_TOTAL_ITEM (preenchida pelo Delphi/trigger)
+      // para evitar 0,00 quando VALOR_UNITARIO está zerado no servidor
+      const exprValorItem = temVtItem ? 'pi.VALOR_TOTAL_ITEM' : 'pi.VALOR_UNITARIO * pi.QUANTIDADE';
+
       const select = ['p.ID_PEDIDO'];
       if (colNamesP.has('ID_CLIENTE'))     select.push('p.ID_CLIENTE');
       if (colNamesP.has('NOME_CLIENTE'))   select.push('p.NOME_CLIENTE');
       if (colNamesP.has('DATA_DO_PEDIDO')) select.push('p.DATA_DO_PEDIDO');
       if (colNamesP.has('STATUS'))         select.push('p.STATUS');
-      if (colsI.length && colNamesI.has('VALOR_UNITARIO') && colNamesI.has('QUANTIDADE')) {
-        select.push(`(SELECT COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO) AS VALOR_TOTAL`);
+      if (vendedorCol)                     select.push(`p.${vendedorCol}`);
+      if (temValorTotal) {
+        select.push(`(SELECT COALESCE(SUM(${exprValorItem}), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO) AS VALOR_TOTAL`);
       }
 
       const statusOptions = colNamesP.has('STATUS')
         ? (await query(db, `SELECT DISTINCT STATUS FROM PEDIDOS WHERE STATUS IS NOT NULL ORDER BY STATUS`, [])).map(r => r.STATUS)
         : [];
+
+      // Opções de vendedor: se a coluna for ID_VENDEDOR, tenta resolver o nome via JOIN com VENDEDORES
+      // Retorna [{ value, label }] — value é o que vai no filtro, label é o que aparece no select
+      let vendedorOptions = [];
+      if (vendedorCol === 'ID_VENDEDOR') {
+        try {
+          const rows = await query(db, `
+            SELECT DISTINCT p.ID_VENDEDOR AS val,
+              COALESCE(NULLIF(TRIM(v.NOME_VENDEDOR::TEXT), ''), p.ID_VENDEDOR::TEXT) AS lbl
+            FROM PEDIDOS p
+            LEFT JOIN VENDEDORES v ON v.ID_VENDEDOR = p.ID_VENDEDOR
+            WHERE p.ID_VENDEDOR IS NOT NULL
+            ORDER BY lbl
+            LIMIT 200
+          `, []);
+          vendedorOptions = rows.map(r => ({ value: String(r.VAL), label: String(r.LBL) }));
+        } catch {
+          // Tabela VENDEDORES não existe ou não tem NOME_VENDEDOR — usa só o ID
+          const rows = await query(db, `SELECT DISTINCT ID_VENDEDOR AS val FROM PEDIDOS WHERE ID_VENDEDOR IS NOT NULL ORDER BY val LIMIT 200`, []).catch(() => []);
+          vendedorOptions = rows.map(r => ({ value: String(r.VAL), label: String(r.VAL) }));
+        }
+      } else if (vendedorCol) {
+        const rows = await query(db, `SELECT DISTINCT ${vendedorCol} AS val FROM PEDIDOS WHERE ${vendedorCol} IS NOT NULL ORDER BY val LIMIT 200`, []).catch(() => []);
+        vendedorOptions = rows.map(r => ({ value: String(r.VAL), label: String(r.VAL) }));
+      }
 
       const params = [];
       const whereParts = [];
@@ -507,6 +670,16 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       if (idLojaFiltro !== null && colNamesP.has('ID_LOJA')) {
         params.push(idLojaFiltro);
         whereParts.push(`p.ID_LOJA = $${params.length}`);
+      }
+      if (idVendedor && vendedorCol) {
+        params.push(idVendedor);
+        whereParts.push(`p.${vendedorCol}::TEXT = $${params.length}`);
+      }
+      // Filtro de faixa de valor total (subquery inline no WHERE) — usa a mesma expressão do SELECT
+      if (temValorTotal) {
+        const subqValor = `(SELECT COALESCE(SUM(${exprValorItem}), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO)`;
+        if (valorMin !== null && !isNaN(valorMin)) { params.push(valorMin); whereParts.push(`${subqValor} >= $${params.length}`); }
+        if (valorMax !== null && !isNaN(valorMax)) { params.push(valorMax); whereParts.push(`${subqValor} <= $${params.length}`); }
       }
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
@@ -535,7 +708,7 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
           params
         );
       }
-      return { total, registros, statusOptions };
+      return { total, registros, statusOptions, vendedorOptions, vendedorCol };
     });
     res.json(result);
   } catch (e) {
@@ -547,8 +720,16 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
 router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) => {
   const { schema, id } = req.params;
   if (!/^\d+$/.test(id)) return res.status(400).json({ erro: 'id inválido' });
+  const roleI     = req.userRoles?.[schema];
+  const idLojaJwt = roleI !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
   try {
     const rows = await withTenantConnection(schema, async db => {
+      // Não-donos só podem ver itens de pedidos da sua loja
+      if (idLojaJwt !== null) {
+        const pedido = await query(db, `SELECT ID_LOJA FROM PEDIDOS WHERE ID_PEDIDO = $1 LIMIT 1`, [id]);
+        if (!pedido.length || Number(pedido[0].ID_LOJA) !== idLojaJwt)
+          return null; // acesso negado
+      }
       const colsI  = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
       const colsPR = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
       if (!colsI.length) return [];
@@ -569,14 +750,19 @@ router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) 
       }
       if (colNamesI.has('QUANTIDADE'))     select.push('pi.QUANTIDADE');
       if (colNamesI.has('VALOR_UNITARIO')) select.push('pi.VALOR_UNITARIO');
-      if (colNamesI.has('VALOR_UNITARIO') && colNamesI.has('QUANTIDADE'))
+      // Prefere a coluna armazenada; calcula como fallback se VALOR_TOTAL_ITEM não existir
+      if (colNamesI.has('VALOR_TOTAL_ITEM')) {
+        select.push('pi.VALOR_TOTAL_ITEM');
+      } else if (colNamesI.has('VALOR_UNITARIO') && colNamesI.has('QUANTIDADE')) {
         select.push('(pi.VALOR_UNITARIO * pi.QUANTIDADE) AS VALOR_TOTAL_ITEM');
+      }
 
       return query(db,
         `SELECT ${select.join(', ')} FROM PEDIDOS_ITENS pi ${joinPR} WHERE pi.ID_PEDIDO = $1 ORDER BY pi.ID_PEDIDO_ITEM`,
         [id]
       );
     });
+    if (rows === null) return res.status(403).json({ erro: 'pedido não pertence à sua loja' });
     res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -584,9 +770,9 @@ router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) 
 });
 
 /* ── GET /api/:schema/dashboard/faturamento-por-loja ── */
-router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const { ano, mes } = req.query;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
 
   try {
     const result = await withTenantConnection(schema, async db => {
@@ -613,23 +799,12 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, asyn
       const hasSF     = colsSF.length > 0;  // sync_filiais — preenchida automaticamente pelo cliente
       const hasAuxGen = colsAG.length > 0;  // AUX_GENERICA — fallback configurado manualmente
 
-      const params = [];
-      const whereParts = [];
-      if (dateExpr && ano && /^\d{4}$/.test(ano)) {
-        params.push(parseInt(ano));
-        whereParts.push(`EXTRACT(YEAR FROM ${dateExpr}) = $${params.length}`);
-      }
-      const mesInt = parseInt(mes);
-      if (dateExpr && mes && /^\d{1,2}$/.test(mes) && mesInt >= 1 && mesInt <= 12) {
-        params.push(mesInt);
-        whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
-      }
       const roleF   = req.userRoles?.[schema];
       const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
-      if (idLojaF !== null) {
-        params.push(idLojaF);
-        whereParts.push(`p.ID_LOJA = $${params.length}`);
-      }
+
+      /* reutiliza _buildWhere para aplicar o mesmo filtro de data/loja dos demais gráficos */
+      const params = [];
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
       // Prioridade do nome: sync_filiais (auto) > AUX_GENERICA (manual) > 'Loja N'
@@ -674,8 +849,16 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, asyn
 router.get('/:schema/pedidos/:id/pagamentos', authJwt, checkSchema, async (req, res) => {
   const { schema, id } = req.params;
   if (!/^\d+$/.test(id)) return res.status(400).json({ erro: 'id inválido' });
+  const roleP     = req.userRoles?.[schema];
+  const idLojaJwt = roleP !== 'dono' ? (req.userLojas?.[schema] ?? null) : null;
   try {
     const result = await withTenantConnection(schema, async db => {
+      // Não-donos só podem ver pagamentos de pedidos da sua loja
+      if (idLojaJwt !== null) {
+        const pedido = await query(db, `SELECT ID_LOJA FROM PEDIDOS WHERE ID_PEDIDO = $1 LIMIT 1`, [id]);
+        if (!pedido.length || Number(pedido[0].ID_LOJA) !== idLojaJwt)
+          return null; // acesso negado
+      }
       const cols = await colunasTabela(db, schema, 'PEDIDOS_PARCELAS_PAGAMENTOS').catch(() => []);
       if (!cols.length) return { colunas: [], registros: [] };
       const colsVisiveis = cols.filter(c => !COLS_OCULTAS.has(c.COLUMN_NAME) && c.COLUMN_NAME !== 'ID_PEDIDO');
@@ -690,6 +873,7 @@ router.get('/:schema/pedidos/:id/pagamentos', authJwt, checkSchema, async (req, 
         registros,
       };
     });
+    if (result === null) return res.status(403).json({ erro: 'pedido não pertence à sua loja' });
     res.json(result);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -761,20 +945,53 @@ function _dateExprFromCols(colsP) {
   return isNativeDate ? `p.${dataCol}` : `NULLIF(p.${dataCol}, '')::DATE`;
 }
 
-/* helper: WHERE parts comuns a todos os gráficos */
-function _buildWhere(colsP, { ano, mes, idLojaF }, params) {
+/* helper: WHERE parts comuns a todos os gráficos
+ * Suporta dois modos de filtro de data:
+ *   - Exato:   { ano, mes }  — usado pelo dono (selects únicos)
+ *   - Intervalo: { anoInicio, mesInicio, anoFim, mesFim } — usado pelo gerente
+ * Se algum param de intervalo estiver presente, o filtro exato é ignorado.
+ */
+function _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params) {
   const colNamesP  = new Set(colsP.map(c => c.COLUMN_NAME));
   const dateExpr   = _dateExprFromCols(colsP);
   const whereParts = [];
-  if (dateExpr && ano && /^\d{4}$/.test(ano)) {
-    params.push(parseInt(ano));
-    whereParts.push(`EXTRACT(YEAR FROM ${dateExpr}) = $${params.length}`);
+
+  if (dateExpr) {
+    const hasRange = (anoInicio && mesInicio) || (anoFim && mesFim);
+    if (hasRange) {
+      /* ── filtro por intervalo ── */
+      if (anoInicio && mesInicio) {
+        const aI = parseInt(anoInicio), mI = parseInt(mesInicio);
+        if (/^\d{4}$/.test(anoInicio) && mI >= 1 && mI <= 12) {
+          params.push(aI); params.push(mI);
+          whereParts.push(
+            `DATE_TRUNC('month', ${dateExpr}) >= make_date($${params.length - 1}, $${params.length}, 1)`
+          );
+        }
+      }
+      if (anoFim && mesFim) {
+        const aF = parseInt(anoFim), mF = parseInt(mesFim);
+        if (/^\d{4}$/.test(anoFim) && mF >= 1 && mF <= 12) {
+          params.push(aF); params.push(mF);
+          whereParts.push(
+            `DATE_TRUNC('month', ${dateExpr}) <= make_date($${params.length - 1}, $${params.length}, 1)`
+          );
+        }
+      }
+    } else {
+      /* ── filtro exato por ano/mês (comportamento original) ── */
+      if (ano && /^\d{4}$/.test(ano)) {
+        params.push(parseInt(ano));
+        whereParts.push(`EXTRACT(YEAR FROM ${dateExpr}) = $${params.length}`);
+      }
+      const mesInt = parseInt(mes);
+      if (mes && /^\d{1,2}$/.test(mes) && mesInt >= 1 && mesInt <= 12) {
+        params.push(mesInt);
+        whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
+      }
+    }
   }
-  const mesInt = parseInt(mes);
-  if (dateExpr && mes && /^\d{1,2}$/.test(mes) && mesInt >= 1 && mesInt <= 12) {
-    params.push(mesInt);
-    whereParts.push(`EXTRACT(MONTH FROM ${dateExpr}) = $${params.length}`);
-  }
+
   if (idLojaF !== null && colNamesP.has('ID_LOJA')) {
     params.push(idLojaF);
     whereParts.push(`p.ID_LOJA = $${params.length}`);
@@ -785,7 +1002,7 @@ function _buildWhere(colsP, { ano, mes, idLojaF }, params) {
 /* ── GET /api/:schema/dashboard/evolucao-mensal ── */
 router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const { ano, mes } = req.query;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const roleF   = req.userRoles?.[schema];
   const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
   try {
@@ -794,7 +1011,7 @@ router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRo
       const colsI = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
       if (!colsP.length) return [];
       const params = [];
-      const { whereParts, dateExpr } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const { whereParts, dateExpr } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
       if (!dateExpr) return [];
       const colsI_set = new Set(colsI.map(c => c.COLUMN_NAME));
       const hasValor  = colsI.length && colsI_set.has('VALOR_UNITARIO') && colsI_set.has('QUANTIDADE');
@@ -818,10 +1035,67 @@ router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRo
   }
 });
 
+/* ── GET /api/:schema/dashboard/evolucao-mensal-por-loja ── */
+router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+  const { schema } = req.params;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
+  const idLojaF = null; // dono only — want all stores
+  try {
+    const result = await withTenantConnection(schema, async db => {
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      const colsI = await colunasTabela(db, schema, 'PEDIDOS_ITENS').catch(() => []);
+      if (!colsP.length) return [];
+      const colsP_set = new Set(colsP.map(c => c.COLUMN_NAME));
+      if (!colsP_set.has('ID_LOJA')) return [];
+      const params = [];
+      const { whereParts, dateExpr } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
+      if (!dateExpr) return [];
+      const colsI_set         = new Set(colsI.map(c => c.COLUMN_NAME));
+      const hasValorTotalItem = colsI.length && colsI_set.has('VALOR_TOTAL_ITEM');
+      const hasValorCalc      = colsI.length && colsI_set.has('VALOR_UNITARIO') && colsI_set.has('QUANTIDADE');
+      const hasValor          = hasValorTotalItem || hasValorCalc;
+      const valorExpr         = hasValorTotalItem ? 'pi.VALOR_TOTAL_ITEM' : 'pi.VALOR_UNITARIO * pi.QUANTIDADE';
+      const where             = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+
+      const colsSF    = await colunasTabela(db, schema, 'sync_filiais').catch(() => []);
+      const colsAG    = await colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []);
+      const hasSF     = colsSF.length > 0;
+      const hasAuxGen = colsAG.length > 0;
+      const nomeLojaExpr = [
+        hasSF     && `MAX(sf.nome)`,
+        hasAuxGen && `MAX(ag.DESCRICAO)`,
+        `'Loja ' || COALESCE(p.ID_LOJA::TEXT, '?')`,
+      ].filter(Boolean).reduce((acc, expr) => `COALESCE(${acc}, ${expr})`);
+      const joinSF = hasSF     ? `LEFT JOIN sync_filiais sf ON sf.id_loja = p.ID_LOJA` : '';
+      const joinAG = hasAuxGen ? `LEFT JOIN AUX_GENERICA ag ON ag.SUB_TABELA = 'Lojas' AND CAST(ag.ID_SUB_TABELA AS TEXT) = CAST(p.ID_LOJA AS TEXT)` : '';
+
+      return query(db, `
+        SELECT
+          p.ID_LOJA,
+          ${nomeLojaExpr} AS NOME_LOJA,
+          TO_CHAR(DATE_TRUNC('month', ${dateExpr}), 'YYYY-MM') AS MES,
+          COUNT(DISTINCT p.ID_PEDIDO) AS QTD_PEDIDOS,
+          ${hasValor ? `COALESCE(SUM(${valorExpr}), 0)` : '0'} AS FATURAMENTO
+        FROM PEDIDOS p
+        ${hasValor ? `LEFT JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO` : ''}
+        ${joinSF}
+        ${joinAG}
+        ${where}
+        GROUP BY p.ID_LOJA, DATE_TRUNC('month', ${dateExpr})
+        ORDER BY p.ID_LOJA, DATE_TRUNC('month', ${dateExpr})
+      `, params);
+    });
+    res.json(result);
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json([]);
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 /* ── GET /api/:schema/dashboard/top-produtos ── */
 router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const { ano, mes } = req.query;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const roleF   = req.userRoles?.[schema];
   const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
   try {
@@ -834,7 +1108,7 @@ router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole(
       const colNamesPR = new Set(colsPR.map(c => c.COLUMN_NAME));
       if (!colNamesI.has('VALOR_UNITARIO') || !colNamesI.has('QUANTIDADE') || !colNamesI.has('ID_PRODUTO')) return [];
       const params = [];
-      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
       const where    = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
       const descCol  = colNamesPR.has('DESCRICAO') ? 'pr.DESCRICAO' : colNamesPR.has('NOME') ? 'pr.NOME' : null;
       const nomeExpr = descCol ? `COALESCE(${descCol}, pi.ID_PRODUTO::TEXT)` : `pi.ID_PRODUTO::TEXT`;
@@ -864,7 +1138,7 @@ router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole(
 /* ── GET /api/:schema/dashboard/pedidos-por-status ── */
 router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const { ano, mes } = req.query;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const roleF   = req.userRoles?.[schema];
   const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
   try {
@@ -872,7 +1146,7 @@ router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requir
       const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
       if (!colsP.length || !new Set(colsP.map(c => c.COLUMN_NAME)).has('STATUS')) return [];
       const params = [];
-      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
       return query(db, `SELECT STATUS, COUNT(*) AS QTD FROM PEDIDOS p ${where} GROUP BY STATUS ORDER BY QTD DESC`, params);
     });
@@ -886,7 +1160,7 @@ router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requir
 /* ── GET /api/:schema/dashboard/faturamento-por-vendedor ── */
 router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
-  const { ano, mes } = req.query;
+  const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const roleF   = req.userRoles?.[schema];
   const idLojaF = roleF !== 'dono' ? (req.userLojas?.[schema] ?? null) : (req.query.filtroLoja ? parseInt(req.query.filtroLoja) : null);
   try {
@@ -901,12 +1175,16 @@ router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, 
       const colsI_set = new Set(colsI.map(c => c.COLUMN_NAME));
       const hasValor  = colsI.length && colsI_set.has('VALOR_UNITARIO') && colsI_set.has('QUANTIDADE');
       const params = [];
-      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF }, params);
+      const { whereParts } = _buildWhere(colsP, { ano, mes, idLojaF, anoInicio, mesInicio, anoFim, mesFim }, params);
       whereParts.push('p.ID_VENDEDOR IS NOT NULL');
       const where     = `WHERE ${whereParts.join(' AND ')}`;
       const nomeCols  = ['NOME', 'RAZAO_SOCIAL', 'FANTASIA', 'NOME_VENDEDOR'].filter(c => colNamesV.has(c)).map(c => `v.${c}`);
-      const nomeExpr  = nomeCols.length ? `COALESCE(${nomeCols.join(', ')}, p.ID_VENDEDOR::TEXT)` : `p.ID_VENDEDOR::TEXT`;
       const joinV     = colsV.length ? `LEFT JOIN VENDEDORES v ON v.ID_VENDEDOR = p.ID_VENDEDOR` : '';
+      const nomePartes = [];
+      if (nomeCols.length) nomePartes.push(...nomeCols);
+      if (colNamesP.has('NOME_VENDEDOR')) nomePartes.push('p.NOME_VENDEDOR');
+      nomePartes.push('p.ID_VENDEDOR::TEXT');
+      const nomeExpr  = `COALESCE(${nomePartes.join(', ')})`;
       return query(db, `
         SELECT
           p.ID_VENDEDOR,
@@ -917,7 +1195,7 @@ router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, 
         ${hasValor ? 'LEFT JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO' : ''}
         ${joinV}
         ${where}
-        GROUP BY p.ID_VENDEDOR, ${nomeExpr}
+        GROUP BY p.ID_VENDEDOR${colNamesP.has('NOME_VENDEDOR') ? ', p.NOME_VENDEDOR' : ''}${nomeCols.length ? ', ' + nomeCols.join(', ') : ''}
         ORDER BY FATURAMENTO DESC
         LIMIT 10
       `, params);
@@ -938,31 +1216,27 @@ router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {
   const lojaFiltro  = idLoja ?? filtroLoja;
 
   try {
-    const result = await withTenantConnection(schema, async db => {
-      const hoje = new Date().toISOString().slice(0, 10);
+    const hoje = new Date().toISOString().slice(0, 10);
+    const lojaWhere  = lojaFiltro !== null ? `AND ID_LOJA = ${lojaFiltro}` : '';
+    const lojaWhereP = lojaFiltro !== null ? `AND p.ID_LOJA = ${lojaFiltro}` : '';
 
-      const lojaWhere = lojaFiltro !== null ? `AND ID_LOJA = ${lojaFiltro}` : '';
-      const lojaWhereP = lojaFiltro !== null ? `AND p.ID_LOJA = ${lojaFiltro}` : '';
+    const [clientes, pedidosHoje, faturamentoHoje, produtosAtivos] = await Promise.all([
+      withTenantConnection(schema, db => query(db, `SELECT COUNT(*) AS cnt FROM CLIENTES WHERE TRIM(SITUACAO::TEXT) = 'A' ${lojaWhere}`, [])).catch(() => [{ CNT: 0 }]),
+      withTenantConnection(schema, db => query(db, `SELECT COUNT(*) AS cnt FROM PEDIDOS p WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`, [hoje])).catch(() => [{ CNT: 0 }]),
+      withTenantConnection(schema, db => query(db, `
+        SELECT COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) AS total
+        FROM PEDIDOS p
+        JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO
+        WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`, [hoje])).catch(() => [{ TOTAL: 0 }]),
+      withTenantConnection(schema, db => query(db, `SELECT COUNT(*) AS cnt FROM PRODUTOS WHERE TRIM(SITUACAO::TEXT) = 'A'`, [])).catch(() => [{ CNT: 0 }]),
+    ]);
 
-      const [clientes, pedidosHoje, faturamentoHoje, produtosAtivos] = await Promise.all([
-        query(db, `SELECT COUNT(*) AS cnt FROM CLIENTES WHERE TRIM(SITUACAO::TEXT) = 'A' ${lojaWhere}`    , []).catch(() => [{ CNT: 0 }]),
-        query(db, `SELECT COUNT(*) AS cnt FROM PEDIDOS p WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`       , [hoje]).catch(() => [{ CNT: 0 }]),
-        query(db, `
-          SELECT COALESCE(SUM(pi.VALOR_UNITARIO * pi.QUANTIDADE), 0) AS total
-          FROM PEDIDOS p
-          JOIN PEDIDOS_ITENS pi ON pi.ID_PEDIDO = p.ID_PEDIDO
-          WHERE p.DATA_DO_PEDIDO = $1 ${lojaWhereP}`, [hoje]).catch(() => [{ TOTAL: 0 }]),
-        query(db, `SELECT COUNT(*) AS cnt FROM PRODUTOS WHERE TRIM(SITUACAO::TEXT) = 'A'`, []).catch(() => [{ CNT: 0 }]),
-      ]);
-
-      return {
-        clientesAtivos:   parseInt(clientes[0]?.CNT      ?? 0),
-        pedidosHoje:      parseInt(pedidosHoje[0]?.CNT   ?? 0),
-        faturamentoHoje:  parseFloat(faturamentoHoje[0]?.TOTAL ?? 0),
-        produtosAtivos:   parseInt(produtosAtivos[0]?.CNT ?? 0),
-      };
+    res.json({
+      clientesAtivos:  parseInt(clientes[0]?.CNT     ?? 0),
+      pedidosHoje:     parseInt(pedidosHoje[0]?.CNT  ?? 0),
+      faturamentoHoje: parseFloat(faturamentoHoje[0]?.TOTAL ?? 0),
+      produtosAtivos:  parseInt(produtosAtivos[0]?.CNT ?? 0),
     });
-    res.json(result);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
