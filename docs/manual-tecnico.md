@@ -417,8 +417,33 @@ Rotas para a interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <j
 | GET | `/api/:schema/tabelas/:tabela/next-pk` | `MAX(pk) + 1` — query: `?pk=COL` |
 | GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro por PK — query: `?pk=COL&value=VAL` |
 | GET | `/api/:schema/tabelas/:tabela` | Paginação + busca (`?q=`) + filtro de status (`?statusCol=&statusVal=`) |
-| POST | `/api/:schema/tabelas/:tabela` | Upsert `{ pk, registro }` (pk pode ser array); incrementa `seq_atualizacao_matriz` se a coluna existir |
-| DELETE | `/api/:schema/tabelas/:tabela` | Delete `{ pk, pkValores }` |
+| POST | `/api/:schema/tabelas/:tabela` | Upsert `{ pk, registro }` (pk pode ser array); incrementa `seq_atualizacao_matriz` se a coluna existir; captura `SELECT *` antes do upsert (UPDATE) e grava em `dados_antes` no audit log |
+| DELETE | `/api/:schema/tabelas/:tabela` | Delete `{ pk, pkValores }`; captura `SELECT *` antes de deletar dentro da mesma `withTenantConnection` e grava em `dados_antes` no audit log |
+
+**Audit log:**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/audit-log` | Histórico de operações paginado (`pageSize` máx 100, padrão 50); filtros opcionais: `tabela`, `operacao`, `dataInicio`, `dataFim`; requer role `gerente` ou `dono`; gerentes veem apenas registros cuja `ID_LOJA` corresponde à sua loja |
+
+**Estrutura da tabela `public.audit_log`:**
+
+```sql
+CREATE TABLE public.audit_log (
+  id          SERIAL       PRIMARY KEY,
+  id_usuario  INTEGER      REFERENCES public.usuarios(id),
+  schema_name TEXT         NOT NULL,
+  tabela      TEXT         NOT NULL,
+  operacao    TEXT         NOT NULL CHECK (operacao IN ('INSERT', 'UPDATE', 'DELETE')),
+  pk_valor    TEXT,
+  dados       JSONB,        -- campos enviados pelo formulário (null em DELETE)
+  dados_antes JSONB,        -- snapshot do registro antes da operação (null em INSERT; null em registros pré-migração)
+  ip_cliente  TEXT,
+  criado_em   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+)
+```
+
+A coluna `dados_antes` foi adicionada via migração incremental (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) executada no startup do servidor. Registros gravados antes da migração têm `dados_antes = null`.
 
 **Pedidos:**
 

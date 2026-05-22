@@ -314,7 +314,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
   if (erroValidacao) return res.status(400).json({ erro: erroValidacao });
 
   try {
-    const isUpdate = await withTenantConnection(schema, async db => {
+    const { isUpdate, dadosAntes } = await withTenantConnection(schema, async db => {
       const serverCols = await query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
@@ -327,6 +327,13 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
       const pkVals  = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
       const existing = await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
       const update = existing.length > 0;
+
+      // Captura estado anterior para o audit log de UPDATE
+      let dadosAntes = null;
+      if (update) {
+        const before = await query(db, `SELECT * FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
+        dadosAntes = before[0] ?? null;
+      }
 
       const cols = Object.keys(registro).filter(c => NOME_VALIDO.test(c) && allowed.has(c.toUpperCase()));
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
@@ -350,15 +357,16 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
           pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
         );
       }
-      return update;
+      return { isUpdate: update, dadosAntes };
     });
 
     // Audit log universal (fire-and-forget)
     const pkStr = pks.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p.toUpperCase())]).join('|');
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null;
     pool.query(
-      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, ip_cliente)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.userId, schema, tabela.toUpperCase(), isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
+      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, dados_antes, ip_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [req.userId, schema, tabela.toUpperCase(), isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, dadosAntes, ip]
     ).catch(() => {});
 
     res.json({ ok: true });
@@ -379,17 +387,23 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('ger
   if (pks.some(p => !NOME_VALIDO.test(p))) return res.status(400).json({ erro: 'pk inválido' });
 
   try {
-    await withTenantConnection(schema, db => {
-      const where = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-      return execute(db, `DELETE FROM ${tabela} WHERE ${where}`, pkValores);
+    // Captura estado anterior e apaga na mesma conexão de tenant
+    const dadosAntes = await withTenantConnection(schema, async db => {
+      const whereStr = pks.map((p, i) => `${p.toUpperCase()} = $${i + 1}`).join(' AND ');
+      const before   = await query(db, `SELECT * FROM ${tabela} WHERE ${whereStr} LIMIT 1`, pkValores);
+      const snap     = before[0] ?? null;
+      const where    = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      await execute(db, `DELETE FROM ${tabela} WHERE ${where}`, pkValores);
+      return snap;
     });
 
     // Audit log universal (fire-and-forget)
     const pkStr = (Array.isArray(pkValores) ? pkValores : [pkValores]).join('|');
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null;
     pool.query(
-      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, ip_cliente)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [req.userId, schema, tabela.toUpperCase(), 'DELETE', pkStr, { pk: pks, pkValores }, req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || null]
+      `INSERT INTO public.audit_log (id_usuario, schema_name, tabela, operacao, pk_valor, dados, dados_antes, ip_cliente)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [req.userId, schema, tabela.toUpperCase(), 'DELETE', pkStr, null, dadosAntes, ip]
     ).catch(() => {});
 
     res.json({ ok: true });
@@ -425,7 +439,7 @@ router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'd
   try {
     const [rows, countRow] = await Promise.all([
       pool.query(
-        `SELECT al.id, al.id_usuario, u.email, al.tabela, al.operacao, al.pk_valor, al.dados, al.ip_cliente, al.criado_em
+        `SELECT al.id, al.id_usuario, u.email, al.tabela, al.operacao, al.pk_valor, al.dados, al.dados_antes, al.ip_cliente, al.criado_em
          FROM public.audit_log al
          LEFT JOIN public.usuarios u ON u.id = al.id_usuario
          WHERE ${where}

@@ -182,8 +182,24 @@ Rotas para a interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <j
 | GET | `/api/:schema/tabelas/:tabela/next-pk` | Próximo valor de PK disponível (`?pk=COLUNA`) |
 | GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro único por PK (`?pk=COL&value=VAL`) |
 | GET | `/api/:schema/tabelas/:tabela` | Listagem paginada com busca textual e filtro de status |
-| POST | `/api/:schema/tabelas/:tabela` | Upsert — body `{ pk, registro }`; suporta PK composta (array); incrementa `seq_atualizacao_matriz` automaticamente |
-| DELETE | `/api/:schema/tabelas/:tabela` | Deleção por PK — body `{ pk, pkValores }` |
+| POST | `/api/:schema/tabelas/:tabela` | Upsert — body `{ pk, registro }`; suporta PK composta (array); incrementa `seq_atualizacao_matriz` automaticamente; captura estado anterior (`dados_antes`) para audit log |
+| DELETE | `/api/:schema/tabelas/:tabela` | Deleção por PK — body `{ pk, pkValores }`; captura snapshot do registro antes de apagar para audit log |
+
+**Audit log:**
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | `/api/:schema/audit-log` | Log de auditoria paginado; filtros: `tabela`, `operacao` (INSERT/UPDATE/DELETE), `dataInicio`, `dataFim`; requer role `gerente` ou `dono`; retorna `registros` + `total` |
+
+Cada entrada do audit log inclui:
+- `dados` — conteúdo enviado pelo formulário (campos alterados; `null` em DELETE)
+- `dados_antes` — snapshot completo do registro **antes** da operação (capturado via `SELECT *` antes do upsert/delete; `null` em INSERT e em registros criados antes da migração `dados_antes`)
+- `email` do usuário, `tabela`, `operacao`, `pk_valor`, `ip_cliente`, `criado_em`
+
+O frontend SiriusWebFrontend exibe no modal "Ver dados":
+- **INSERT** — tabela campo → valor inserido
+- **DELETE** — tabela campo → valor excluído (em vermelho)
+- **UPDATE** — comparação antes × depois, realçando em azul apenas os campos realmente alterados (falsos positivos eliminados: só campos presentes em `dados` são comparados, evitando campos fora do formulário aparecerem como alterados)
 
 **Endpoints de pedidos:**
 

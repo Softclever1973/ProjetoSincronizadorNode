@@ -48,6 +48,8 @@ const DDL_CONTROLE = [
   `CREATE INDEX IF NOT EXISTS idx_audit_log_schema ON public.audit_log(schema_name)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_ts     ON public.audit_log(criado_em DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON public.audit_log(id_usuario)`,
+  // Migração incremental — adiciona dados_antes se ainda não existir
+  `ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS dados_antes JSONB`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
