@@ -17,7 +17,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-scripts/
+export-schema.js
+migrate-data.js
+migrate-public-to-schema.js
 
 .claude/
 CLAUDE.md
