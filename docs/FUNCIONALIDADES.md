@@ -189,7 +189,7 @@ Rotas para a interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <j
 
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
-| GET | `/api/:schema/audit-log` | Log de auditoria paginado; filtros: `tabela`, `operacao` (INSERT/UPDATE/DELETE), `dataInicio`, `dataFim`; requer role `gerente` ou `dono`; retorna `registros` + `total` |
+| GET | `/api/:schema/audit-log` | Log de auditoria paginado (`pageSize` máx. 100, padrão 50); filtros: `tabela`, `operacao` (INSERT/UPDATE/DELETE), `dataInicio`, `dataFim`; requer role `gerente` ou `dono`; gerentes veem apenas registros cuja `ID_LOJA` corresponde à sua loja; retorna `registros` + `total` |
 
 Cada entrada do audit log inclui:
 - `dados` — conteúdo enviado pelo formulário (campos alterados; `null` em DELETE)
@@ -201,14 +201,45 @@ O frontend SiriusWebFrontend exibe no modal "Ver dados":
 - **DELETE** — tabela campo → valor excluído (em vermelho)
 - **UPDATE** — comparação antes × depois, realçando em azul apenas os campos realmente alterados (falsos positivos eliminados: só campos presentes em `dados` são comparados, evitando campos fora do formulário aparecerem como alterados)
 
+**Gestão de usuários:**
+
+| Método | Endpoint | Role mínimo | Descrição |
+|--------|----------|-------------|-----------|
+| GET | `/api/:schema/usuarios` | gerente | Lista usuários; dono vê todos os schemas, gerente vê apenas sua loja |
+| POST | `/api/:schema/usuarios` | gerente | Cria usuário e vincula ao schema (`nome`, `email`, `senha`, `role`, `id_loja`, `id_vendedor`) |
+| PATCH | `/api/:schema/usuarios/:id/ativo` | gerente | Ativa/desativa usuário |
+| PATCH | `/api/:schema/usuarios/:id/perfil` | gerente | Edita nome, email ou senha |
+| PATCH | `/api/:schema/usuarios/:id/role` | dono | Altera role e loja do usuário |
+| GET | `/api/:schema/vendedores-disponiveis` | gerente | Lista vendedores da tabela VENDEDORES do tenant para popular selects |
+
 **Endpoints de pedidos:**
 
 | Método | Endpoint | Descrição |
 |--------|----------|-----------|
-| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado; suporta `?q=` e `?status=` |
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado; suporta `?q=`, `?status=`, `?dataInicio=`, `?dataFim=`, filtro por vendedor e faixa de valor |
 | GET | `/api/:schema/pedidos-completo` | JOIN flat PEDIDOS + PEDIDOS_ITENS + PRODUTOS + PEDIDOS_PARCELAS_PAGAMENTOS; colunas ausentes ignoradas silenciosamente |
 | GET | `/api/:schema/pedidos/:id/itens` | Itens com JOIN em PRODUTOS (resolve descrição, unidade, valor total do item) |
 | GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas de pagamento (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
+**Endpoints de dashboard:**
+
+| Método | Endpoint | Role mínimo | Descrição |
+|--------|----------|-------------|-----------|
+| GET | `/api/:schema/dashboard` | vendedor | Totais do dia: clientes ativos, pedidos hoje, faturamento hoje, produtos ativos |
+| GET | `/api/:schema/dashboard/faturamento-por-loja` | gerente | Faturamento e contagem de pedidos por loja; filtros de data e período |
+| GET | `/api/:schema/dashboard/evolucao-mensal` | gerente | Faturamento e contagem mensal; suporta filtro por mês exato ou intervalo |
+| GET | `/api/:schema/dashboard/evolucao-mensal-por-loja` | dono | Evolução mensal por loja (série histórica multi-loja) |
+| GET | `/api/:schema/dashboard/top-produtos` | gerente | Top 10 produtos por faturamento e quantidade vendida |
+| GET | `/api/:schema/dashboard/pedidos-por-status` | gerente | Contagem de pedidos agrupada por status |
+| GET | `/api/:schema/dashboard/faturamento-por-vendedor` | gerente | Top 10 vendedores por faturamento |
+
+**Outros:**
+
+| Método | Endpoint | Descrição |
+|--------|----------|-----------|
+| GET | `/api/:schema/filiais` | Lista filiais registradas em `sync_filiais` (`id`, `nome`) |
+| GET | `/api/:schema/admin/sync-config` | Lê configurações de sync do schema (role: dono) |
+| PUT | `/api/:schema/admin/sync-config` | Atualiza configuração de sync — chave `filtro_filial_clientes` (role: dono) |
 
 ---
 
@@ -347,7 +378,7 @@ Tabelas em `tabelas.js`, organizadas na ordem abaixo (respeita dependências de 
 
 | Grupo | Tabelas |
 |-------|---------|
-| Auxiliares | `UNIDADES`, `AUX_CLASSIFICACOES_FISCAIS`, `AUX_CODIFICACAO_GRUPOS`, `AUX_ESPECIES_EMBALAGENS`, `AUX_GENERICA`, `AUX_PAISES_BACEN`, `AUX_PARCELAS_PAGAMENTOS`, `AUX_SITUACOES_TRIBUTARIAS`, `AUX_SUB_GRUPOS`, `AUX_MOEDAS` |
+| Auxiliares | `UNIDADES`, `AUX_CLASSIFICACOES_FISCAIS`, `AUX_CODIFICACAO_GRUPOS`, `AUX_ESPECIES_EMBALAGENS`, `AUX_GENERICA`, `AUX_PAISES_BACEN`, `AUX_PARCELAS_PAGAMENTOS`, `FORMAS_DE_PAGAMENTOS`, `AUX_SITUACOES_TRIBUTARIAS`, `AUX_SUB_GRUPOS`, `AUX_MOEDAS` |
 | Cadastros | `CENTROS_DE_CUSTO`, `CLASSIFICACOES`, `CODIGOS_REGIMES_TRIBUTARIOS`, `CONTAS`, `DEPARTAMENTOS`, `LISTA_PRECOS`, `TIPOS_PRODUTOS` |
 | Produtos | `PRODUTOS`, `PRODUTOS_GRADES`, `PRODUTOS_X_LISTA` |
 | Clientes | `CLIENTES`, `CLIENTES_X_ENTREGA`, `ENDERECOS_DE_RETIRADA` |

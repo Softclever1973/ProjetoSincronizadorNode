@@ -102,10 +102,11 @@ client.exe
 npm start   # ou npm run dev para auto-reload
 ```
 
-1. Lê `.env` (`DATABASE_URL`, `PORT`, `SYNC_TOKEN`, `JWT_SECRET`, `ADMIN_TOKEN`)
-2. Chama `db-init.js` — cria tabelas de controle em `public` se não existirem
-3. Sobe o Express nas rotas `/datasnap/rest/TSM*`
-4. Aceita chamadas de qualquer filial com token válido
+1. Se `.env` ausente, executa `src/setup-wizard.js` interativamente antes de qualquer inicialização
+2. Lê `.env` (`DATABASE_URL`, `PORT`, `JWT_SECRET`, `ADMIN_TOKEN`)
+3. Chama `db-init.js` — cria/migra tabelas de controle em `public` e executa `migrarTodosSchemas()` para instalar DDL e triggers de deleção em todos os schemas ativos
+4. Sobe o Express nas rotas `/datasnap/rest/TSM*`, `/api/` e `/auth`
+5. Aceita chamadas de qualquer filial com token válido
 
 ### 2.6 Modo em segundo plano e bandeja do sistema (`client.exe`)
 
@@ -336,11 +337,11 @@ O servidor também filtra colunas que não existem no schema PostgreSQL via `inf
 
 ## 6. Tabelas Sincronizadas
 
-38 tabelas em 9 grupos, ordenadas por dependência FK:
+39 tabelas em 9 grupos, ordenadas por dependência FK:
 
 | Grupo | Tabelas |
 |---|---|
-| **Auxiliares** | UNIDADES, AUX_CLASSIFICACOES_FISCAIS, AUX_CODIFICACAO_GRUPOS, AUX_ESPECIES_EMBALAGENS, AUX_GENERICA, AUX_PAISES_BACEN, AUX_PARCELAS_PAGAMENTOS, AUX_SITUACOES_TRIBUTARIAS, AUX_SUB_GRUPOS, AUX_MOEDAS |
+| **Auxiliares** | UNIDADES, AUX_CLASSIFICACOES_FISCAIS, AUX_CODIFICACAO_GRUPOS, AUX_ESPECIES_EMBALAGENS, AUX_GENERICA, AUX_PAISES_BACEN, AUX_PARCELAS_PAGAMENTOS, FORMAS_DE_PAGAMENTOS, AUX_SITUACOES_TRIBUTARIAS, AUX_SUB_GRUPOS, AUX_MOEDAS |
 | **Cadastros** | CENTROS_DE_CUSTO, CLASSIFICACOES, CODIGOS_REGIMES_TRIBUTARIOS, CONTAS, DEPARTAMENTOS, LISTA_PRECOS, TIPOS_PRODUTOS |
 | **Produtos** | PRODUTOS ¹, PRODUTOS_GRADES, PRODUTOS_X_LISTA |
 | **Clientes** | CLIENTES, CLIENTES_X_ENTREGA, ENDERECOS_DE_RETIRADA |
@@ -445,14 +446,45 @@ CREATE TABLE public.audit_log (
 
 A coluna `dados_antes` foi adicionada via migração incremental (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) executada no startup do servidor. Registros gravados antes da migração têm `dados_antes = null`.
 
+**Gestão de usuários (`src/routes/usuarios.js`):**
+
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/usuarios` | gerente | Lista usuários; dono vê todos os schemas que possui, gerente vê apenas sua loja |
+| POST | `/api/:schema/usuarios` | gerente | Cria usuário e vincula ao schema (`nome`, `email`, `senha`, `role`, `id_loja`, `id_vendedor`). Se o email já existir, apenas cria o vínculo ao schema |
+| PATCH | `/api/:schema/usuarios/:id/ativo` | gerente | Ativa/desativa usuário (dono gerencia gerente e vendedor; gerente só gerencia vendedor) |
+| PATCH | `/api/:schema/usuarios/:id/perfil` | gerente | Edita nome, email ou senha |
+| PATCH | `/api/:schema/usuarios/:id/role` | dono | Altera role e loja; não é possível alterar outro dono via API |
+| GET | `/api/:schema/vendedores-disponiveis` | gerente | Lista vendedores da tabela VENDEDORES do tenant (detecta colunas automaticamente) |
+
 **Pedidos:**
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` (subquery `SUM(VALOR_UNITARIO × QUANTIDADE)`); suporta `?q=` e `?status=` |
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` (subquery `SUM(VALOR_UNITARIO × QUANTIDADE)` ou `VALOR_TOTAL_ITEM` quando disponível); suporta `?q=`, `?status=`, `?dataInicio=`, `?dataFim=`, filtro por vendedor e faixa de valor |
 | GET | `/api/:schema/pedidos-completo` | JOIN flat das 3 tabelas de pedido + PRODUTOS; colunas ausentes ignoradas |
 | GET | `/api/:schema/pedidos/:id/itens` | Itens com JOIN em PRODUTOS (descrição, unidade, valor total do item) |
 | GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
+**Dashboard:**
+
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/dashboard` | vendedor | Totais do dia: clientes ativos, pedidos hoje, faturamento hoje, produtos ativos |
+| GET | `/api/:schema/dashboard/faturamento-por-loja` | gerente | Faturamento e contagem por loja; filtros de data/período; nome da loja via `sync_filiais` ou `AUX_GENERICA` |
+| GET | `/api/:schema/dashboard/evolucao-mensal` | gerente | Faturamento e contagem mensal; filtro por mês exato ou intervalo (`anoInicio/mesInicio/anoFim/mesFim`) |
+| GET | `/api/:schema/dashboard/evolucao-mensal-por-loja` | dono | Série histórica mensal por loja |
+| GET | `/api/:schema/dashboard/top-produtos` | gerente | Top 10 produtos por faturamento e quantidade |
+| GET | `/api/:schema/dashboard/pedidos-por-status` | gerente | Contagem por status |
+| GET | `/api/:schema/dashboard/faturamento-por-vendedor` | gerente | Top 10 vendedores por faturamento |
+
+**Outros:**
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/filiais` | Lista filiais de `sync_filiais` (`id`, `nome`) |
+| GET | `/api/:schema/admin/sync-config` | Configurações de sync do schema (role: dono) |
+| PUT | `/api/:schema/admin/sync-config` | Atualiza configuração de sync — chave `filtro_filial_clientes` (role: dono) |
 
 Todas as rotas validam nomes de tabela e colunas via `NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/` antes de qualquer query, prevenindo SQL injection.
 

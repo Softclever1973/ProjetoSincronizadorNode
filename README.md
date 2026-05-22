@@ -14,13 +14,14 @@ Sistema de sincronização bidirecional de dados entre um servidor central Postg
 6. [Referência de Variáveis de Ambiente](#referência-de-variáveis-de-ambiente)
 7. [Multi-tenancy: Gerenciando Empresas](#multi-tenancy-gerenciando-empresas)
 8. [Autenticação de Usuários (API Web)](#autenticação-de-usuários-api-web)
-9. [Interface Web da Filial](#interface-web-da-filial)
-10. [Fluxo de Sincronização](#fluxo-de-sincronização)
-11. [Resolução de Conflitos](#resolução-de-conflitos)
-12. [Adicionando uma Nova Tabela ao Sync](#adicionando-uma-nova-tabela-ao-sync)
-13. [Política de Retenção de 2 Anos](#política-de-retenção-de-2-anos)
-14. [Scripts Utilitários](#scripts-utilitários)
-15. [Solução de Problemas](#solução-de-problemas)
+9. [API Web Frontend](#api-web-frontend)
+10. [Interface Web da Filial](#interface-web-da-filial)
+11. [Fluxo de Sincronização](#fluxo-de-sincronização)
+12. [Resolução de Conflitos](#resolução-de-conflitos)
+13. [Adicionando uma Nova Tabela ao Sync](#adicionando-uma-nova-tabela-ao-sync)
+14. [Política de Retenção de 2 Anos](#política-de-retenção-de-2-anos)
+15. [Scripts Utilitários](#scripts-utilitários)
+16. [Solução de Problemas](#solução-de-problemas)
 
 ---
 
@@ -75,19 +76,23 @@ npm install
 │   ├── db-init.js             # Criação das tabelas de controle no startup
 │   ├── config.js              # Lê DATABASE_URL e PORT do .env
 │   ├── empresas.js            # Cache em memória: token → schema
+│   ├── limpeza.js             # Job de limpeza de registros antigos (PostgreSQL)
+│   ├── setup-wizard.js        # Wizard interativo de configuração do servidor
 │   ├── middleware/
 │   │   ├── auth.js            # Valida ?token= (clientes Delphi/Node)
 │   │   ├── authJwt.js         # Valida Bearer JWT (usuários da API web)
+│   │   ├── checkRole.js       # Verifica role mínimo (dono/gerente/vendedor)
 │   │   └── filialBloqueada.js # Bloqueia filiais cadastradas
 │   └── routes/
-│       ├── sincronizacao.js   # Pull, push, status, auditoria
+│       ├── sincronizacao.js   # Pull, push, status, auditoria (DataSnap)
 │       ├── produtos.js        # Produtos com preço por loja
 │       ├── pedidos.js         # Pedidos
 │       ├── movimentacaoCaixas.js
 │       ├── distribuicao.js
 │       ├── auth.js            # Login JWT + /me
 │       ├── userEmpresas.js    # CRUD de empresas por usuário
-│       └── tabelas.js         # CRUD genérico + endpoints de pedidos para web frontend (/api/)
+│       ├── tabelas.js         # CRUD genérico + pedidos + dashboard (/api/)
+│       └── usuarios.js        # CRUD de usuários por schema (/api/:schema/usuarios)
 │
 ├── src/client/
 │   ├── index.js               # Loop principal de sync
@@ -101,15 +106,15 @@ npm install
 │   ├── db.js                  # Conexão Firebird
 │   ├── conflitos.js           # Persistência de conflitos (conflitos.json)
 │   ├── erros.js               # Persistência de erros (erros.json)
+│   ├── limpeza.js             # Job de limpeza de registros antigos (Firebird)
+│   ├── tray.js                # Bandeja do sistema Windows (somente .exe)
+│   ├── setup-wizard.js        # Wizard interativo de configuração do cliente
 │   ├── webui.js               # Interface web na porta 3001
 │   └── views/                 # Templates EJS da WebUI
 │
 ├── scripts/
-│   ├── create-empresa.js           # Cria nova empresa/schema
-│   ├── create-usuario.js           # Cria usuário da API web
-│   ├── migrate-public-to-schema.js # Migra dados do schema public
-│   ├── migrate-data.js             # Migra dados do Firebird → PostgreSQL
-│   └── export-schema.js            # Exporta DDL do Firebird → SQL PostgreSQL
+│   ├── create-empresa.js      # Cria nova empresa/schema
+│   └── create-usuario.js      # Cria usuário da API web
 │
 ├── .env.example               # Modelo de configuração do servidor
 └── src/client/.env.example    # Modelo de configuração do cliente
@@ -121,7 +126,7 @@ npm install
 
 ### 1. Criar o arquivo `.env` na raiz do projeto
 
-Copie o modelo e preencha com seus dados:
+Na primeira inicialização sem `.env`, o servidor executa automaticamente um **wizard de configuração** interativo. Para configuração manual, copie o modelo:
 
 ```bash
 cp .env.example .env
@@ -171,13 +176,20 @@ Na primeira inicialização, o servidor cria automaticamente as seguintes tabela
 |---|---|
 | `sync_tenants` | Mapeia token → schema (uma linha por empresa) |
 | `usuarios` | Usuários da API web (login JWT) |
-| `usuarios_empresas` | Relação N:N usuário ↔ empresa |
+| `usuarios_empresas` | Relação N:N usuário ↔ empresa com `role` (`dono`, `gerente`, `vendedor`), `id_loja` e `id_vendedor` |
+| `audit_log` | Histórico de operações INSERT/UPDATE/DELETE realizadas via API web; indexado por `schema_name`, `criado_em` e `id_usuario` |
 
 Cada schema de empresa provisionado via `create-empresa.js` recebe também:
 
-| Tabela | Descrição |
+| Objeto | Descrição |
 |---|---|
-| `sync_filiais` | Rastreamento das filiais conectadas: `id_loja`, `nome`, `ultimo_sync` — atualizado a cada ciclo de pull/push |
+| `seq_atualizacao_matriz` | Sequência global do schema — incrementada por trigger em todo INSERT/UPDATE |
+| `filiais_bloqueadas` | Filiais impedidas de sincronizar (`id_filial_bloqueada`) |
+| `registros_deletados` | Log de deleções para propagação às filiais |
+| `sync_filiais` | Filiais conectadas: `id_loja`, `nome`, `ultimo_sync` — atualizado a cada ciclo |
+| `sync_config` | Configurações de sync por empresa (ex.: `filtro_filial_clientes`) |
+| `fn_seq_atualizacao()` | Função de trigger que incrementa `ID_ULTIMA_ATUALIZACAO_MATRIZ` |
+| `fn_registrar_delecao()` | Função de trigger que registra deleções em `registros_deletados` |
 
 ### 4. Criar a primeira empresa
 
@@ -192,7 +204,7 @@ node scripts/create-empresa.js \
 
 O script:
 - Cria o schema `empresa_kr` no PostgreSQL
-- Provisiona as tabelas internas de controle do schema (sequências, registros deletados, filiais bloqueadas)
+- Provisiona as tabelas internas de controle do schema
 - Registra a empresa em `public.sync_tenants`
 
 **Não é necessário reiniciar o servidor** — o cache de empresas é recarregado automaticamente na próxima requisição.
@@ -209,13 +221,9 @@ O script:
 
 O cliente roda **na máquina da filial**, conectado ao banco Firebird local.
 
-### 1. Criar o arquivo `src/client/.env`
+### 1. Configurar o cliente
 
-```bash
-cp src/client/.env.example src/client/.env
-```
-
-Preencha com os dados da filial:
+Na primeira execução sem `.env`, o cliente inicia automaticamente um **wizard de configuração** interativo. Para configuração manual, crie o arquivo `src/client/.env`:
 
 ```env
 # Token — deve ser idêntico ao cadastrado no servidor para esta empresa
@@ -232,18 +240,18 @@ FIREBIRD_PASSWORD=masterkey
 INTERVALO_MS=30000
 ```
 
-> **`FIREBIRD_USER` e `FIREBIRD_PASSWORD` são obrigatórios.** O processo termina com mensagem clara se estiverem ausentes.
+> **`FIREBIRD_DATABASE` e `FIREBIRD_PASSWORD` são obrigatórios.** O processo termina com mensagem clara se estiverem ausentes.
 
-### 2. Configurar os parâmetros no banco Firebird
+### 2. Parâmetros do banco Firebird
 
 O cliente lê as seguintes configurações da tabela `PARAMETROS` do banco Firebird:
 
-| ID | Exemplo de valor | Descrição |
+| ID | Exemplo | Descrição |
 |---|---|---|
-| `60024` | `http://192.168.1.100:8080` | URL base do servidor (sem barra no final) |
+| `60024` | `http://192.168.1.100:8080` | URL base do servidor (sem barra final) — gravada pelo wizard |
 | `50003` | `1` | Número da loja (`idLoja`) — **deve ser único por filial dentro da empresa** |
 | `50004` | `1` | Número do PDV (`idPDV`) — opcional |
-| `50005` | `Loja Centro` | Nome desta filial — gravado pelo wizard ou manualmente; identifica a filial em `sync_filiais` no servidor |
+| `50005` | `Loja Centro` | Nome desta filial — identifica a filial na tabela `sync_filiais` do servidor |
 
 > **Atenção:** o parâmetro `50005` é essencial para que o servidor identifique corretamente cada filial na tabela `sync_filiais`. Se duas filiais usarem o mesmo `idLoja` (parâmetro `50003`), os dados se sobrescreverão. Verifique os valores em cada banco Firebird antes de colocar uma nova filial em produção.
 
@@ -261,7 +269,6 @@ npm run client:dev
 
 | Objeto criado | Descrição |
 |---|---|
-| `ULTIMOS_REGISTROS_MATRIZ` | Tabela de cursor de sync por tabela |
 | `SYNC_ALTERACOES_PENDENTES` | Fila de alterações locais para enviar ao servidor |
 | `SYNC_VERSOES_SERVIDOR` | Última versão recebida do servidor por registro (detecção de conflito) |
 | `SYNC_ERROS` | Log de erros de sincronização (máx. 200 registros) |
@@ -311,33 +318,36 @@ node scripts/create-empresa.js \
   --nome="JB Atacado"
 ```
 
-### Migrar dados do schema `public` (instalações legadas)
-
-Se você tinha dados no schema `public` de uma instalação anterior ao multi-tenancy:
-
-```bash
-node scripts/migrate-public-to-schema.js \
-  --schema=empresa_kr \
-  --token=TOKEN \
-  --nome="KR Supermercados"
-```
-
-Reinicie o servidor após a migração.
+**Regras para `--schema`:** apenas letras minúsculas, números e `_`; deve começar com letra ou `_`.
 
 ---
 
 ## Autenticação de Usuários (API Web)
 
-Existe uma camada de autenticação JWT separada do token de sync, usada por donos de empresas para acessar a API via browser ou ferramentas REST.
+Existe uma camada de autenticação JWT separada do token de sync, usada para acessar a API via browser ou ferramentas REST. São três roles: `dono`, `gerente` e `vendedor`.
 
-### Criar um usuário
+### Criar um usuário (bootstrap)
+
+Não há endpoint público de registro. Use o script CLI:
 
 ```bash
+# Cria usuário dono vinculado a um schema
 node scripts/create-usuario.js \
   --email=admin@empresa.com \
   --senha=senha123 \
-  --schema=empresa_kr
+  --schema=empresa_kr \
+  --role=dono
+
+# Cria gerente vinculado a uma loja específica
+node scripts/create-usuario.js \
+  --email=gerente@loja.com \
+  --senha=senha123 \
+  --schema=empresa_kr \
+  --role=gerente \
+  --loja=2
 ```
+
+Após o primeiro usuário criado, os demais podem ser criados via API (`POST /api/:schema/usuarios`) por um `dono` ou `gerente`.
 
 ### Fazer login
 
@@ -366,73 +376,107 @@ GET /auth/me
 Authorization: Bearer eyJhbGci...
 ```
 
-Resposta:
-```json
-{
-  "id": 1,
-  "schemas": ["empresa_kr"]
-}
-```
-
-### Listar empresas do usuário
+### Gerenciar empresas do usuário
 
 ```http
 GET /user/empresas
 Authorization: Bearer eyJhbGci...
 ```
 
-### Criar empresa via API
-
-```http
-POST /user/empresas
-Authorization: Bearer eyJhbGci...
-Content-Type: application/json
-
-{
-  "schema": "empresa_nova",
-  "token": "TOKEN_SYNC_NOVO",
-  "nome": "Nova Empresa Ltda"
-}
-```
-
-O schema deve ter apenas letras minúsculas, números e underscore, e começar com letra ou underscore (ex: `empresa_abc`).
-
 ---
 
-## API Web Frontend (`/api/`)
+## API Web Frontend
 
-Rotas usadas pela interface **SiriusWebFrontend** para CRUD genérico e consulta de pedidos. Requerem `Authorization: Bearer <jwt>` (mesmo JWT do `/auth/login`). O schema da empresa é parte do path — o usuário só acessa schemas vinculados à sua conta.
+Rotas usadas pela interface **SiriusWebFrontend** para CRUD genérico, pedidos e dashboards. Requerem `Authorization: Bearer <jwt>`. O schema da empresa é parte do path — o usuário só acessa schemas vinculados à sua conta.
+
+### Sistema de roles
+
+| Role | Permissões |
+|---|---|
+| `dono` | Acesso completo a todos os dados do schema |
+| `gerente` | Acesso restrito à sua loja (`id_loja` no JWT) em tabelas transacionais; pode criar/gerenciar vendedores |
+| `vendedor` | Leitura; vê apenas registros ativos de sua loja |
 
 ### CRUD genérico de tabelas
 
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/api/:schema/tabelas/:tabela/colunas` | Introspecção de colunas (nome, tipo, is_generated) |
-| GET | `/api/:schema/tabelas/:tabela/next-pk` | Próximo valor de PK disponível (`?pk=COLUNA`) |
-| GET | `/api/:schema/tabelas/:tabela/by-pk` | Registro único por PK (`?pk=COL&value=VAL`) |
-| GET | `/api/:schema/tabelas/:tabela` | Listagem paginada com busca e filtro de status |
-| POST | `/api/:schema/tabelas/:tabela` | Upsert — body: `{ pk, registro }` (pk pode ser array para PK composta) |
-| DELETE | `/api/:schema/tabelas/:tabela` | Deleção por PK — body: `{ pk, pkValores }` |
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/tabelas/:tabela/colunas` | vendedor | Introspecção de colunas (nome, tipo, is_generated) |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | vendedor | Próximo valor de PK disponível (`?pk=COLUNA`) |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | vendedor | Registro único por PK (`?pk=COL&value=VAL`) |
+| GET | `/api/:schema/tabelas/:tabela/distinct/:col` | vendedor | Valores distintos de uma coluna (máx. 200) |
+| GET | `/api/:schema/tabelas/:tabela` | vendedor | Listagem paginada com busca e filtros |
+| POST | `/api/:schema/tabelas/:tabela` | gerente | Upsert — body: `{ pk, registro }` (pk pode ser array) |
+| DELETE | `/api/:schema/tabelas/:tabela` | gerente | Deleção por PK — body: `{ pk, pkValores }` |
 
 Parâmetros de listagem (`GET`):
 
 | Parâmetro | Descrição |
 |---|---|
-| `page`, `pageSize` | Paginação (pageSize máx. 500) |
+| `page`, `pageSize` | Paginação (pageSize máx. 500; `all=true` retorna até 10.000) |
 | `q` | Busca textual |
-| `cols` | Colunas onde buscar, separadas por vírgula (padrão: primeiras 8 colunas texto) |
-| `statusCol`, `statusVal` | Filtro de status (`statusVal` aceita apenas `A` ou `I`) |
+| `cols` | Colunas onde buscar, separadas por vírgula |
+| `statusCol`, `statusVal` | Filtro de status (`A` ou `I`; vendedor sempre vê só `A`) |
+| `sortCol`, `sortDir` | Ordenação (ASC ou DESC) |
+| `filtroLoja` | Filtro opcional por `ID_LOJA` (qualquer tabela que tenha a coluna) |
+| `filtros` | Filtros extras por coluna — JSON serializado: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}` |
 
-O upsert incrementa automaticamente `ID_ULTIMA_ATUALIZACAO_MATRIZ` via `seq_atualizacao_matriz` quando a coluna existe na tabela, garantindo que a alteração seja propagada para as filiais no próximo pull.
+O upsert incrementa automaticamente `ID_ULTIMA_ATUALIZACAO_MATRIZ` via `seq_atualizacao_matriz` quando a coluna existe, garantindo que a alteração seja propagada para as filiais no próximo pull.
+
+### Audit log
+
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/audit-log` | gerente | Log de auditoria paginado |
+
+Parâmetros de filtro: `tabela`, `operacao` (INSERT/UPDATE/DELETE), `dataInicio`, `dataFim`, `page`, `pageSize` (máx. 100).
+
+Retorna `{ registros, total }`. Cada registro inclui:
+- `dados` — campos do formulário (`null` em DELETE)
+- `dados_antes` — snapshot completo antes da operação (`null` em INSERT)
+- `email`, `tabela`, `operacao`, `pk_valor`, `ip_cliente`, `criado_em`
+
+Gerentes veem apenas registros cuja `ID_LOJA` corresponde à sua loja.
+
+### Gestão de usuários
+
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/usuarios` | gerente | Lista usuários do schema |
+| POST | `/api/:schema/usuarios` | gerente | Cria usuário e vincula ao schema |
+| PATCH | `/api/:schema/usuarios/:id/ativo` | gerente | Ativa/desativa usuário |
+| PATCH | `/api/:schema/usuarios/:id/perfil` | gerente | Edita nome, email ou senha |
+| PATCH | `/api/:schema/usuarios/:id/role` | dono | Altera role e loja do usuário |
+| GET | `/api/:schema/vendedores-disponiveis` | gerente | Lista vendedores da tabela VENDEDORES do tenant |
 
 ### Endpoints de pedidos
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado (soma `VALOR_UNITARIO × QUANTIDADE`); suporta `?q=` e `?status=` |
-| GET | `/api/:schema/pedidos-completo` | JOIN flat das 3 tabelas de pedido (PEDIDOS + PEDIDOS_ITENS + PEDIDOS_PARCELAS_PAGAMENTOS + PRODUTOS); colunas ausentes no banco são ignoradas silenciosamente |
-| GET | `/api/:schema/pedidos/:id/itens` | Itens de um pedido com JOIN em PRODUTOS (resolve `DESCRICAO`, `UNIDADE`, `VALOR_TOTAL_ITEM`) |
-| GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas de pagamento de um pedido (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+| GET | `/api/:schema/pedidos-lista` | Lista simplificada com `VALOR_TOTAL` calculado; suporta `?q=`, `?status=`, `?dataInicio=`, `?dataFim=`, filtro por vendedor e faixa de valor |
+| GET | `/api/:schema/pedidos-completo` | JOIN flat PEDIDOS + PEDIDOS_ITENS + PEDIDOS_PARCELAS_PAGAMENTOS + PRODUTOS; colunas ausentes ignoradas |
+| GET | `/api/:schema/pedidos/:id/itens` | Itens com JOIN em PRODUTOS (resolve descrição, unidade, valor total do item) |
+| GET | `/api/:schema/pedidos/:id/pagamentos` | Parcelas de pagamento (`PEDIDOS_PARCELAS_PAGAMENTOS`) |
+
+### Endpoints de dashboard
+
+| Método | Rota | Role mínimo | Descrição |
+|---|---|---|---|
+| GET | `/api/:schema/dashboard` | vendedor | Totais do dia: clientes ativos, pedidos hoje, faturamento hoje, produtos ativos |
+| GET | `/api/:schema/dashboard/faturamento-por-loja` | gerente | Faturamento e contagem de pedidos por loja; filtros de data e período |
+| GET | `/api/:schema/dashboard/evolucao-mensal` | gerente | Faturamento e contagem mensal; suporta filtro por mês exato ou intervalo |
+| GET | `/api/:schema/dashboard/evolucao-mensal-por-loja` | dono | Evolução mensal por loja (série histórica multi-loja) |
+| GET | `/api/:schema/dashboard/top-produtos` | gerente | Top 10 produtos por faturamento e quantidade |
+| GET | `/api/:schema/dashboard/pedidos-por-status` | gerente | Contagem de pedidos por status |
+| GET | `/api/:schema/dashboard/faturamento-por-vendedor` | gerente | Top 10 vendedores por faturamento |
+
+### Outros endpoints
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/api/:schema/filiais` | Lista filiais registradas em `sync_filiais` |
+| GET | `/api/:schema/admin/sync-config` | Lê configurações de sync do schema (role: dono) |
+| PUT | `/api/:schema/admin/sync-config` | Atualiza configuração de sync (role: dono) |
 
 ---
 
@@ -442,50 +486,29 @@ Após iniciar o cliente, acesse `http://localhost:3001` no navegador da filial.
 
 ### `/` — Conflitos
 
-Lista registros em conflito entre a filial e o servidor (alterados nos dois lados desde a última sync).
+Lista registros em conflito entre a filial e o servidor (alterados nos dois lados desde a última sync). Para cada conflito são exibidos os campos divergentes com opções:
 
-Para cada conflito são exibidos os campos divergentes. Ações disponíveis:
-
-| Botão | O que faz |
+| Ação | O que faz |
 |---|---|
 | **Manter local** | Envia a versão da filial ao servidor (força sobrescrita) |
 | **Manter servidor** | Aplica a versão do servidor no banco Firebird local |
+| **Mesclar campos** | Resolução campo-a-campo — o usuário escolhe cada valor individualmente |
 
 ### `/status` — Status de Sincronização
 
-Exibe por tabela:
-- Total de registros no servidor vs total local
-- Último ID de cursor sincronizado
-- Quantidade de registros pendentes de envio ao servidor
-- Status geral: `OK`, `Pendente` ou `N/D` (tabela inacessível)
+Exibe por tabela: total no servidor vs. total local, último cursor sincronizado, pendentes de envio.
 
 ### `/auditoria` — Auditoria de Dados
 
-Comparação registro a registro entre servidor e filial para qualquer tabela.
-
-1. Selecione a tabela no seletor
-2. Clique em **Comparar**
-3. Linhas em vermelho indicam divergência — passe o mouse para ver o valor do servidor
-4. Use **Aplicar Matriz em Tudo** para sobrescrever todos os registros divergentes da página
-5. Use **Resolver um por um** para enviar cada divergência para a fila de conflitos
-
-> A auditoria pagina de 200 em 200 registros. Use os botões de navegação no rodapé.
+Comparação registro a registro entre servidor e filial para qualquer tabela. Linhas divergentes ficam em destaque. Use **Aplicar Matriz em Tudo** para sincronizar em lote ou **Resolver um por um** para encaminhar cada divergência à fila de conflitos.
 
 ### `/configuracoes` — Habilitar/Desabilitar Tabelas
 
-Ativa ou desativa tabelas do sync sem reiniciar o processo.
-
-- Use os toggles individuais ou **Ativar Todas / Desativar Todas** por grupo
-- Tabelas desativadas são ignoradas no próximo ciclo
-- Estado persiste em `tabelas-config.json` no diretório de trabalho
+Ativa ou desativa tabelas do sync sem reiniciar o processo. Estado persiste em `tabelas-config.json`.
 
 ### `/erros` — Log de Erros
 
-Exibe os últimos 200 erros de sincronização com tabela, operação e mensagem de erro.
-
-### `/eventos` — SSE
-
-Endpoint de eventos em tempo real (`text/event-stream`). Browsers conectados recebem notificações instantâneas de novos conflitos e erros — usado internamente pela WebUI para atualizar contadores.
+Exibe os últimos 200 erros de sincronização com tabela, operação e mensagem.
 
 ---
 
@@ -496,20 +519,18 @@ Endpoint de eventos em tempo real (`text/event-stream`). Browsers conectados rec
 A cada ciclo, para cada tabela ativa:
 
 1. Busca até **50 registros** do servidor onde `ID_ULTIMA_ATUALIZACAO_MATRIZ > cursor_local`
-2. Para cada registro recebido, verifica se há alteração local pendente (`SYNC_ALTERACOES_PENDENTES`):
+2. Para cada registro recebido, verifica se há alteração local pendente:
 
    | Situação | Ação |
    |---|---|
-   | Sem alteração local pendente | Upsert normal no Firebird, atualiza cursor |
-   | Pendente + registro **nunca recebido do servidor** | **Colisão de PK** → renomeia PK local (MAX+1 para numérico, `val_1` para texto), aplica registro do servidor |
-   | Pendente + registro **já recebido anteriormente** | **Conflito de conteúdo** → salva em `conflitos.json`, avança cursor sem upsert |
-   | **Echo de push** (registro enviado por esta filial neste ciclo) | Avança cursor sem re-aplicar upsert — o dado já está correto localmente |
+   | Sem alteração local pendente | Upsert normal no Firebird; atualiza cursor |
+   | Pendente + registro **nunca recebido do servidor** | **Colisão de PK** → renomeia PK local (MAX+1 para numérico, `val_1` para texto); aplica registro do servidor |
+   | Pendente + registro **já recebido anteriormente** | **Conflito de conteúdo** → salva em `conflitos.json`; avança cursor sem upsert |
+   | **Echo de push** (registro enviado por esta filial neste ciclo) | Avança cursor sem re-aplicar upsert |
 
 3. Busca registros deletados (`REGISTROS_DELETADOS`) e remove do Firebird local
 
 > Os triggers do Firebird são desabilitados durante o pull via `RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1')` para evitar que registros vindos do servidor gerem novas entradas em `SYNC_ALTERACOES_PENDENTES`.
-
-> **Echo registry:** quando o servidor retorna um registro cujo `ID_ULTIMA_ATUALIZACAO_MATRIZ` foi registrado como echo no push anterior (mesma filial, mesmo ciclo), o pull avança o cursor sem re-escrever o dado no Firebird. Isso evita uma escrita desnecessária por registro por ciclo.
 
 ### Push (Filial → Servidor)
 
@@ -517,12 +538,11 @@ A cada ciclo, para cada tabela ativa:
 
 1. Lê todos os registros de `SYNC_ALTERACOES_PENDENTES` para a tabela
 2. Para cada pendente:
-   - Busca o dado completo no Firebird
-   - Se o registro **não existe mais localmente** (foi deletado): envia `{ deletar: true }` ao servidor. O servidor deleta o registro e insere em `REGISTROS_DELETADOS`, propagando a deleção para as demais filiais no próximo pull
+   - Se o registro **não existe mais localmente** (deletado): envia `{ deletar: true }`. O servidor deleta o registro e insere em `REGISTROS_DELETADOS`, propagando a deleção para as demais filiais no próximo pull
    - Se existe: envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida do servidor
-3. O servidor verifica se houve alteração no servidor desde `ultimaVersaoConhecida`:
-   - **Sem conflito** → aplica o upsert e retorna `{ ok: true, idAtualizacaoMatriz: N }`; o cliente registra `N` como echo
-   - **Com conflito** → retorna `{ conflito: true, versaoServidor: {...} }` e o cliente salva em `conflitos.json`
+3. O servidor verifica conflito comparando versões:
+   - **Sem conflito** → aplica o upsert e retorna `{ ok: true, idAtualizacaoMatriz: N }`
+   - **Com conflito** → retorna `{ conflito: true, versaoServidor: {...} }`; cliente salva em `conflitos.json`
 4. Registros enviados com sucesso são removidos de `SYNC_ALTERACOES_PENDENTES`
 
 ---
@@ -531,17 +551,13 @@ A cada ciclo, para cada tabela ativa:
 
 Um conflito ocorre quando um registro foi alterado **tanto na filial quanto no servidor** desde a última sincronização.
 
-### Via interface web
+Acesse `http://localhost:3001` na filial e use a página **Conflitos** para resolver cada um. Opções disponíveis:
 
-1. Acesse `http://localhost:3001` na filial
-2. Na página **Conflitos**, os campos divergentes são exibidos lado a lado
-3. Escolha:
-   - **Manter local** — versão da filial sobrescreve o servidor
-   - **Manter servidor** — versão do servidor sobrescreve o Firebird local
+- **Manter local** — versão da filial sobrescreve o servidor
+- **Manter servidor** — versão do servidor sobrescreve o Firebird local
+- **Mesclar campos** — resolução campo-a-campo granular
 
-### Prevenção
-
-O sistema evita conflitos usando `SYNC_VERSOES_SERVIDOR`: para cada registro recebido do servidor, armazena o `ID_ULTIMA_ATUALIZACAO_MATRIZ` como versão de referência. No push, essa versão é enviada ao servidor para que ele compare com a versão atual e detecte se houve alteração no servidor entre os dois eventos.
+**Prevenção:** o sistema usa `SYNC_VERSOES_SERVIDOR` para rastrear a última versão recebida por registro. No push, essa versão é enviada ao servidor para detecção de divergência.
 
 ---
 
@@ -556,15 +572,15 @@ Adicione a entrada respeitando a **ordem de FK** (tabelas pai antes das filhas):
   nome: 'NOME_DA_TABELA',
   pk: 'ID_NOME_DA_TABELA',     // string simples ou array para PK composta: ['COL1', 'COL2']
   temDelete: true,              // true se a tabela tem rastreamento de deleção no servidor
-  filtroFilial: 'ID_LOJA',     // nome da coluna de filtro por loja, ou null para tabelas globais
+  filtroFilial: null,          // nome da coluna para filtrar por loja, ou null para tabelas globais
   grupo: 'Cadastros',          // grupo exibido na WebUI (/configuracoes)
-  generator: 'GEN_TABELA',     // nome do generator Firebird, ou null se a filial não cria registros
+  generator: null,             // nome do generator Firebird; null se a filial não cria registros
+  colunaData: null,            // coluna de data de negócio para retenção de 2 anos; null = sem expiração
+  defaultAtivo: true,          // estado inicial na primeira carga
 }
 ```
 
-**Grupos existentes:** `Auxiliares`, `Cadastros`, `Produtos`, `Clientes`, `Fornecedores`, `Transportadores`, `Vendedores`, `Kits`.
-
-> Use `filtroFilial: 'ID_LOJA'` se a tabela tem uma coluna por loja e você quer que cada filial receba apenas seus próprios registros. Para tabelas de referência globais (ex: `UNIDADES`), use `filtroFilial: null`.
+**Grupos existentes:** `Auxiliares`, `Cadastros`, `Produtos`, `Clientes`, `Fornecedores`, `Transportadores`, `Vendedores`, `Pedidos`, `Kits`.
 
 ### Passo 2 — `src/routes/sincronizacao.js`
 
@@ -579,7 +595,7 @@ const TABELAS_PERMITIDAS = new Set([
 
 ### Passo 3 — Garantir a coluna no PostgreSQL
 
-A tabela no servidor precisa ter a coluna `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER` e um trigger que a incrementa a cada INSERT/UPDATE usando a sequência compartilhada do schema.
+A tabela no servidor precisa ter a coluna `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER` e um trigger que a incrementa a cada INSERT/UPDATE usando `nextval('schema.seq_atualizacao_matriz')`.
 
 > Se a tabela **não existe** no PostgreSQL, ela será criada automaticamente no primeiro push da filial, com tipos de coluna inferidos dos valores do primeiro registro recebido.
 
@@ -591,75 +607,16 @@ O `setup.js` cria o trigger `SYNC_NOME_DA_TABELA` no Firebird automaticamente na
 
 ## Política de Retenção de 2 Anos
 
-O sistema limita automaticamente o histórico sincronizado a **2 anos**, tanto no servidor quanto nas filiais. O objetivo é manter o banco de dados operacional em tamanho gerenciável sem acumular dados históricos de pedidos indefinidamente.
-
-### Como funciona
-
-A política age em dois momentos distintos:
+O sistema limita automaticamente o histórico sincronizado a **2 anos** em tabelas transacionais. Tabelas de cadastro (`PRODUTOS`, `CLIENTES`, etc.) não são afetadas — `colunaData: null`.
 
 | Momento | O que acontece |
 |---|---|
-| **Durante o pull** | O servidor não envia registros cuja `colunaData` seja anterior a 2 anos. Tabelas de cadastro (sem `colunaData`) não são afetadas — PRODUTOS, CLIENTES, etc. sempre são sincronizados integralmente. |
-| **Limpeza diária** | 24h após a inicialização, e a cada 24h, um job remove do servidor e da filial todos os registros transacionais mais antigos que 2 anos. |
+| **Durante o pull** | O servidor não envia registros cuja `colunaData` seja anterior a 2 anos |
+| **Limpeza diária** | 24h após a inicialização, e a cada 24h, registros antigos são removidos do servidor e da filial |
 
-### Tabelas afetadas
+Por padrão, somente `PEDIDOS` tem `colunaData: 'DATA_HORA'`. As filhas `PEDIDOS_ITENS` e `PEDIDOS_PARCELAS_PAGAMENTOS` são limpas em cascata (filhas antes do pai).
 
-Apenas tabelas configuradas com o campo `colunaData` em `src/client/tabelas.js` estão sujeitas à política. Por padrão, somente `PEDIDOS` tem essa configuração:
-
-```js
-// src/client/tabelas.js
-{ nome: 'PEDIDOS', ..., colunaData: 'DATA_HORA' }
-```
-
-As tabelas filhas `PEDIDOS_ITENS` e `PEDIDOS_PARCELAS_PAGAMENTOS` são deletadas em cascata (pela aplicação, antes do pai) durante a limpeza diária.
-
-Tabelas de cadastro (`PRODUTOS`, `CLIENTES`, `FORNECEDORES`, etc.) têm `colunaData: null` e **nunca** são afetadas pela política de retenção.
-
-### Ajustando o nome da coluna de data
-
-Se a coluna de data do seu `PEDIDOS` não se chama `DATA_HORA`, edite o campo `colunaData` no `tabelas.js`:
-
-```js
-{ nome: 'PEDIDOS', ..., colunaData: 'DATA_EMISSAO' }
-```
-
-### Adicionando retenção a outras tabelas
-
-Para aplicar a política a outra tabela transacional (ex: `MOVIMENTACOES`):
-
-1. Defina `colunaData` na entrada de `tabelas.js`:
-   ```js
-   { nome: 'MOVIMENTACOES', ..., colunaData: 'DATA_MOVIMENTO' }
-   ```
-
-2. Se a tabela tiver filhas com FK, adicione o grupo em **ambos** os arquivos de limpeza:
-
-   **`src/limpeza.js`** (servidor PostgreSQL):
-   ```js
-   const GRUPOS_LIMPEZA = [
-     { pai: 'PEDIDOS', colunaData: 'DATA_HORA', filhas: [...] },
-     { pai: 'MOVIMENTACOES', colunaData: 'DATA_MOVIMENTO', filhas: [] },
-   ];
-   ```
-
-   **`src/client/limpeza.js`** (cliente Firebird):
-   ```js
-   const GRUPOS_LIMPEZA = [
-     { pai: 'PEDIDOS', colunaData: 'DATA_HORA', filhas: [...] },
-     { pai: 'MOVIMENTACOES', colunaData: 'DATA_MOVIMENTO', filhas: [] },
-   ];
-   ```
-
-### Logs esperados
-
-```
-[LIMPEZA] Iniciando limpeza de registros com mais de 2 anos...
-[LIMPEZA][empresa_kr] PEDIDOS_PARCELAS_PAGAMENTOS: 120 registro(s) antigo(s) removido(s)
-[LIMPEZA][empresa_kr] PEDIDOS_ITENS: 430 registro(s) antigo(s) removido(s)
-[LIMPEZA][empresa_kr] PEDIDOS: 85 registro(s) antigo(s) removido(s)
-[LIMPEZA][empresa_kr] REGISTROS_DELETADOS: 12 entrada(s) antiga(s) removida(s)
-[LIMPEZA] Limpeza concluída.
-```
+Para aplicar a política a outra tabela transacional, defina `colunaData` em `tabelas.js` e adicione o grupo em **ambos** `src/limpeza.js` (PostgreSQL) e `src/client/limpeza.js` (Firebird), com filhas listadas antes do pai.
 
 ---
 
@@ -676,53 +633,30 @@ node scripts/create-empresa.js \
   --nome="JB Atacado"
 ```
 
+Pré-requisito: o servidor deve ter sido inicializado ao menos uma vez (para que `public.sync_tenants` exista).
+
 ### `scripts/create-usuario.js`
 
-Cria um usuário para a API web (autenticação JWT).
+Cria um usuário para a API web (autenticação JWT). Use para o primeiro usuário (bootstrap) — não há endpoint público de registro.
 
 ```bash
+# Usuário dono
 node scripts/create-usuario.js \
   --email=admin@empresa.com \
   --senha=senha123 \
-  --schema=empresa_kr    # opcional: vincula o usuário a um schema
-```
-
-### `scripts/migrate-public-to-schema.js`
-
-Migra dados do schema `public` (instalação legada) para um schema dedicado. Execute uma única vez na migração para multi-tenancy.
-
-```bash
-node scripts/migrate-public-to-schema.js \
   --schema=empresa_kr \
-  --token=MEU_TOKEN \
-  --nome="KR Supermercados"
+  --role=dono
+
+# Gerente vinculado a uma loja
+node scripts/create-usuario.js \
+  --email=ger@empresa.com \
+  --senha=senha123 \
+  --schema=empresa_kr \
+  --role=gerente \
+  --loja=2
 ```
 
-### `scripts/export-schema.js`
-
-Exporta o DDL do banco Firebird (estrutura de tabelas) para um arquivo SQL compatível com PostgreSQL. Útil para a configuração inicial do servidor.
-
-```bash
-node scripts/export-schema.js
-# Gera: schema-matriz.sql
-
-psql -U postgres -d matriz -f schema-matriz.sql
-```
-
-### `scripts/migrate-data.js`
-
-Migra os dados do banco Firebird para o PostgreSQL. Operação única de setup inicial.
-
-```bash
-# Migrar todas as tabelas
-node scripts/migrate-data.js
-
-# Migrar apenas tabelas específicas
-node scripts/migrate-data.js --tables=PRODUTOS,CLIENTES
-
-# Excluir tabelas específicas
-node scripts/migrate-data.js --skip=SYNC_ERROS,PARAMETROS
-```
+Roles disponíveis: `dono`, `gerente`, `vendedor`. `--loja` é obrigatório para gerente e vendedor.
 
 ---
 
@@ -744,31 +678,31 @@ FIREBIRD_PASSWORD=suasenha
 
 ### `Your user name and password are not defined` (Firebird)
 
-O Firebird rejeitou as credenciais. Verifique:
-- `FIREBIRD_USER` — deve ser um usuário existente no Firebird (padrão: `SYSDBA`)
-- `FIREBIRD_PASSWORD` — senha correspondente ao usuário
-
-Ambos devem estar em `src/client/.env`.
+O Firebird rejeitou as credenciais. Verifique `FIREBIRD_USER` e `FIREBIRD_PASSWORD` em `src/client/.env`.
 
 ### `Table unknown, ULTIMOS_REGISTROS_MATRIZ`
 
-O banco Firebird é de uma instalação nova (sem histórico Delphi). Reinicie o cliente — o `setup.js` cria a tabela automaticamente na inicialização.
+O banco Firebird é de uma instalação nova. Reinicie o cliente — o `setup.js` cria a tabela automaticamente na inicialização.
 
 ### `relação "nome_tabela" não existe` (erro 400 no pull)
 
-A tabela ainda não existe no servidor PostgreSQL. O cliente retorna array vazio e continua normalmente. A tabela será criada automaticamente no **primeiro push** que a filial realizar para ela.
+A tabela ainda não existe no servidor PostgreSQL. O cliente retorna array vazio e continua. A tabela será criada automaticamente no primeiro push da filial.
 
 ### `Filial bloqueada (401)`
 
-A filial está na tabela `FILIAIS_BLOQUEADAS` do schema da empresa no PostgreSQL. Para desbloquear, remova o registro com o `ID_FILIAL_BLOQUEADA` correspondente ao número da loja.
+A filial está na tabela `FILIAIS_BLOQUEADAS` do schema da empresa. Para desbloquear:
+
+```sql
+DELETE FROM empresa_kr.filiais_bloqueadas WHERE id_filial_bloqueada = <numero_loja>;
+```
 
 ### Conflitos acumulando
 
-Acesse `http://localhost:3001` na filial e resolva cada conflito usando **Manter local** ou **Manter servidor**.
+Acesse `http://localhost:3001` na filial e resolva cada conflito.
 
 ### Ciclos lentos ou saltados
 
-O sistema protege contra ciclos sobrepostos com a flag `rodando` — se um ciclo levar mais que `INTERVALO_MS`, o próximo é descartado. Aumente `INTERVALO_MS` no `.env` do cliente se o ciclo estiver demorando demais.
+O sistema protege contra ciclos sobrepostos com a flag `rodando` — se um ciclo levar mais que `INTERVALO_MS`, o próximo é descartado. Aumente `INTERVALO_MS` no `.env` do cliente:
 
 ```
 INTERVALO_MS=60000   # 60 segundos

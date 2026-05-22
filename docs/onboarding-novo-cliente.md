@@ -40,7 +40,7 @@ node scripts/create-empresa.js \
 
 **O que esse script faz:**
 - Cria o schema PostgreSQL `empresa_kr`
-- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`
+- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config` e as funções `fn_seq_atualizacao()` e `fn_registrar_delecao()`
 - Registra o par `(token, schema_name)` em `public.sync_tenants`
 - O servidor detecta o novo token automaticamente — **não precisa reiniciar**
 
@@ -191,15 +191,28 @@ SELECT COUNT(*) FROM empresa_kr."PRODUTOS";
 
 ## Passo 5 — Criar usuário para acesso à API (opcional)
 
-Se o responsável pela empresa precisar de acesso à API de gestão (listar/criar empresas via `GET /user/empresas`):
+Se o responsável pela empresa precisar de acesso à API de gestão (dashboards, CRUD de tabelas via SiriusWebFrontend):
 
 ```bash
-# No servidor
+# No servidor — cria o primeiro usuário (dono)
+node scripts/create-usuario.js \
+  --email=admin@empresa.com \
+  --senha=SenhaSegura123 \
+  --schema=empresa_kr \
+  --role=dono
+
+# Cria gerente vinculado a uma loja específica
 node scripts/create-usuario.js \
   --email=gerente@empresa.com \
   --senha=SenhaSegura123 \
-  --schema=empresa_kr
+  --schema=empresa_kr \
+  --role=gerente \
+  --loja=1
 ```
+
+Roles disponíveis: `dono` (acesso completo), `gerente` (restrito à sua loja), `vendedor` (somente leitura de registros ativos). `--loja` é obrigatório para gerente e vendedor.
+
+Após o primeiro usuário criado, os demais podem ser gerenciados via API (`POST /api/:schema/usuarios`).
 
 O usuário poderá autenticar via:
 
@@ -207,7 +220,7 @@ O usuário poderá autenticar via:
 POST /auth/login
 Content-Type: application/json
 
-{ "email": "gerente@empresa.com", "senha": "SenhaSegura123" }
+{ "email": "admin@empresa.com", "senha": "SenhaSegura123" }
 ```
 
 Resposta:
@@ -223,7 +236,7 @@ Resposta:
 |---|---|
 | Gerar token seguro | `npm run generate-secret` |
 | Cadastrar nova empresa | `node scripts/create-empresa.js --schema=X --token=Y --nome="Z"` |
-| Criar usuário de acesso | `node scripts/create-usuario.js --email=X --senha=Y [--schema=Z]` |
+| Criar usuário de acesso | `node scripts/create-usuario.js --email=X --senha=Y --schema=Z --role=dono` |
 | Recarregar cache de empresas sem reiniciar | `curl -X POST http://localhost:8080/admin/reload-empresas -H "x-admin-token: <ADMIN_TOKEN>"` |
 
 ---
