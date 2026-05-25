@@ -1,7 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection } = require('../db');
+const { pool, withTenantConnection, query, execute } = require('../db');
 const authJwt  = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
 
@@ -66,11 +66,64 @@ router.get('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'do
   }
 });
 
+/**
+ * Tenta criar um registro na tabela VENDEDORES do tenant e retorna o novo ID.
+ * Detecta colunas dinamicamente para tolerar schemas variados.
+ * Retorna null silenciosamente se a tabela não existir ou falhar.
+ *
+ * @param {string} schema
+ * @param {{ nome: string|null, id_loja: number|null }} dados
+ * @returns {Promise<number|null>}
+ */
+async function _criarVendedorNoTenant(schema, { nome, id_loja }) {
+  try {
+    return await withTenantConnection(schema, async (db) => {
+      // Detecta colunas disponíveis
+      const { rows: colRows } = await db.query(
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = current_schema() AND LOWER(table_name) = 'vendedores'
+         ORDER BY ordinal_position`
+      );
+      if (!colRows.length) return null;
+
+      const colsRaw = colRows.map(r => r.column_name);
+      const colsUp  = colsRaw.map(c => c.toUpperCase());
+      const has     = (c) => colsUp.includes(c);
+
+      if (!has('ID_VENDEDOR')) return null;
+
+      // Próximo ID via MAX+1
+      const [{ max }] = (await db.query(`SELECT COALESCE(MAX(ID_VENDEDOR), 0) AS max FROM VENDEDORES`)).rows;
+      const nextId = Number(max) + 1;
+
+      // Monta INSERT dinamicamente com as colunas que existirem
+      const insertCols = ['ID_VENDEDOR'];
+      const insertVals = [nextId];
+
+      const nomeCol = colsRaw[colsUp.findIndex(c => ['NOME_VENDEDOR','NOME','RAZAO_SOCIAL'].includes(c))] ?? null;
+      if (nomeCol && nome) { insertCols.push(nomeCol); insertVals.push(nome.trim()); }
+
+      if (has('ID_LOJA')  && id_loja != null) { insertCols.push(colsRaw[colsUp.indexOf('ID_LOJA')]);  insertVals.push(id_loja); }
+      if (has('ATIVO'))                        { insertCols.push(colsRaw[colsUp.indexOf('ATIVO')]);    insertVals.push('S'); }
+      if (has('SITUACAO'))                     { insertCols.push(colsRaw[colsUp.indexOf('SITUACAO')]); insertVals.push('A'); }
+
+      const ph = insertVals.map((_, i) => `$${i + 1}`);
+      await db.query(
+        `INSERT INTO VENDEDORES (${insertCols.join(', ')}) VALUES (${ph.join(', ')})`,
+        insertVals
+      );
+      return nextId;
+    });
+  } catch {
+    return null; // falha silenciosa — não bloqueia criação do usuário
+  }
+}
+
 /* ── POST /api/:schema/usuarios — criar usuário ── */
 router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
   const callerRole = req.userRoles[schema];
-  const { nome, email, senha, role, id_loja, id_vendedor } = req.body;
+  const { nome, email, senha, role, id_loja, id_vendedor, criarVendedor } = req.body;
 
   if (!email || !senha || !role)
     return res.status(400).json({ erro: 'email, senha e role são obrigatórios' });
@@ -83,6 +136,12 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
 
   if (role !== 'dono' && !id_loja)
     return res.status(400).json({ erro: 'id_loja é obrigatório para gerente e vendedor' });
+
+  // Auto-cria vendedor no tenant se solicitado e nenhum foi vinculado manualmente
+  let idVendedorFinal = id_vendedor ?? null;
+  if (criarVendedor && !idVendedorFinal && (role === 'vendedor' || role === 'gerente')) {
+    idVendedorFinal = await _criarVendedorNoTenant(schema, { nome: nome || null, id_loja: id_loja ?? null });
+  }
 
   const client = await pool.connect();
   try {
@@ -100,9 +159,9 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
 
       await client.query(
         'INSERT INTO public.usuarios_empresas (id_usuario, schema_name, role, id_loja, id_vendedor) VALUES ($1,$2,$3,$4,$5)',
-        [id, schema, role, id_loja ?? null, id_vendedor ?? null]
+        [id, schema, role, id_loja ?? null, idVendedorFinal]
       );
-      return res.status(201).json({ ok: true, id, vinculo: 'existente' });
+      return res.status(201).json({ ok: true, id, vinculo: 'existente', id_vendedor: idVendedorFinal });
     }
 
     // Novo usuário
@@ -115,10 +174,10 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
 
     await client.query(
       'INSERT INTO public.usuarios_empresas (id_usuario, schema_name, role, id_loja, id_vendedor) VALUES ($1,$2,$3,$4,$5)',
-      [id, schema, role, id_loja ?? null, id_vendedor ?? null]
+      [id, schema, role, id_loja ?? null, idVendedorFinal]
     );
 
-    res.status(201).json({ ok: true, id, vinculo: 'novo' });
+    res.status(201).json({ ok: true, id, vinculo: 'novo', id_vendedor: idVendedorFinal });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   } finally {
@@ -253,33 +312,48 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('do
 router.get('/:schema/vendedores-disponiveis', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
   const { schema } = req.params;
   try {
-    // 1. Verifica se a tabela VENDEDORES existe no schema do tenant
-    const exists = await pool.query(
-      `SELECT 1 FROM information_schema.tables
-       WHERE table_schema = $1 AND LOWER(table_name) = 'vendedores' LIMIT 1`,
-      [schema]
-    );
-    if (!exists.rows.length) return res.json([]);
-
-    // 2. Detecta colunas disponíveis
+    // 1. Detecta colunas com o nome original (case) que o PostgreSQL armazenou.
+    //    Colunas criadas sem aspas ficam em lowercase — não usar aspas duplas no SQL
+    //    para evitar "column not found" por mismatch de case.
     const colsRes = await pool.query(
       `SELECT column_name FROM information_schema.columns
-       WHERE table_schema = $1 AND LOWER(table_name) = 'vendedores'`,
+       WHERE table_schema = $1 AND LOWER(table_name) = 'vendedores'
+       ORDER BY ordinal_position`,
       [schema]
     );
-    const nomes    = colsRes.rows.map(r => r.column_name.toUpperCase());
-    const pkCol    = nomes.find(c => c === 'ID_VENDEDOR') || nomes[0];
-    const nomeCol  = nomes.find(c => c === 'NOME') || nomes.find(c => c.includes('NOME')) || pkCol;
-    const lojaCol  = nomes.find(c => c === 'ID_LOJA');
-    const ativoCol = nomes.find(c => c === 'ATIVO');
+    if (!colsRes.rows.length) return res.json([]);
 
-    // 3. Monta e executa a query dentro do tenant (search_path correto)
+    // Mapeia nome-original → uppercase para buscas case-insensitive
+    const colsRaw = colsRes.rows.map(r => r.column_name);
+    const colsUp  = colsRaw.map(c => c.toUpperCase());
+
+    const idxOf = (...candidates) => {
+      for (const c of candidates) {
+        const i = colsUp.findIndex(u => u === c);
+        if (i >= 0) return i;
+      }
+      return -1;
+    };
+
+    const pkIdx    = idxOf('ID_VENDEDOR');
+    const nomeIdx  = idxOf('NOME_VENDEDOR', 'NOME', 'RAZAO_SOCIAL', 'DESCRICAO');
+    const lojaIdx  = idxOf('ID_LOJA');
+    const ativoIdx = idxOf('ATIVO', 'SITUACAO');
+
+    const pkCol    = pkIdx    >= 0 ? colsRaw[pkIdx]    : colsRaw[0];
+    const nomeCol  = nomeIdx  >= 0 ? colsRaw[nomeIdx]  : pkCol;
+    const lojaCol  = lojaIdx  >= 0 ? colsRaw[lojaIdx]  : null;
+    const ativoCol = ativoIdx >= 0 ? colsRaw[ativoIdx] : null;
+
+    // 2. Executa dentro do tenant (search_path correto).
+    //    Sem aspas duplas: PostgreSQL resolve case-insensitivo para colunas lowercase.
+    //    Filtro de ativo aceita 'S' (Sim/Não) e 'A' (Ativo/Inativo).
     const rows = await withTenantConnection(schema, async (db) => {
-      let sql = `SELECT "${pkCol}" AS id_vendedor, "${nomeCol}" AS nome`;
-      if (lojaCol)  sql += `, "${lojaCol}" AS id_loja`;
+      let sql = `SELECT ${pkCol} AS id_vendedor, ${nomeCol} AS nome`;
+      if (lojaCol)  sql += `, ${lojaCol} AS id_loja`;
       sql += ` FROM VENDEDORES`;
-      if (ativoCol) sql += ` WHERE "${ativoCol}" = 'S'`;
-      sql += ` ORDER BY "${nomeCol}"`;
+      if (ativoCol) sql += ` WHERE ${ativoCol} IN ('S', 'A')`;
+      sql += ` ORDER BY ${nomeCol}`;
       const { rows: r } = await db.query(sql);
       return r;
     });

@@ -22,7 +22,7 @@ const path = require('path');
   const distribuicaoRoutes       = require('./routes/distribuicao');
   const authRoutes               = require('./routes/auth');
   const userEmpresasRoutes       = require('./routes/userEmpresas');
-  const tabelasRoutes            = require('./routes/tabelas');
+  const tabelasRoutes            = require('./routes/resources');
   const usuariosRoutes           = require('./routes/usuarios');
 
   const app = express();
