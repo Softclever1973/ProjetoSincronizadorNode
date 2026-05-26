@@ -42,15 +42,15 @@
 // ── Constantes de grupo ───────────────────────────────────────────────────────
 
 const GRUPOS = Object.freeze({
-  AUXILIARES:      'Auxiliares',
-  CADASTROS:       'Cadastros',
-  PRODUTOS:        'Produtos',
-  CLIENTES:        'Clientes',
-  FORNECEDORES:    'Fornecedores',
+  AUXILIARES: 'Auxiliares',
+  CADASTROS: 'Cadastros',
+  PRODUTOS: 'Produtos',
+  CLIENTES: 'Clientes',
+  FORNECEDORES: 'Fornecedores',
   TRANSPORTADORES: 'Transportadores',
-  VENDEDORES:      'Vendedores',
-  PEDIDOS:         'Pedidos',
-  KITS:            'Kits',
+  VENDEDORES: 'Vendedores',
+  PEDIDOS: 'Pedidos',
+  KITS: 'Kits',
 });
 
 // ── Factory ───────────────────────────────────────────────────────────────────
@@ -66,13 +66,13 @@ function tabela({
   nome,
   pk,
   grupo,
-  temDelete        = true,
-  filtroFilial     = null,
+  temDelete = true,
+  filtroFilial = null,
   filtroFilialViaFK = null,
-  endpoint         = null,
-  generator        = null,
-  colunaData       = null,
-  defaultAtivo     = false,
+  endpoint = null,
+  generator = null,
+  colunaData = null,
+  defaultAtivo = false,
 }) {
   return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo };
 }
@@ -83,92 +83,101 @@ function tabela({
 const TABELAS = [
 
   // ── Auxiliares ──────────────────────────────────────────────────────────────
-  tabela({ nome: 'UNIDADES',                   pk: 'UNIDADE',                       grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
-  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL',   grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_CODIFICACAO_GRUPOS',     pk: 'SIGLA_GRUPO',                   grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_ESPECIES_EMBALAGENS',    pk: 'ID_AUX_ESPECIE_EMBALAGEM',      grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_GENERICA',               pk: ['SUB_TABELA', 'ID_SUB_TABELA'], grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
-  tabela({ nome: 'AUX_PAISES_BACEN',           pk: 'ID_AUX_PAIS_BACEN',             grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_PARCELAS_PAGAMENTOS',    pk: 'ID_AUX_PARCELA_PAGAMENTO',      grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'FORMAS_DE_PAGAMENTOS',       pk: 'ID_FORMA_DE_PAGAMENTO',         grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
-  tabela({ nome: 'AUX_SITUACOES_TRIBUTARIAS',  pk: 'ID_SITUACAO_TRIBUTARIA',        grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_SUB_GRUPOS',             pk: 'ID_AUX_SUB_GRUPO',              grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_MOEDAS',                 pk: 'SIGLA_MOEDA',                   grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'UNIDADES', pk: 'UNIDADE', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_CODIFICACAO_GRUPOS', pk: 'SIGLA_GRUPO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
+  tabela({ nome: 'AUX_ESPECIES_EMBALAGENS', pk: 'ID_AUX_ESPECIE_EMBALAGEM', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_GENERICA', pk: ['SUB_TABELA', 'ID_SUB_TABELA'], grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
+  tabela({ nome: 'AUX_PAISES_BACEN', pk: 'ID_AUX_PAIS_BACEN', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_PARCELAS_PAGAMENTOS', pk: 'ID_AUX_PARCELA_PAGAMENTO', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'FORMAS_DE_PAGAMENTOS', pk: 'ID_FORMA_DE_PAGAMENTO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'AUX_SITUACOES_TRIBUTARIAS', pk: 'ID_SITUACAO_TRIBUTARIA', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES }),
 
   // ── Cadastros base ──────────────────────────────────────────────────────────
-  tabela({ nome: 'CENTROS_DE_CUSTO',           pk: 'CODIGO_CENTRO_DE_CUSTO',        grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'CLASSIFICACOES',             pk: 'ID_CLASSIFICACAO',              grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'CODIGOS_REGIMES_TRIBUTARIOS',pk: 'ID_CODIGO_REGIME_TRIBUTARIO',   grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'CONTAS',                     pk: 'REDUZIDO',                      grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'DEPARTAMENTOS',              pk: 'SIGLA_DEPARTAMENTO',            grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'LISTA_PRECOS',               pk: 'ID_LISTA',                      grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'TIPOS_PRODUTOS',             pk: 'ID_TIPO_PRODUTO',               grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'CENTROS_DE_CUSTO', pk: 'CODIGO_CENTRO_DE_CUSTO', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'CLASSIFICACOES', pk: 'ID_CLASSIFICACAO', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'CODIGOS_REGIMES_TRIBUTARIOS', pk: 'ID_CODIGO_REGIME_TRIBUTARIO', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'CONTAS', pk: 'REDUZIDO', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'DEPARTAMENTOS', pk: 'SIGLA_DEPARTAMENTO', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS }),
+  tabela({ nome: 'TIPOS_PRODUTOS', pk: 'ID_TIPO_PRODUTO', grupo: GRUPOS.CADASTROS }),
 
   // ── Produtos ────────────────────────────────────────────────────────────────
   tabela({
-    nome:        'PRODUTOS',
-    pk:          'ID_PRODUTO',
-    grupo:       GRUPOS.PRODUTOS,
-    endpoint:    'TSMProdutos/ProdutosParaAtualizar',
-    generator:   'NOVO_PRODUTO',
+    nome: 'PRODUTOS',
+    pk: 'ID_PRODUTO',
+    grupo: GRUPOS.PRODUTOS,
+    endpoint: 'TSMProdutos/ProdutosParaAtualizar',
+    generator: 'NOVO_PRODUTO',
     defaultAtivo: true,
   }),
-  tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE',    grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES' }),
+  tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES' }),
   tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA' }),
+  tabela({
+    nome: 'MOVIMENTACOES',
+    pk: 'ID_MOVIMENTACAO',
+    grupo: GRUPOS.PRODUTOS,
+    filtroFilial: 'ID_LOJA',
+    generator: 'NOVA_MOVIMENTACAO',
+    colunaData: 'DATA',
+    defaultAtivo: true,
+  }),
 
   // ── Clientes ────────────────────────────────────────────────────────────────
   // Candidatas a filtroFilial: 'ID_LOJA' — confirmar colunas no banco KR antes de ativar
-  tabela({ nome: 'CLIENTES',           pk: 'ID_CLIENTE',            grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTE',             defaultAtivo: true }),
-  tabela({ nome: 'CLIENTES_X_ENTREGA', pk: 'ID_CLIENTE_X_ENTREGA',  grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTES_X_ENTREGA' }),
+  tabela({ nome: 'CLIENTES', pk: 'ID_CLIENTE', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTE', defaultAtivo: true }),
+  tabela({ nome: 'CLIENTES_X_ENTREGA', pk: 'ID_CLIENTE_X_ENTREGA', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTES_X_ENTREGA' }),
   tabela({ nome: 'ENDERECOS_DE_RETIRADA', pk: 'ID_ENDERECO_DE_RETIRADA', grupo: GRUPOS.CLIENTES }),
 
   // ── Fornecedores ────────────────────────────────────────────────────────────
-  tabela({ nome: 'FORNECEDORES',              pk: 'ID_FORNECEDOR',             grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR' }),
-  tabela({ nome: 'FORN_CONTATOS_ADICIONAIS',  pk: 'ID_FORN_CONTATO_ADICIONAL', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORN_CONTATO_ADICIONAL' }),
+  tabela({ nome: 'FORNECEDORES', pk: 'ID_FORNECEDOR', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR' }),
+  tabela({ nome: 'FORN_CONTATOS_ADICIONAIS', pk: 'ID_FORN_CONTATO_ADICIONAL', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORN_CONTATO_ADICIONAL' }),
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS_SISPAG', pk: 'ID_FORMA_DE_PAGAMENTO_SISPAG', grupo: GRUPOS.FORNECEDORES }),
 
   // ── Transportadores ─────────────────────────────────────────────────────────
-  tabela({ nome: 'TRANSPORTADORES',            pk: 'ID_TRANSPORTADOR',           grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR' }),
+  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR' }),
   tabela({ nome: 'TRANSP_CONTATOS_ADICIONAIS', pk: 'ID_TRANS_CONTATO_ADICIONAL', grupo: GRUPOS.TRANSPORTADORES, generator: 'NOVO_TRANSP_CONTATO_ADICIONAL' }),
-  tabela({ nome: 'TRANSPORTADORES_PLACAS',     pk: 'ID_TRANSPORTADOR_PLACA',     grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA' }),
+  tabela({ nome: 'TRANSPORTADORES_PLACAS', pk: 'ID_TRANSPORTADOR_PLACA', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA' }),
 
   // ── Vendedores / Representantes ─────────────────────────────────────────────
   // Candidatas a filtroFilial: 'ID_LOJA' — confirmar colunas no banco KR antes de ativar
-  tabela({ nome: 'VENDEDORES',    pk: 'ID_VENDEDOR',     grupo: GRUPOS.VENDEDORES }),
+  tabela({ nome: 'VENDEDORES', pk: 'ID_VENDEDOR', grupo: GRUPOS.VENDEDORES, defaultAtivo: true }),
   tabela({ nome: 'REPRESENTANTES', pk: 'ID_REPRESENTANTE', grupo: GRUPOS.VENDEDORES, generator: 'NOVO_REPRESENTANTE' }),
-  tabela({ nome: 'SUPERVISORES',  pk: 'ID_SUPERVISOR',   grupo: GRUPOS.VENDEDORES }),
+  tabela({ nome: 'SUPERVISORES', pk: 'ID_SUPERVISOR', grupo: GRUPOS.VENDEDORES }),
 
   // ── Pedidos ─────────────────────────────────────────────────────────────────
   // colunaData: 'DATA_HORA' — coluna timestamp do pedido. Ajuste se o nome diferir no seu banco.
   tabela({
-    nome:             'PEDIDOS',
-    pk:               'ID_PEDIDO',
-    grupo:            GRUPOS.PEDIDOS,
-    filtroFilial:     'ID_LOJA',
-    generator:        'NOVO_PEDIDO',
-    colunaData:       'DATA_HORA',
-    defaultAtivo:     true,
+    nome: 'PEDIDOS',
+    pk: 'ID_PEDIDO',
+    grupo: GRUPOS.PEDIDOS,
+    filtroFilial: 'ID_LOJA',
+    generator: 'NOVO_PEDIDO',
+    colunaData: 'DATA_HORA',
+    defaultAtivo: true,
   }),
   tabela({
-    nome:              'PEDIDOS_ITENS',
-    pk:                'ID_PEDIDO_ITEM',
-    grupo:             GRUPOS.PEDIDOS,
+    nome: 'PEDIDOS_ITENS',
+    pk: 'ID_PEDIDO_ITEM',
+    grupo: GRUPOS.PEDIDOS,
     filtroFilialViaFK: 'ID_PEDIDO',
-    generator:         'NOVO_PEDIDO_ITEM',
-    defaultAtivo:      true,
+    generator: 'NOVO_PEDIDO_ITEM',
+    defaultAtivo: true,
   }),
   tabela({
-    nome:              'PEDIDOS_PARCELAS_PAGAMENTOS',
-    pk:                ['ID_PEDIDO', 'PARCELA'],
-    grupo:             GRUPOS.PEDIDOS,
-    temDelete:         false,
+    nome: 'PEDIDOS_PARCELAS_PAGAMENTOS',
+    pk: ['ID_PEDIDO', 'PARCELA'],
+    grupo: GRUPOS.PEDIDOS,
+    temDelete: false,
     filtroFilialViaFK: 'ID_PEDIDO',
-    defaultAtivo:      true,
+    defaultAtivo: true,
   }),
 
   // ── Kits ────────────────────────────────────────────────────────────────────
-  tabela({ nome: 'KITS_PRODUTOS',      pk: 'ID_KIT_PRODUTO',       grupo: GRUPOS.KITS }),
-  tabela({ nome: 'KITS_ITENS_PROD',    pk: 'ID_KIT_ITEM_PROD',     grupo: GRUPOS.KITS }),
+  tabela({ nome: 'KITS_PRODUTOS', pk: 'ID_KIT_PRODUTO', grupo: GRUPOS.KITS }),
+  tabela({ nome: 'KITS_ITENS_PROD', pk: 'ID_KIT_ITEM_PROD', grupo: GRUPOS.KITS }),
   tabela({ nome: 'KITS_ITENS_SUB_PROD', pk: 'ID_KIT_ITEM_SUB_PROD', grupo: GRUPOS.KITS }),
 
   // ── Sync4Market (desativado — tabelas não existem neste banco) ───────────────
