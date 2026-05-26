@@ -12,7 +12,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, senha_hash FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
+      'SELECT id, email, nome, senha_hash FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
       [email]
     );
     const usuario = result.rows[0];
@@ -34,7 +34,8 @@ router.post('/login', async (req, res) => {
       { expiresIn: '7d' }
     );
 
-    res.json({ token, schemas: schemaList, roles, lojas, vendedores });
+    const nomeUsuario = usuario.nome || usuario.email;
+    res.json({ token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
