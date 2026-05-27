@@ -40,23 +40,32 @@
       const gridId = 'grid-' + c.id;
     %>
     <div class="conflito<%= resolvido ? ' resolvido' : '' %>">
-      <div class="conflito-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center"
-           onclick="var g=document.getElementById('<%= gridId %>');var aberto=g.style.display!=='none';g.style.display=aberto?'none':'';this.querySelector('.toggle-icon').textContent=aberto?'▼ Ver detalhes':'▲ Ocultar';">
-        <div>
-          <h2><%= c.tabela %> — <%= c.pk %> = <%= c.pkValor %>
-            <% if (!resolvido) { %>
-              <span style="font-size:12px;font-weight:normal;color:#c0392b;margin-left:8px"><%= c.rendered.numDivergentes %> campo(s) diferente(s)</span>
+      <div class="conflito-header">
+        <%# Botão semântico: acessível por teclado, anuncia aria-expanded ao leitor de tela.
+            data-toggle-target aponta para o ID do painel — o JS em scripts.ejs usa
+            event delegation, sem onclick inline (compatível com CSP script-src 'self'). %>
+        <button class="conflito-header-toggle"
+                aria-expanded="<%= resolvido ? 'false' : 'true' %>"
+                aria-controls="<%= gridId %>"
+                data-toggle-target="<%= gridId %>">
+          <div>
+            <h2><%= c.tabela %> — <%= c.pk %> = <%= c.pkValor %>
+              <% if (!resolvido) { %>
+                <span style="font-size:12px;font-weight:normal;color:var(--color-danger);margin-left:8px"><%= c.rendered.numDivergentes %> campo(s) diferente(s)</span>
+              <% } %>
+            </h2>
+            <span><%= c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : '' %></span>
+            <% if (resolvido) { %>
+              <span style="margin-left:16px;color:var(--color-success)">Resolvido: manteve <strong><%= escolhaLabel %></strong></span>
             <% } %>
-          </h2>
-          <span><%= c.criadoEm ? 'Detectado em: ' + new Date(c.criadoEm).toLocaleString('pt-BR') : '' %></span>
-          <% if (resolvido) { %>
-            <span style="margin-left:16px;color:#155724">Resolvido: manteve <strong><%= escolhaLabel %></strong></span>
-          <% } %>
-        </div>
-        <span class="toggle-icon" style="font-size:12px;color:#888;white-space:nowrap;padding-left:16px">▲ Ocultar</span>
+          </div>
+          <span class="toggle-icon" aria-hidden="true" style="font-size:12px;color:#888;white-space:nowrap;padding-left:16px">▲ Ocultar</span>
+        </button>
       </div>
 
-      <div class="grid" id="<%= gridId %>">
+      <%# hidden é semanticamente correto: leitores de tela tratam como ausente da
+          árvore de acessibilidade. O JS em scripts.ejs alterna via .hidden booleano. %>
+      <div class="grid" id="<%= gridId %>" <%= resolvido ? 'hidden' : '' %>>
         <% if (c.rendered.numDivergentes > 0) { %>
           <div style="grid-column:1/-1;padding:16px 16px 0">
             <h3 style="font-size:13px;font-weight:bold;margin-bottom:10px;text-transform:uppercase;color:#666">Campos Divergentes</h3>

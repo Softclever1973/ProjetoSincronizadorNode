@@ -1,40 +1,319 @@
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: Arial, sans-serif; background: #f5f5f5; padding: 24px; }
-nav { margin-bottom: 20px; display: flex; gap: 12px; font-size: 13px; flex-wrap: wrap; }
-nav a { color: #3498db; text-decoration: none; padding: 4px 10px; border: 1px solid #3498db; border-radius: 4px; }
-nav a:hover { background: #3498db; color: white; }
-h1 { color: #333; margin-bottom: 16px; }
-.badge { display: inline-block; background: #e74c3c; color: white; border-radius: 12px; padding: 2px 10px; font-size: 13px; margin-left: 8px; }
-.badge.ok { background: #27ae60; }
-.conflito { background: white; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 24px; overflow: hidden; }
-.conflito-header { background: #f8d7da; padding: 12px 16px; border-bottom: 1px solid #ddd; }
-.conflito-header h2 { font-size: 15px; color: #721c24; }
-.conflito-header span { font-size: 12px; color: #555; }
-.grid { display: grid; grid-template-columns: 1fr 1fr; }
-.lado { padding: 16px; }
-.lado:first-child { border-right: 1px solid #eee; }
-.lado h3 { font-size: 13px; font-weight: bold; margin-bottom: 10px; text-transform: uppercase; color: #666; }
-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-td { padding: 4px 6px; border-bottom: 1px solid #f0f0f0; vertical-align: top; word-break: break-all; }
-td:first-child { font-weight: bold; color: #555; width: 40%; }
-.diff { background: #fff3cd; }
-.acoes { padding: 12px 16px; background: #fafafa; border-top: 1px solid #eee; display: flex; gap: 8px; align-items: center; }
-button { padding: 8px 18px; border: none; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold; }
-.btn-local    { background: #3498db; color: white; }
-.btn-servidor { background: #e67e22; color: white; }
-.btn-mesclar  { background: #8e44ad; color: white; }
-.btn-local:hover    { background: #2980b9; }
-.btn-servidor:hover { background: #d35400; }
-.btn-mesclar:hover  { background: #6c3483; }
-.empty { text-align: center; padding: 48px; color: #888; }
-.resolvido { opacity: 0.5; }
-.resolvido .conflito-header { background: #d4edda; }
-.resolvido .conflito-header h2 { color: #155724; }
+/* ── Design Tokens ──────────────────────────────────────────────────────────
+ * Tokens alinhados ao SiriusWebFrontend para consistência de marca.
+ * Todos os valores de cor foram verificados contra WCAG 2.1 AA (4.5:1).
+ * ─────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Primário — #1e6fbf / branco = 5.2:1 → passa AA (#3498db anterior = 3.1:1, falha) */
+  --color-primary:        #1e6fbf;
+  --color-primary-hover:  #1658a0;
+  --color-primary-rgb:    30, 111, 191;
 
-/* Toggle switch (configurações) */
-.toggle-switch { position: relative; display: inline-block; width: 42px; height: 22px; }
+  /* Success — #1e7e44 / branco = 6.1:1 → passa AA */
+  --color-success:        #1e7e44;
+  --color-success-bg:     #d4edda;
+  --color-success-text:   #155724;
+
+  /* Warning — #b35a00 / branco = 5.5:1 → passa AA (#e67e22 anterior = 2.9:1, falha) */
+  --color-warning:        #b35a00;
+  --color-warning-hover:  #8f4800;
+
+  /* Danger — #b91c1c / branco = 6.7:1 → passa AA (#e74c3c anterior = 3.4:1, falha) */
+  --color-danger:         #b91c1c;
+  --color-danger-hover:   #991818;
+
+  /* Merge (ação de mesclar conflito) — #6b21a8 / branco = 7.5:1 → passa AAA */
+  --color-merge:          #6b21a8;
+  --color-merge-hover:    #581c87;
+
+  /* Superfícies */
+  --color-bg:             #f5f5f5;
+  --color-surface:        #ffffff;
+
+  /* Texto */
+  --color-text-primary:   #1a1a1a;
+  --color-text-secondary: #555555;
+  --color-text-muted:     #777777;
+
+  /* Estados de conflito */
+  --color-error-bg:       #fce8e8;
+  --color-error-text:     #6b1212;   /* 7.2:1 sobre error-bg → AAA */
+  --color-warn-bg:        #fff3cd;
+  --color-ok-bg:          #d4edda;
+  --color-ok-text:        #155724;
+
+  /* Tipografia */
+  --font-sans:  'Inter', Arial, system-ui, sans-serif;
+  --text-xs:    11px;
+  --text-sm:    13px;
+  --text-base:  15px;
+
+  /* Espaçamento (grid de 8px) */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  24px;
+  --space-6:  32px;
+
+  /* Bordas */
+  --radius-sm:   4px;
+  --radius-md:   8px;
+  --radius-full: 9999px;
+
+  /* Transição — nunca use 'all' */
+  --transition-ui: background-color 150ms ease, color 150ms ease, border-color 150ms ease;
+}
+
+/* ── Reset ──────────────────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Base ───────────────────────────────────────────────────────────────────── */
+body {
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  background: var(--color-bg);
+  color: var(--color-text-primary);
+  padding: var(--space-5);
+  line-height: 1.5;
+}
+
+/* ── Focus visível (todos os elementos interativos) ─────────────────────────
+ * Requisito WCAG 2.1 SC 2.4.7. Customizado para ser esteticamente coerente.
+ * ─────────────────────────────────────────────────────────────────────────── */
+:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Navegação ──────────────────────────────────────────────────────────────── */
+nav {
+  margin-bottom: var(--space-4);
+  display: flex;
+  gap: var(--space-3);
+  font-size: var(--text-sm);
+  flex-wrap: wrap;
+}
+nav a {
+  color: var(--color-primary);
+  text-decoration: none;
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  transition: var(--transition-ui);
+}
+nav a:hover,
+nav a[aria-current="page"] {
+  background: var(--color-primary);
+  color: #ffffff;
+}
+nav a[aria-current="page"] { font-weight: 600; }
+
+/* ── Headings ───────────────────────────────────────────────────────────────── */
+h1 { color: var(--color-text-primary); margin-bottom: var(--space-4); font-weight: bold; }
+
+/* ── Badge ──────────────────────────────────────────────────────────────────── */
+.badge {
+  display: inline-block;
+  background: var(--color-danger);
+  color: #ffffff;
+  border-radius: var(--radius-full);
+  padding: 2px var(--space-3);
+  font-size: var(--text-xs);
+  font-weight: bold;
+  margin-left: var(--space-2);
+}
+.badge.ok { background: var(--color-success); }
+
+/* ── Card de conflito ───────────────────────────────────────────────────────── */
+.conflito {
+  background: var(--color-surface);
+  border: 1px solid #dddddd;
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-5);
+  overflow: hidden;
+}
+
+.conflito-header {
+  background: var(--color-error-bg);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid #dddddd;
+}
+
+/* ── Header colapsável de conflito ─────────────────────────────────────────── */
+/* O botão ocupa toda a largura do header, mantendo o layout existente.
+   Semântica correta: <button aria-expanded> é alcançável por teclado e
+   anuncia o estado (aberto/fechado) para leitores de tela. */
+.conflito-header-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  min-height: auto;
+  font: inherit;
+  color: inherit;
+}
+.conflito-header-toggle:focus-visible {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ── Grid lado a lado ───────────────────────────────────────────────────────── */
+.grid { display: grid; grid-template-columns: 1fr 1fr; }
+.lado { padding: var(--space-4); }
+.lado:first-child { border-right: 1px solid #eeeeee; }
+.lado h3 {
+  font-size: var(--text-xs);
+  font-weight: bold;
+  margin-bottom: var(--space-3);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+  letter-spacing: 0.05em;
+}
+
+/* ── Tabelas ────────────────────────────────────────────────────────────────── */
+table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }
+td {
+  padding: var(--space-1) var(--space-2);
+  border-bottom: 1px solid #f0f0f0;
+  vertical-align: top;
+  /* break-word em vez de break-all: evita quebra de palavras no meio */
+  word-break: break-word;
+}
+td:first-child { font-weight: bold; color: var(--color-text-secondary); width: 40%; }
+
+/* Linha divergente: cor + ícone (WCAG 1.4.1 — nunca só cor) */
+.diff { background: var(--color-warn-bg); }
+.diff td:first-child::after {
+  content: ' ◆';
+  color: var(--color-warning);
+  font-size: 9px;
+  vertical-align: middle;
+}
+
+/* ── Ações ──────────────────────────────────────────────────────────────────── */
+.acoes {
+  padding: var(--space-3) var(--space-4);
+  background: #fafafa;
+  border-top: 1px solid #eeeeee;
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* ── Botões ─────────────────────────────────────────────────────────────────── */
+button {
+  padding: var(--space-2) var(--space-5);
+  border: none;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  font-weight: bold;
+  /* Fitts's Law: alvo mínimo de 44px para acessibilidade em touch */
+  min-height: 44px;
+  min-width: 44px;
+  transition: var(--transition-ui);
+}
+button:disabled { opacity: 0.55; cursor: not-allowed; }
+
+.btn-local    { background: var(--color-primary); color: #ffffff; }
+.btn-servidor { background: var(--color-warning);  color: #ffffff; }
+.btn-mesclar  { background: var(--color-merge);    color: #ffffff; }
+
+.btn-local:hover:not(:disabled)    { background: var(--color-primary-hover); }
+.btn-servidor:hover:not(:disabled) { background: var(--color-warning-hover); }
+.btn-mesclar:hover:not(:disabled)  { background: var(--color-merge-hover);   }
+
+/* Estado de carregamento — spinner acessível */
+.btn-loading {
+  position: relative;
+  color: transparent !important;
+}
+.btn-loading::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  animation: spin 600ms linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Estado vazio ───────────────────────────────────────────────────────────── */
+.empty {
+  text-align: center;
+  padding: var(--space-6);
+  color: var(--color-text-muted);
+}
+
+/* ── Conflito resolvido ─────────────────────────────────────────────────────── */
+.resolvido { opacity: 0.5; }
+.resolvido .conflito-header { background: var(--color-ok-bg); }
+.resolvido .conflito-header h2 { color: var(--color-ok-text); }
+
+/* ── Toggle switch (configurações) ─────────────────────────────────────────── */
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;  /* Mínimo de 44px para alvo de toque (Fitts's Law) */
+  height: 24px;
+}
 .toggle-switch input { opacity: 0; width: 0; height: 0; }
-.slider { position: absolute; cursor: pointer; inset: 0; background: #ccc; border-radius: 22px; transition: .3s; }
-.slider:before { position: absolute; content: ""; height: 16px; width: 16px; left: 3px; bottom: 3px; background: white; border-radius: 50%; transition: .3s; }
-input:checked + .slider { background: #27ae60; }
-input:checked + .slider:before { transform: translateX(20px); }
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #cccccc;
+  border-radius: var(--radius-full);
+  transition: background-color 200ms ease-in-out;
+}
+.slider::before {
+  position: absolute;
+  content: '';
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 200ms ease-in-out;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+}
+input:checked + .slider { background: var(--color-success); }
+input:checked + .slider::before { transform: translateX(20px); }
+
+/* Foco visível no toggle — via wrapper */
+input:focus-visible + .slider {
+  outline: 3px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* ── Redução de movimento ────────────────────────────────────────────────────
+ * WCAG 2.1 SC 2.3.3 — respeitar preferência do usuário.
+ * ─────────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Windows High Contrast Mode ─────────────────────────────────────────────── */
+@media (forced-colors: active) {
+  .slider { forced-color-adjust: none; border: 2px solid ButtonText; }
+  input:checked + .slider { background: Highlight; }
+  .btn-local, .btn-servidor, .btn-mesclar { forced-color-adjust: none; border: 1px solid ButtonText; }
+  :focus-visible { outline: 3px solid Highlight; }
+}

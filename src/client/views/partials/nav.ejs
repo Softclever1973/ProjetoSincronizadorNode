@@ -1,7 +1,23 @@
-<nav>
-  <a href="/" id="nav-conflitos">Conflitos <span id="conflitos-badge" class="badge" style="display:none;font-size:11px;padding:1px 6px"></span></a>
-  <a href="/status">Status</a>
-  <a href="/auditoria">Auditoria</a>
-  <a href="/configuracoes">Configurações</a>
-  <a href="/erros" id="nav-erros">Erros <span id="erros-badge" class="badge" style="display:none;font-size:11px;padding:1px 6px"></span></a>
+<nav aria-label="Navegação principal">
+  <a href="/" id="nav-conflitos" <%- currentPage === 'conflitos' ? 'aria-current="page"' : '' %>>
+    Conflitos
+    <span id="conflitos-badge"
+          class="badge"
+          role="status"
+          aria-live="polite"
+          aria-label="conflitos pendentes"
+          style="display:none;font-size:11px;padding:1px 6px"></span>
+  </a>
+  <a href="/status" <%- currentPage === 'status' ? 'aria-current="page"' : '' %>>Status</a>
+  <a href="/auditoria" <%- currentPage === 'auditoria' ? 'aria-current="page"' : '' %>>Auditoria</a>
+  <a href="/configuracoes" <%- currentPage === 'configuracoes' ? 'aria-current="page"' : '' %>>Configurações</a>
+  <a href="/erros" id="nav-erros" <%- currentPage === 'erros' ? 'aria-current="page"' : '' %>>
+    Erros
+    <span id="erros-badge"
+          class="badge"
+          role="status"
+          aria-live="polite"
+          aria-label="erros de sincronização"
+          style="display:none;font-size:11px;padding:1px 6px"></span>
+  </a>
 </nav>

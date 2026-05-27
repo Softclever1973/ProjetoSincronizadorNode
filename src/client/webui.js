@@ -248,6 +248,13 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   app.use(express.static(path.join(__dirname, 'public')));
   app.use(express.json());
 
+  // Middleware: injeta currentPage em todas as views para aria-current="page" no nav
+  app.use((req, res, next) => {
+    const pathMap = { '/': 'conflitos', '/status': 'status', '/auditoria': 'auditoria', '/configuracoes': 'configuracoes', '/erros': 'erros' };
+    res.locals.currentPage = pathMap[req.path] || '';
+    next();
+  });
+
   // Estado em memória do envio pós-carga-inicial (null = inativo)
   let estadoEnvio = null;
 
@@ -350,11 +357,30 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     const db = await getConnection();
     const mapLocal = new Map();
     try {
-      const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
-      for (const registroSrv of registrosServidor) {
-        const pkValores = pks.map(p => registroSrv[p]);
-        const localRows = await dbQuery(db, `SELECT * FROM ${tabelaParam} WHERE ${whereParts}`, pkValores).catch(() => []);
-        if (localRows.length > 0) mapLocal.set(getPKValor(registroSrv), normalizarBlobs(localRows[0]));
+      /* PERF-02: Antes era 1 query Firebird por registro (N+1 sequencial).
+         Com 200 registros em conexão instável de loja: 30s+ de espera.
+         Agora: PK simples → 1 query IN (?,...); PK composta → Promise.all paralelo. */
+      if (pks.length === 1) {
+        // PK simples: uma única query com IN (v1, v2, ...)
+        const allPkVals    = registrosServidor.map(r => r[pks[0]]);
+        const placeholders = allPkVals.map(() => '?').join(', ');
+        const allLocal     = await dbQuery(db,
+          `SELECT * FROM ${tabelaParam} WHERE ${pks[0]} IN (${placeholders})`,
+          allPkVals
+        ).catch(() => []);
+        allLocal.forEach(row => mapLocal.set(String(row[pks[0]]), normalizarBlobs(row)));
+      } else {
+        // PK composta: queries paralelas (Promise.all) em vez de sequenciais (await em loop)
+        const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
+        const resultados = await Promise.all(
+          registrosServidor.map(r => {
+            const vals = pks.map(p => r[p]);
+            return dbQuery(db, `SELECT * FROM ${tabelaParam} WHERE ${whereParts}`, vals).catch(() => []);
+          })
+        );
+        resultados.forEach((rows, i) => {
+          if (rows.length > 0) mapLocal.set(getPKValor(registrosServidor[i]), normalizarBlobs(rows[0]));
+        });
       }
     } finally {
       await closeConnection(db);
@@ -530,12 +556,15 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.json({ ok: true, processados, modo: escolha });
   });
 
-  app.post('/auditoria/resolver-unico', async (req, res) => {
-    const { tabela, pkValor, escolha } = req.body;
-    // ... lógica para resolver apenas UM registro direto da linha (similar ao acima)
-    // Para simplificar, vamos reutilizar a aba de conflitos:
-    // Se clicar em 'F' ou 'M' na linha, podemos simplesmente criar um conflito e resolvê-lo imediatamente.
-    res.json({ ok: true });
+  /* BUG-05: Esta rota retornava { ok: true } sem processar nada — falso positivo.
+   * Retorna 501 com mensagem clara enquanto a feature não é implementada.
+   * Nenhum botão da UI atual chama este endpoint; a correção evita que uma
+   * chamada direta (ex: curl) pareça ter sucesso sem fazer nada. */
+  app.post('/auditoria/resolver-unico', (_req, res) => {
+    res.status(501).json({
+      ok: false,
+      message: 'Resolução individual ainda não implementada. Use "Aplicar Matriz em Tudo" ou resolva via aba Conflitos.',
+    });
   });
 
   // ── CONFLITOS ────────────────────────────────────────────────────────────

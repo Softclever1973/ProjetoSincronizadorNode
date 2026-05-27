@@ -230,6 +230,10 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
   if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
     const userRole   = req.userRoles?.[schema];
     const idLojaJwt  = req.userLojas?.[schema] ?? null;
+    /* SEC-03 (revisão): donos são excluídos intencionalmente desta validação.
+     * O JWT de dono não carrega idLoja — eles têm acesso global a todas as lojas
+     * do schema (design multi-PDV). A proteção para não-donos é completa:
+     * idLojaJwt vem do JWT assinado, não do corpo da requisição. */
     if (userRole !== 'dono' && idLojaJwt !== null) {
       const idLojaRegistro = registro.ID_LOJA ?? registro.id_loja ?? null;
       if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaJwt)

@@ -1,10 +1,27 @@
 <script>
+  /**
+   * _notificarErro — substitui alert() nativo por feedback inline acessível.
+   * Insere role="alert" após o botão de origem e remove automaticamente.
+   */
+  function _notificarErro(btn, mensagem) {
+    var id = '_err_' + Math.random().toString(36).slice(2);
+    var el = document.createElement('span');
+    el.id = id;
+    el.setAttribute('role', 'alert');
+    el.style.cssText = 'color:var(--color-danger,#b91c1c);font-size:12px;margin-left:8px;font-weight:600;display:inline-block;margin-top:4px';
+    el.textContent = mensagem;
+    if (btn && btn.parentNode) btn.parentNode.insertBefore(el, btn.nextSibling);
+    else document.body.appendChild(el);
+    setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 6000);
+  }
+
   async function corrigir(tabela, offset, escolha) {
     escolha = escolha || 'matriz';
     var btn = event.target;
     var originalText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Processando...';
+    btn.classList.add('btn-loading');
+    btn.setAttribute('aria-label', 'Processando correção...');
     try {
       var r = await fetch('/auditoria/corrigir', {
         method: 'POST',
@@ -16,25 +33,33 @@
         if (escolha === 'manual') {
           window.location.href = '/';
         } else {
+          btn.classList.remove('btn-loading');
           btn.textContent = 'Concluído: ' + data.processados + ' registro(s)';
+          btn.setAttribute('aria-label', originalText);
           setTimeout(function() { location.reload(); }, 1500);
         }
       } else {
-        alert('Erro: ' + (data.message || 'desconhecido'));
+        _notificarErro(btn, 'Erro: ' + (data.message || 'desconhecido'));
         btn.disabled = false;
+        btn.classList.remove('btn-loading');
         btn.textContent = originalText;
+        btn.setAttribute('aria-label', originalText);
       }
     } catch(e) {
-      alert('Erro de rede: ' + e.message);
+      _notificarErro(btn, 'Erro de rede: ' + e.message);
       btn.disabled = false;
+      btn.classList.remove('btn-loading');
       btn.textContent = originalText;
+      btn.setAttribute('aria-label', originalText);
     }
   }
 
   async function resolver(id, escolha) {
     var btn = event.target;
+    var originalText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Aguarde...';
+    btn.classList.add('btn-loading');
+    btn.setAttribute('aria-label', 'Processando resolução do conflito...');
     try {
       var r = await fetch('/conflitos/' + id + '/resolver', {
         method: 'POST',
@@ -45,12 +70,18 @@
       if (data.ok) {
         location.reload();
       } else {
-        alert('Erro: ' + (data.message || 'desconhecido'));
+        _notificarErro(btn, 'Erro: ' + (data.message || 'desconhecido'));
         btn.disabled = false;
+        btn.classList.remove('btn-loading');
+        btn.textContent = originalText;
+        btn.setAttribute('aria-label', originalText);
       }
     } catch(e) {
-      alert('Erro de rede: ' + e.message);
+      _notificarErro(btn, 'Erro de rede: ' + e.message);
       btn.disabled = false;
+      btn.classList.remove('btn-loading');
+      btn.textContent = originalText;
+      btn.setAttribute('aria-label', originalText);
     }
   }
 
@@ -63,8 +94,10 @@
       }
     });
     var btn = event.target;
+    var originalText = btn.textContent;
     btn.disabled = true;
-    btn.textContent = 'Aguarde...';
+    btn.classList.add('btn-loading');
+    btn.setAttribute('aria-label', 'Aplicando mesclagem...');
     try {
       var r = await fetch('/conflitos/' + conflitoid + '/resolver', {
         method: 'POST',
@@ -75,20 +108,23 @@
       if (data.ok) {
         location.reload();
       } else {
-        alert('Erro: ' + (data.message || 'desconhecido'));
+        _notificarErro(btn, 'Erro: ' + (data.message || 'desconhecido'));
         btn.disabled = false;
-        btn.textContent = 'Aplicar seleção';
+        btn.classList.remove('btn-loading');
+        btn.textContent = originalText;
+        btn.setAttribute('aria-label', originalText);
       }
     } catch(e) {
-      alert('Erro de rede: ' + e.message);
+      _notificarErro(btn, 'Erro de rede: ' + e.message);
       btn.disabled = false;
-      btn.textContent = 'Aplicar seleção';
+      btn.classList.remove('btn-loading');
+      btn.textContent = originalText;
+      btn.setAttribute('aria-label', originalText);
     }
   }
 
   // ── SSE: badges e notificações em tempo real ─────────────────────────────
   (function () {
-    // Carrega contagens iniciais dos badges
     fetch('/api/erros/count')
       .then(function(r) { return r.json(); })
       .then(function(d) { atualizarBadgeErros(d.total); })
@@ -99,7 +135,6 @@
       .then(function(d) { atualizarBadgeConflitos(d.total); })
       .catch(function() {});
 
-    // Solicita permissão para notificações do SO (apenas uma vez)
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission();
     }
@@ -152,6 +187,23 @@
     if (total > 0) { badge.textContent = total; badge.style.display = 'inline'; }
     else { badge.style.display = 'none'; }
   }
+
+  // ── Toggle de conflitos — event delegation (P0-D / CSP) ──────────────────
+  // Substitui onclick inline por listener delegado, compatível com
+  // Content-Security-Policy script-src 'self'. Usa .hidden (semântico) em
+  // vez de style.display, para que leitores de tela tratem o painel como
+  // ausente da árvore de acessibilidade quando colapsado.
+  document.addEventListener('click', function(e) {
+    var btn = e.target.closest('[data-toggle-target]');
+    if (!btn) return;
+    var target = document.getElementById(btn.dataset.toggleTarget);
+    if (!target) return;
+    var aberto = btn.getAttribute('aria-expanded') === 'true';
+    target.hidden = aberto;
+    btn.setAttribute('aria-expanded', String(!aberto));
+    var icon = btn.querySelector('.toggle-icon');
+    if (icon) icon.textContent = aberto ? '▼ Ver detalhes' : '▲ Ocultar';
+  });
 </script>
 </body>
 </html>

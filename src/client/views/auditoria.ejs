@@ -3,14 +3,16 @@
 
 <h1>Auditoria<%= tabelaParam ? ' — ' + tabelaParam : ' de Dados' %></h1>
 
-<form method="get" action="/auditoria" style="margin-bottom:20px;display:flex;gap:8px;align-items:center">
-  <select name="tabela" style="padding:7px 12px;border:1px solid #ccc;border-radius:4px;font-size:14px">
+<form method="get" action="/auditoria" style="margin-bottom:20px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  <select name="tabela" class="form-control" style="width:auto">
     <option value="">— Selecione uma tabela —</option>
     <% for (const t of tabelaNomes) { %>
       <option value="<%= t %>" <%= t === tabelaParam ? 'selected' : '' %>><%= t %></option>
     <% } %>
   </select>
-  <button type="submit" style="padding:7px 16px;background:#3498db;color:white;border:none;border-radius:4px;cursor:pointer;font-size:14px">Comparar</button>
+  <%# btn-local: var(--color-primary) = #1e6fbf, contraste 5.2:1 sobre branco → passa WCAG AA
+      Anterior #3498db = 3.1:1 → falhava AA %>
+  <button type="submit" class="btn-local">Comparar</button>
 </form>
 
 <% if (error) { %>
@@ -18,22 +20,22 @@
 <% } else if (tabelaParam && rows) { %>
 
   <div style="margin-bottom:12px;display:flex;align-items:center;gap:16px;flex-wrap:wrap">
-    <span style="font-size:13px;color:#666">
-      <span style="color:#27ae60;font-weight:bold"><%= totalOk %> iguais</span> &nbsp;|&nbsp;
-      <span style="color:#c0392b;font-weight:bold"><%= totalDif %> diferente(s)</span> &nbsp;|&nbsp;
-      <span style="color:#856404;font-weight:bold"><%= totalAusente %> ausente(s) na filial</span>
+    <span style="font-size:13px;color:var(--color-text-muted)">
+      <span style="color:var(--color-success);font-weight:bold"><%= totalOk %> iguais</span> &nbsp;|&nbsp;
+      <span style="color:var(--color-danger);font-weight:bold"><%= totalDif %> diferente(s)</span> &nbsp;|&nbsp;
+      <span style="color:var(--color-warning);font-weight:bold"><%= totalAusente %> ausente(s) na filial</span>
     </span>
     <% if (temDivergencias) { %>
       <button onclick="corrigir('<%= tabelaParam %>', <%= offset %>, 'matriz')"
-        style="padding:7px 16px;background:#27ae60;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+              class="btn-local">
         Aplicar Matriz em Tudo
       </button>
       <button onclick="corrigir('<%= tabelaParam %>', <%= offset %>, 'manual')"
-        style="padding:7px 16px;background:#e67e22;color:white;border:none;border-radius:4px;cursor:pointer;font-size:13px;font-weight:bold">
+              class="btn-servidor">
         Resolver um por um (Conflitos)
       </button>
     <% } %>
-    <small style="color:#aaa;font-size:11px">Vermelho = filial difere (mouse = valor do servidor)</small>
+    <small style="color:#aaa;font-size:11px">Vermelho = filial difere — valor do servidor exibido abaixo em cinza</small>
   </div>
 
   <div style="overflow-x:auto">
@@ -62,10 +64,18 @@
                 <% const isDif = row.difColunas.includes(col); %>
                 <td>
                   <% if (isDif) { %>
-                    <span title="Servidor: <%= String(row.srv[col] != null ? row.srv[col] : 'NULL') %>"
-                          style="color:#721c24;font-weight:bold"><%- formatDisplay(row.loc[col]) %></span>
+                    <%# Valor da filial em destaque — não depende apenas de cor (WCAG 1.4.1) %>
+                    <span style="color:var(--color-error-text,#6b1212);font-weight:bold;display:block">
+                      <%- formatDisplay(row.loc[col]) %>
+                    </span>
+                    <%# Valor do servidor visível em texto — antes só acessível via hover/tooltip %>
+                    <span style="color:#888;font-size:11px;display:block;margin-top:2px">
+                      ↑ Srv: <%= String(row.srv[col] != null ? row.srv[col] : 'NULL') %>
+                    </span>
                   <% } else { %>
-                    <span style="color:#aaa"><%- formatDisplay(row.loc[col]) %></span>
+                    <%# color:var(--color-text-muted) = ~5.9:1 sobre branco → passa WCAG AA
+                        Anterior color:#aaa = 2.32:1 → falhava AA %>
+                    <span style="color:var(--color-text-muted)"><%- formatDisplay(row.loc[col]) %></span>
                   <% } %>
                 </td>
               <% } %>
@@ -85,7 +95,7 @@
       <a href="/auditoria?tabela=<%= tabelaParam %>&offset=<%= proxOffset %>"
          style="padding:6px 14px;background:#eee;border-radius:4px;text-decoration:none;font-size:13px">Próxima →</a>
     <% } %>
-    <span style="font-size:12px;color:#888;margin-left:8px;align-self:center">
+    <span style="font-size:12px;color:var(--color-text-muted);margin-left:8px;align-self:center">
       Registros <%= offset + 1 %>–<%= offset + rows.length %>
     </span>
   </div>
