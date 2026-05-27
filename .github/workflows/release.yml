@@ -18,10 +18,10 @@ jobs:
       - name: Clonar repositório
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 18
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
-          node-version: '18.20.4'
+          node-version: '22'
           cache: 'npm'
 
       - name: Instalar dependências (produção)
