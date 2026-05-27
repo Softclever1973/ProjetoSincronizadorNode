@@ -10,8 +10,8 @@
     "client": "node src/client/index.js",
     "client:dev": "nodemon src/client/index.js",
     "generate-secret": "node -e \"process.stdout.write(require('crypto').randomBytes(64).toString('hex') + '\\n')\"",
-    "build:server": "npx @yao-pkg/pkg --config package.json src/server.js --target node18-win-x64 --output dist/server.exe",
-    "build:client": "npx @yao-pkg/pkg --config package.json src/client/index.js --target node18-win-x64 --output dist/client.exe"
+    "build:server": "npx @yao-pkg/pkg --config package.json src/server.js --target node22-win-x64 --output dist/server.exe",
+    "build:client": "npx @yao-pkg/pkg --config package.json src/client/index.js --target node22-win-x64 --output dist/client.exe"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -36,7 +36,7 @@
       "node_modules/systray2/traybin/**/*"
     ],
     "targets": [
-      "node18-win-x64"
+      "node22-win-x64"
     ]
   },
   "pkg-exe-build": {
