@@ -9,11 +9,20 @@ permissions:
   contents: write
 jobs:
   build:
-    runs-on: windows-latest 
+    # Linux: cross-compila para Windows (node18-win-x64) sem precisar de
+    # runner Windows. Mais rápido, mais barato (0.5× vs 2× minutos do Windows)
+    # e sem risco de o runner atualizar o Node.js para versão sem binário no pkg.
+    runs-on: ubuntu-latest
 
     steps:
       - name: Clonar repositório
         uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18.20.4'
+          cache: 'npm'
 
       - name: Instalar dependências (produção)
         run: npm install --production
@@ -25,12 +34,10 @@ jobs:
         run: npm run build:client
 
       - name: Compactar client
-        run: |
-          Compress-Archive -Path "src/client", "node_modules", "package.json", "src/client/.env.example" -DestinationPath "client.zip"
+        run: zip -r client.zip src/client node_modules package.json src/client/.env.example
 
       - name: Compactar server
-        run: |
-          Compress-Archive -Path "src", "node_modules", "package.json", ".env.example" -DestinationPath "server.zip" -Update
+        run: zip -r server.zip src node_modules package.json .env.example
 
       - name: Criar release
         uses: softprops/action-gh-release@v2
