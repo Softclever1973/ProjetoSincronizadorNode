@@ -3,13 +3,13 @@ name: Build and Release
 on:
   push:
     tags:
-      - "v*" # só roda quando criar uma tag tipo v1.0.0
+      - "v*"
 
 permissions:
   contents: write
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest 
 
     steps:
       - name: Clonar repositório
@@ -18,45 +18,21 @@ jobs:
       - name: Instalar dependências (produção)
         run: npm install --production
 
-      # =========================
-      # SERVER .EXE
-      # =========================
       - name: Build server.exe
         run: npm run build:server
 
-      # =========================
-      # CLIENT .EXE
-      # =========================
       - name: Build client.exe
         run: npm run build:client
 
-      # =========================
-      # CLIENT
-      # =========================
-      - name: Zipar client
+      - name: Compactar client
         run: |
-          zip -r client.zip \
-            src/client \
-            node_modules \
-            package.json \
-            src/client/.env.example
+          Compress-Archive -Path "src/client", "node_modules", "package.json", "src/client/.env.example" -DestinationPath "client.zip"
 
-      # =========================
-      # SERVER (zip Node.js)
-      # =========================
-      - name: Zipar server (sem client)
+      - name: Compactar server
         run: |
-          zip -r server.zip \
-            src \
-            node_modules \
-            package.json \
-            .env.example \
-            -x "src/client/*"
+          Compress-Archive -Path "src", "node_modules", "package.json", ".env.example" -DestinationPath "server.zip" -Update
 
-      # =========================
-      # RELEASE
-      # =========================
-      - name: Criar release e anexar arquivos
+      - name: Criar release
         uses: softprops/action-gh-release@v2
         with:
           files: |
