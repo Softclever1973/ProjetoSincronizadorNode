@@ -9,7 +9,7 @@ permissions:
   contents: write
 jobs:
   build:
-    # Linux: cross-compila para Windows (node18-win-x64) sem precisar de
+    # Linux: cross-compila para Windows (node22-win-x64) sem precisar de
     # runner Windows. Mais rápido, mais barato (0.5× vs 2× minutos do Windows)
     # e sem risco de o runner atualizar o Node.js para versão sem binário no pkg.
     runs-on: ubuntu-latest
@@ -24,8 +24,14 @@ jobs:
           node-version: '22'
           cache: 'npm'
 
-      - name: Instalar dependências (produção)
-        run: npm install --production
+      - name: Cache pkg base binaries
+        uses: actions/cache@v4
+        with:
+          path: ~/.pkg-cache
+          key: pkg-node22-win-x64
+
+      - name: Instalar dependências
+        run: npm ci
 
       - name: Build server.exe
         run: npm run build:server
