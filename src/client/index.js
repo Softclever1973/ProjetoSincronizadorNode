@@ -12,7 +12,33 @@ const ENV_PATH = isPackaged
   ? path.join(path.dirname(process.execPath), '.env')
   : path.resolve(__dirname, '.env');
 
-const LOG_PATH = path.join(path.dirname(ENV_PATH), 'client.log');
+const LOG_PATH   = path.join(path.dirname(ENV_PATH), 'client.log');
+const CRASH_PATH = path.join(path.dirname(ENV_PATH), 'crash.log');
+
+function encerrarComErro(err) {
+  const linhas = [
+    '',
+    '╔══════════════════════════════════════════════╗',
+    '║      ERRO — o cliente não pôde iniciar       ║',
+    '╚══════════════════════════════════════════════╝',
+    '',
+    err.message,
+    '',
+    'Verifique o arquivo .env na pasta do executável.',
+    '',
+  ];
+  console.error(linhas.join('\n'));
+
+  try { fs.appendFileSync(CRASH_PATH, `[${new Date().toISOString()}] ${err.stack || err.message}\n`); } catch { /* sem saída */ }
+
+  if (process.stdin.isTTY) {
+    console.error('Pressione Enter para fechar...');
+    const rl = require('readline').createInterface({ input: process.stdin });
+    rl.once('line', () => { rl.close(); process.exit(1); });
+  } else {
+    setTimeout(() => process.exit(1), 4000);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // --background: relança o processo com janela oculta e sai do terminal atual
@@ -113,8 +139,8 @@ async function main() {
   const { salvarErro } = require('./erros');
 
   if (!process.env.SYNC_TOKEN) {
-    console.error('[ERRO] SYNC_TOKEN não configurado no .env');
-    process.exit(1);
+    encerrarComErro(new Error('SYNC_TOKEN não configurado no .env'));
+    return;
   }
 
   const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
@@ -237,14 +263,21 @@ async function main() {
 
 // Reinicia automaticamente se main() lançar erro inesperado
 (async () => {
+  let tentativas = 0;
   while (true) {
     try {
       await main();
       break;
     } catch (e) {
+      tentativas++;
       const msg = e.stack || e.message;
-      console.error(`[ERRO FATAL] ${msg} — reiniciando em 30s...`);
       try { require('./erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
+      // Após 3 falhas consecutivas na inicialização, para e exibe o erro
+      if (tentativas >= 3) {
+        encerrarComErro(e);
+        break;
+      }
+      console.error(`[ERRO FATAL] ${msg} — reiniciando em 30s... (tentativa ${tentativas}/3)`);
       await new Promise(r => setTimeout(r, 30000));
     }
   }

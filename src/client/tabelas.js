@@ -84,7 +84,7 @@ const TABELAS = [
 
   // ── Auxiliares ──────────────────────────────────────────────────────────────
   tabela({ nome: 'UNIDADES', pk: 'UNIDADE', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
-  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES, defaultAtiv: true }),
   tabela({ nome: 'AUX_CODIFICACAO_GRUPOS', pk: 'SIGLA_GRUPO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
   tabela({ nome: 'AUX_ESPECIES_EMBALAGENS', pk: 'ID_AUX_ESPECIE_EMBALAGEM', grupo: GRUPOS.AUXILIARES }),
   tabela({ nome: 'AUX_GENERICA', pk: ['SUB_TABELA', 'ID_SUB_TABELA'], grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
