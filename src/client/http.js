@@ -148,9 +148,20 @@ function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhe
   return post(url, { tabela, pk, registro, ultimaVersaoConhecida, forcar, deletar });
 }
 
+/**
+ * Envia o regime tributário (param 40026) ao servidor para ser armazenado no tenant.
+ */
+function atualizarRegime(baseURI, regime) {
+  return post(
+    `${baseURI}/datasnap/rest/TSMSincronizacao/AtualizarRegime?token=${TOKEN}`,
+    { regime }
+  );
+}
+
 module.exports = {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
   enviarRegistro,
+  atualizarRegime,
 };

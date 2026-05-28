@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
-const { withTenantConnection, query, execute, isMissingTableError } = require('../db');
+const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 
 // Cache de colunas computadas do servidor
@@ -207,7 +207,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       if (colunaData) {
         const colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
         if (colunas.has(colunaData)) {
-          whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData} >= NOW() - INTERVAL '2 years')`;
+          whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`;
         }
       }
 
@@ -494,6 +494,20 @@ router.get('/FiliaisRegistradas', auth, async (req, res) => {
     res.json(rows);
   } catch {
     res.json([]);
+  }
+});
+
+router.post('/AtualizarRegime', auth, async (req, res) => {
+  const { regime } = req.body || {};
+  if (!regime) return res.status(400).json({ erro: 'regime obrigatório' });
+  try {
+    await pool.query(
+      'UPDATE public.sync_tenants SET regime_tributario = $1 WHERE schema_name = $2',
+      [regime, req.schemaName]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 

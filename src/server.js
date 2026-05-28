@@ -1,6 +1,36 @@
 const fs   = require('fs');
 const path = require('path');
 
+function encerrarComErro(err) {
+  const linhas = [
+    '',
+    '╔══════════════════════════════════════════════╗',
+    '║      ERRO — o servidor não pôde iniciar      ║',
+    '╚══════════════════════════════════════════════╝',
+    '',
+    err.message,
+    '',
+    'Verifique o arquivo .env na pasta do executável.',
+    '',
+  ];
+  console.error(linhas.join('\n'));
+
+  // Grava detalhes em crash.log para diagnóstico
+  try {
+    const logPath = path.join(process.cwd(), 'crash.log');
+    fs.appendFileSync(logPath, `[${new Date().toISOString()}] ${err.stack || err.message}\n`);
+  } catch { /* sem saída */ }
+
+  // Aguarda Enter se há terminal aberto (evita janela fechando na hora)
+  if (process.stdin.isTTY) {
+    console.error('Pressione Enter para fechar...');
+    const rl = require('readline').createInterface({ input: process.stdin });
+    rl.once('line', () => { rl.close(); process.exit(1); });
+  } else {
+    setTimeout(() => process.exit(1), 4000);
+  }
+}
+
 (async () => {
   if (!fs.existsSync(path.join(process.cwd(), '.env'))) {
     const { runSetupWizard } = require('./setup-wizard');
@@ -92,7 +122,6 @@ const path = require('path');
       agendarLimpeza();
     });
   } catch (err) {
-    console.error(`Falha ao inicializar banco: ${err.message}`);
-    process.exit(1);
+    encerrarComErro(err);
   }
-})();
+})().catch(encerrarComErro);

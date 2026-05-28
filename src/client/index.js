@@ -1,6 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
+// DEP0060 (util._extend) vem do node-firebird internamente — é inofensivo e
+// não há nada a corrigir no nosso código. Suprime apenas esse aviso específico.
+process.on('warning', w => { if (w.code !== 'DEP0060') process.stderr.write(`Warning: ${w.message}\n`); });
+
 const isPackaged = typeof process.pkg !== 'undefined';
 
 // Quando empacotado, __dirname é read-only (virtual). Usa o diretório do .exe.
@@ -101,6 +105,7 @@ async function main() {
   const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
+  const { atualizarRegime } = require('./http');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./tabelas');
@@ -142,6 +147,10 @@ async function main() {
       const idPDV = idPDVRaw ? parseInt(idPDVRaw, 10) : null;
       const nomeFilialFirebird = await getParam(db, 50005);
       const nomeFilial = process.env.NOME_FILIAL || nomeFilialFirebird || '';
+      const regimeFirebird = await getParam(db, 40026).catch(() => null);
+      if (regimeFirebird && baseURI) {
+        atualizarRegime(baseURI, regimeFirebird).catch(() => {});
+      }
 
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
       for (const tabelaAusente of tabelasAusentes) {

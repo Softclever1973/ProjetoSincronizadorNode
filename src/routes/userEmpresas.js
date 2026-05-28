@@ -10,7 +10,7 @@ router.get('/', authJwt, async (req, res) => {
   try {
     const placeholders = req.userSchemas.map((_, i) => `$${i + 1}`).join(', ');
     const result = await pool.query(
-      `SELECT schema_name, nome, ativo FROM public.sync_tenants WHERE schema_name IN (${placeholders})`,
+      `SELECT schema_name, nome, ativo, regime_tributario FROM public.sync_tenants WHERE schema_name IN (${placeholders})`,
       req.userSchemas
     );
     res.json(result.rows);

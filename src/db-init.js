@@ -50,6 +50,8 @@ const DDL_CONTROLE = [
   `CREATE INDEX IF NOT EXISTS idx_audit_log_user   ON public.audit_log(id_usuario)`,
   // Migração incremental — adiciona dados_antes se ainda não existir
   `ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS dados_antes JSONB`,
+  // Migração: regime tributário da filial (lido do param 40026 do Firebird)
+  `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS regime_tributario TEXT`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)

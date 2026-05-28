@@ -38,6 +38,23 @@ async function getColumnCharLen(db, tabela, coluna) {
   return len;
 }
 
+// Cache de tamanhos de todas as colunas string de uma tabela (query única por tabela)
+const cacheTamanhosPorTabela = {};
+
+async function getTamanhosColunas(db, nomeTabela) {
+  if (cacheTamanhosPorTabela[nomeTabela]) return cacheTamanhosPorTabela[nomeTabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA, f.RDB$CHARACTER_LENGTH AS MAX_LEN
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE rf.RDB$RELATION_NAME = ? AND f.RDB$CHARACTER_LENGTH IS NOT NULL
+  `, [nomeTabela]);
+  const mapa = {};
+  for (const row of rows) mapa[row.COLUNA] = row.MAX_LEN;
+  cacheTamanhosPorTabela[nomeTabela] = mapa;
+  return mapa;
+}
+
 /**
  * Retorna todas as tabelas filhas que referenciam via FK a coluna PK informada.
  * Parte do PK constraint do pai e navega para os FK constraints dos filhos.
@@ -213,11 +230,12 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Faz UPSERT dinâmico de um registro no banco local.
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
-async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
-  const [computadas, existentes, naoNulas] = await Promise.all([
+async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.log) {
+  const [computadas, existentes, naoNulas, tamanhos] = await Promise.all([
     getColunasComputadas(db, nomeTabela),
     getColunasExistentes(db, nomeTabela),
     getColunasNaoNulas(db, nomeTabela),
+    getTamanhosColunas(db, nomeTabela),
   ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
@@ -232,10 +250,18 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro) {
   if (colunas.length === 0) return;
 
   const placeholders = colunas.map(() => '?').join(', ');
-  // Firebird rejeita string vazia em colunas numéricas/data — converte para null
+  // Firebird rejeita string vazia em colunas numéricas/data — converte para null.
+  // Strings maiores que o CHAR/VARCHAR da coluna são truncadas (com aviso) em vez de
+  // deixar o registro inteiro falhar com "string right truncation".
   const valores = colunas.map(c => {
-    const v = registro[c];
-    return (v === undefined || v === '') ? null : v;
+    let v = registro[c];
+    if (v === undefined || v === '') return null;
+    const maxLen = tamanhos[c];
+    if (typeof v === 'string' && maxLen != null && v.length > maxLen) {
+      log(`[AVISO] ${nomeTabela}.${c}: valor truncado de ${v.length} → ${maxLen} char(s) (servidor enviou: "${v}")`);
+      v = v.slice(0, maxLen);
+    }
+    return v;
   });
 
   const sql =
@@ -493,7 +519,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           continue;
         }
 
-        await upsertRegistro(db, nome, pk, registro);
+        await upsertRegistro(db, nome, pk, registro, log);
         totalAtualizados++;
 
         // Mantém o generator da filial sempre à frente dos IDs que o servidor já atribuiu,
