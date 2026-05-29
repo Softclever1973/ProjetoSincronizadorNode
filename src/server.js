@@ -27,7 +27,7 @@ function encerrarComErro(err) {
     const rl = require('readline').createInterface({ input: process.stdin });
     rl.once('line', () => { rl.close(); process.exit(1); });
   } else {
-    setTimeout(() => process.exit(1), 4000);
+    setTimeout(() => process.exit(1), 1500);
   }
 }
 

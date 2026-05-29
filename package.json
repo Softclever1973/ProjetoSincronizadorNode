@@ -33,15 +33,11 @@
       "src/client/views/**/*",
       "src/client/public/**/*",
       "src/client/assets/**/*",
-      "src/client/assets/softcleverlogo.ico",
       "node_modules/systray2/traybin/**/*"
     ],
     "targets": [
       "node22-win-x64"
     ]
-  },
-  "pkg-exe-build": {
-    "icon": "src/client/assets/softcleverlogo.ico"
   },
   "nodemonConfig": {
     "ignore": [
