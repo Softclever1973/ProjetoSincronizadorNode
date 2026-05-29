@@ -15,6 +15,11 @@ jobs:
       - name: Clonar repositório
         uses: actions/checkout@v4
 
+      - name: Configurar Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
       - name: Instalar dependências
         run: npm install
 
