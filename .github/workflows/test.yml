@@ -25,26 +25,44 @@ jobs:
       - name: Smoke test — server.exe
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "dist\server.exe" -PassThru
+          $proc = Start-Process -FilePath "dist\server.exe" `
+            -PassThru -NoNewWindow `
+            -RedirectStandardOutput "server_stdout.txt" `
+            -RedirectStandardError  "server_stderr.txt"
+
           Start-Sleep -Seconds 3
-          if ($proc.HasExited) {
-            Write-Error "server.exe crashou (exit code: $($proc.ExitCode))"
+          if (-not $proc.HasExited) { $proc.Kill() }
+
+          $out = (Get-Content "server_stdout.txt" -Raw -ErrorAction SilentlyContinue) +
+                 (Get-Content "server_stderr.txt" -Raw -ErrorAction SilentlyContinue)
+
+          if (-not $out.Trim()) {
+            Write-Error "server.exe não produziu nenhuma saída — crash no binário"
             exit 1
           }
-          $proc.Kill()
           Write-Host "server.exe OK"
+          Write-Host $out.Substring(0, [Math]::Min(300, $out.Length))
 
       - name: Smoke test — client.exe
         shell: pwsh
         run: |
-          $proc = Start-Process -FilePath "dist\client.exe" -PassThru
+          $proc = Start-Process -FilePath "dist\client.exe" `
+            -PassThru -NoNewWindow `
+            -RedirectStandardOutput "client_stdout.txt" `
+            -RedirectStandardError  "client_stderr.txt"
+
           Start-Sleep -Seconds 3
-          if ($proc.HasExited) {
-            Write-Error "client.exe crashou (exit code: $($proc.ExitCode))"
+          if (-not $proc.HasExited) { $proc.Kill() }
+
+          $out = (Get-Content "client_stdout.txt" -Raw -ErrorAction SilentlyContinue) +
+                 (Get-Content "client_stderr.txt" -Raw -ErrorAction SilentlyContinue)
+
+          if (-not $out.Trim()) {
+            Write-Error "client.exe não produziu nenhuma saída — crash no binário"
             exit 1
           }
-          $proc.Kill()
           Write-Host "client.exe OK"
+          Write-Host $out.Substring(0, [Math]::Min(300, $out.Length))
 
       - name: Re-upload artefatos aprovados
         uses: actions/upload-artifact@v4
