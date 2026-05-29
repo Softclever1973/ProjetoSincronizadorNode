@@ -26,9 +26,9 @@ jobs:
         shell: pwsh
         run: |
           $proc = Start-Process -FilePath "dist\server.exe" -PassThru
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 3
           if ($proc.HasExited) {
-            Write-Error "server.exe encerrou imediatamente (exit code: $($proc.ExitCode))"
+            Write-Error "server.exe crashou (exit code: $($proc.ExitCode))"
             exit 1
           }
           $proc.Kill()
@@ -38,9 +38,9 @@ jobs:
         shell: pwsh
         run: |
           $proc = Start-Process -FilePath "dist\client.exe" -PassThru
-          Start-Sleep -Seconds 8
+          Start-Sleep -Seconds 3
           if ($proc.HasExited) {
-            Write-Error "client.exe encerrou imediatamente (exit code: $($proc.ExitCode))"
+            Write-Error "client.exe crashou (exit code: $($proc.ExitCode))"
             exit 1
           }
           $proc.Kill()
