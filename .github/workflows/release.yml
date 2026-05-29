@@ -15,8 +15,8 @@ jobs:
       - name: Clonar repositório
         uses: actions/checkout@v4
 
-      - name: Instalar dependências (produção)
-        run: npm install --production
+      - name: Instalar dependências
+        run: npm install
 
       # =========================
       # SERVER .EXE
