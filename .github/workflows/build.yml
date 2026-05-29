@@ -7,7 +7,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
 
     steps:
       - name: Clonar repositório
@@ -28,21 +28,10 @@ jobs:
         run: npm run build:client
 
       - name: Zipar client
-        run: |
-          zip -r client.zip \
-            src/client \
-            node_modules \
-            package.json \
-            src/client/.env.example
+        run: 7z a client.zip src\client node_modules package.json src\client\.env.example
 
       - name: Zipar server (sem client)
-        run: |
-          zip -r server.zip \
-            src \
-            node_modules \
-            package.json \
-            .env.example \
-            -x "src/client/*"
+        run: 7z a server.zip src node_modules package.json .env.example "-xr!client"
 
       - name: Salvar nome da tag
         run: echo "${{ github.ref_name }}" > version.txt
