@@ -1,0 +1,58 @@
+name: Smoke Test
+
+on:
+  workflow_run:
+    workflows: ["Build"]
+    types:
+      - completed
+
+permissions:
+  actions: read
+
+jobs:
+  smoke-test:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: windows-latest
+
+    steps:
+      - name: Baixar artefatos do build
+        uses: actions/download-artifact@v4
+        with:
+          name: build-artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Smoke test — server.exe
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\server.exe" -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc.HasExited) {
+            Write-Error "server.exe encerrou imediatamente (exit code: $($proc.ExitCode))"
+            exit 1
+          }
+          $proc.Kill()
+          Write-Host "server.exe OK"
+
+      - name: Smoke test — client.exe
+        shell: pwsh
+        run: |
+          $proc = Start-Process -FilePath "dist\client.exe" -PassThru
+          Start-Sleep -Seconds 8
+          if ($proc.HasExited) {
+            Write-Error "client.exe encerrou imediatamente (exit code: $($proc.ExitCode))"
+            exit 1
+          }
+          $proc.Kill()
+          Write-Host "client.exe OK"
+
+      - name: Re-upload artefatos aprovados
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-artifacts
+          path: |
+            dist/server.exe
+            dist/client.exe
+            client.zip
+            server.zip
+            version.txt

@@ -1,69 +1,36 @@
-name: Build and Release
+name: Release
 
 on:
-  push:
-    tags:
-      - "v*" # só roda quando criar uma tag tipo v1.0.0
+  workflow_run:
+    workflows: ["Smoke Test"]
+    types:
+      - completed
 
 permissions:
   contents: write
+  actions: read
+
 jobs:
-  build:
+  release:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
-      - name: Clonar repositório
-        uses: actions/checkout@v4
-
-      - name: Configurar Node.js 20
-        uses: actions/setup-node@v4
+      - name: Baixar artefatos aprovados
+        uses: actions/download-artifact@v4
         with:
-          node-version: '20'
+          name: tested-artifacts
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Instalar dependências
-        run: npm install
+      - name: Ler nome da tag
+        id: version
+        run: echo "tag=$(cat version.txt)" >> $GITHUB_OUTPUT
 
-      # =========================
-      # SERVER .EXE
-      # =========================
-      - name: Build server.exe
-        run: npm run build:server
-
-      # =========================
-      # CLIENT .EXE
-      # =========================
-      - name: Build client.exe
-        run: npm run build:client
-
-      # =========================
-      # CLIENT
-      # =========================
-      - name: Zipar client
-        run: |
-          zip -r client.zip \
-            src/client \
-            node_modules \
-            package.json \
-            src/client/.env.example
-
-      # =========================
-      # SERVER (zip Node.js)
-      # =========================
-      - name: Zipar server (sem client)
-        run: |
-          zip -r server.zip \
-            src \
-            node_modules \
-            package.json \
-            .env.example \
-            -x "src/client/*"
-
-      # =========================
-      # RELEASE
-      # =========================
       - name: Criar release e anexar arquivos
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.version.outputs.tag }}
           files: |
             dist/server.exe
             dist/client.exe
