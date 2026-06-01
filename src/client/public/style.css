@@ -226,10 +226,12 @@ button:disabled { opacity: 0.55; cursor: not-allowed; }
 .btn-local    { background: var(--color-primary); color: #ffffff; }
 .btn-servidor { background: var(--color-warning);  color: #ffffff; }
 .btn-mesclar  { background: var(--color-merge);    color: #ffffff; }
+.btn-ambos    { background: #6f42c1;               color: #ffffff; }
 
 .btn-local:hover:not(:disabled)    { background: var(--color-primary-hover); }
 .btn-servidor:hover:not(:disabled) { background: var(--color-warning-hover); }
 .btn-mesclar:hover:not(:disabled)  { background: var(--color-merge-hover);   }
+.btn-ambos:hover:not(:disabled)    { background: #5a32a3; }
 
 /* Estado de carregamento — spinner acessível */
 .btn-loading {

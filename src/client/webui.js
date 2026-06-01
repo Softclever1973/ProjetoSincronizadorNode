@@ -9,6 +9,7 @@ const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = r
 const { getUltimaAtualizacao } = require('./cursor');
 const TABELAS = require('./tabelas');
 const { lerConfig, salvarConfig, defaultAtivo } = require('./tabelasConfig');
+const { gerarNovoPK: utilGerarPK } = require('./db-utils');
 
 const TOKEN = process.env.SYNC_TOKEN;
 
@@ -615,7 +616,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     const { id } = req.params;
     const { escolha, campos } = req.body;
 
-    if (!['local', 'servidor', 'mesclar'].includes(escolha)) {
+    if (!['local', 'servidor', 'mesclar', 'manter_ambos'].includes(escolha)) {
       return res.status(400).json({ ok: false, message: 'escolha inválida' });
     }
 
@@ -635,9 +636,48 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       if (!contexto.baseURI || !contexto.idLoja) {
         return res.status(500).json({ ok: false, message: 'Configuração do servidor não disponível ainda' });
       }
+
+      // Se versaoLocal está ausente (conflito antigo), lê o dado atual do Firebird
+      let versaoParaEnviar = conflito.versaoLocal;
+      if (!versaoParaEnviar) {
+        const db = await getConnection();
+        try {
+          const pks = Array.isArray(conflito.pk) ? conflito.pk : [conflito.pk];
+          const pkValores = conflito.pkValor.split('|');
+          const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
+          const rows = await dbQuery(db, `SELECT * FROM ${conflito.tabela} WHERE ${whereParts}`, pkValores);
+          if (rows.length === 0) {
+            return res.status(400).json({ ok: false, message: 'Registro local não encontrado — pode ter sido deletado' });
+          }
+          versaoParaEnviar = rows[0];
+        } catch (e) {
+          return res.status(500).json({ ok: false, message: `Falha ao ler registro local: ${e.message}` });
+        } finally {
+          await closeConnection(db);
+        }
+      }
+
       try {
-        await enviarRegistro(contexto.baseURI, contexto.idLoja,
-          conflito.tabela, conflito.pk, conflito.versaoLocal, 0, true);
+        const resultado = await enviarRegistro(contexto.baseURI, contexto.idLoja,
+          conflito.tabela, conflito.pk, versaoParaEnviar, 0, true);
+
+        // Registra a versão do servidor para que o próximo pull não re-detecte como conflito
+        if (resultado?.novoId) {
+          const db = await getConnection();
+          try {
+            await dbExecute(db,
+              `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+               VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [conflito.tabela, conflito.pkValor, resultado.novoId]
+            );
+            await dbExecute(db,
+              `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
+              [conflito.tabela, conflito.pkValor]
+            ).catch(() => {});
+          } finally {
+            await closeConnection(db);
+          }
+        }
       } catch (e) {
         return res.status(500).json({ ok: false, message: `Falha ao enviar ao servidor: ${e.message}` });
       }
@@ -704,10 +744,119 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         return res.status(500).json({ ok: false, message: 'Configuração do servidor não disponível ainda' });
       }
       try {
-        await enviarRegistro(contexto.baseURI, contexto.idLoja,
+        const resultadoMescla = await enviarRegistro(contexto.baseURI, contexto.idLoja,
           conflito.tabela, conflito.pk, base, 0, true);
+
+        if (resultadoMescla?.novoId) {
+          const db2 = await getConnection();
+          try {
+            await dbExecute(db2,
+              `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+               VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [conflito.tabela, conflito.pkValor, resultadoMescla.novoId]
+            );
+            await dbExecute(db2,
+              `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
+              [conflito.tabela, conflito.pkValor]
+            ).catch(() => {});
+          } finally {
+            await closeConnection(db2);
+          }
+        }
       } catch (e) {
         return res.status(500).json({ ok: false, message: `Falha ao enviar mesclagem ao servidor: ${e.message}` });
+      }
+
+    } else if (escolha === 'manter_ambos') {
+      // Local mantém o PK original. O registro do servidor ganha um novo ID auto-gerado nos dois bancos.
+      if (!contexto.baseURI || !contexto.idLoja) {
+        return res.status(500).json({ ok: false, message: 'Configuração do servidor não disponível ainda' });
+      }
+      if (!conflito.versaoLocal || !conflito.versaoServidor) {
+        return res.status(400).json({ ok: false, message: 'Conflito sem dados suficientes para manter ambos' });
+      }
+
+      const pks         = Array.isArray(conflito.pk) ? conflito.pk : [conflito.pk];
+      const pkPrincipal = pks[pks.length - 1];
+      const pkValores   = conflito.pkValor.split('|');
+
+      let novoValorPK;
+      let novoPKValorStr;
+
+      const db = await getConnection();
+      try {
+        // 1. Gera novo PK (MAX + 1) para o registro do servidor — antes de qualquer alteração
+        novoValorPK    = await utilGerarPK(db, conflito.tabela, conflito.pk, conflito.versaoServidor);
+        novoPKValorStr = pks.map((p, i) => p === pkPrincipal ? String(novoValorPK) : pkValores[i]).join('|');
+
+        // 2. Insere o registro do servidor localmente com o novo PK
+        const regServidor  = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
+        const computadas   = await getColunasComputadas(db, conflito.tabela);
+        const colunasServ  = Object.keys(regServidor).filter(k =>
+          regServidor[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k)
+        );
+        await dbExecute(db,
+          `UPDATE OR INSERT INTO ${conflito.tabela} (${colunasServ.join(', ')}) VALUES (${colunasServ.map(() => '?').join(', ')}) MATCHING (${pks.join(', ')})`,
+          colunasServ.map(c => (regServidor[c] === undefined ? null : regServidor[c]))
+        );
+
+        // 3. Remove pendente do PK original (será resolvido pelo force-push abaixo)
+        await dbExecute(db,
+          `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
+          [conflito.tabela, conflito.pkValor]
+        ).catch(() => {});
+
+      } catch (e) {
+        await closeConnection(db);
+        return res.status(500).json({ ok: false, message: `Falha ao inserir registro do servidor localmente: ${e.message}` });
+      }
+      await closeConnection(db);
+
+      // 4. Envia o registro LOCAL (PK original) ao servidor — sobrescreve o conflito no servidor
+      try {
+        const resultado = await enviarRegistro(contexto.baseURI, contexto.idLoja,
+          conflito.tabela, conflito.pk, conflito.versaoLocal, 0, true);
+
+        if (resultado?.novoId) {
+          const db2 = await getConnection();
+          try {
+            await dbExecute(db2,
+              `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+               VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [conflito.tabela, conflito.pkValor, resultado.novoId]
+            );
+          } finally {
+            await closeConnection(db2);
+          }
+        }
+      } catch (e) {
+        return res.status(500).json({ ok: false, message: `Falha ao enviar versão local ao servidor: ${e.message}` });
+      }
+
+      // 5. Envia o registro do servidor com o novo PK ao servidor — cria o segundo registro
+      const regParaEnviar = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
+      try {
+        const resultado = await enviarRegistro(contexto.baseURI, contexto.idLoja,
+          conflito.tabela, conflito.pk, regParaEnviar, 0, true);
+
+        if (resultado?.novoId) {
+          const db2 = await getConnection();
+          try {
+            await dbExecute(db2,
+              `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+               VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [conflito.tabela, novoPKValorStr, resultado.novoId]
+            );
+            await dbExecute(db2,
+              `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
+              [conflito.tabela, novoPKValorStr]
+            ).catch(() => {});
+          } finally {
+            await closeConnection(db2);
+          }
+        }
+      } catch (e) {
+        return res.status(500).json({ ok: false, message: `Falha ao enviar registro do servidor com novo ID: ${e.message}` });
       }
     }
 

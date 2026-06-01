@@ -34,8 +34,9 @@
   <% for (const c of conflitos) { %>
     <%
       const resolvido = c.resolvido;
-      const escolhaLabel = c.escolha === 'local' ? 'versão local'
-                         : c.escolha === 'servidor' ? 'versão do servidor'
+      const escolhaLabel = c.escolha === 'local'        ? 'versão local'
+                         : c.escolha === 'servidor'    ? 'versão do servidor'
+                         : c.escolha === 'manter_ambos' ? 'ambos (novo ID gerado)'
                          : 'mesclado campo a campo';
       const gridId = 'grid-' + c.id;
     %>
@@ -87,6 +88,7 @@
           <button class="btn-local"    onclick="resolver('<%= c.id %>', 'local')">Manter versão local</button>
           <button class="btn-servidor" onclick="resolver('<%= c.id %>', 'servidor')">Manter versão do servidor</button>
           <button class="btn-mesclar"  onclick="resolverMesclado('<%= c.id %>')">Aplicar seleção campo a campo</button>
+          <button class="btn-ambos"    onclick="resolver('<%= c.id %>', 'manter_ambos')">Manter ambos (novo ID automático)</button>
         </div>
       <% } %>
     </div>

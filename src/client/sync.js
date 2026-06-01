@@ -7,6 +7,7 @@ const {
   buscarProdutosParaAtualizar,
 } = require('./http');
 const { salvarConflito } = require('./conflitos');
+const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('./db-utils');
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
@@ -17,26 +18,6 @@ const cacheColunasExistentes = {};
 
 // Cache de colunas NOT NULL por tabela — evita escrever null em coluna com constraint
 const cacheColunasNaoNulas = {};
-
-// Cache de referências FK por "TABELA.COLUNA_PK" — evita consultar system tables toda vez
-const cacheFKRefs = {};
-
-// Cache do tamanho máximo (em chars) de colunas VARCHAR por "TABELA.COLUNA"
-const cacheCharLen = {};
-
-async function getColumnCharLen(db, tabela, coluna) {
-  const chave = `${tabela}.${coluna}`;
-  if (cacheCharLen[chave] !== undefined) return cacheCharLen[chave];
-  const rows = await query(db, `
-    SELECT f.RDB$CHARACTER_LENGTH AS MAX_LEN
-    FROM RDB$RELATION_FIELDS rf
-    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
-    WHERE rf.RDB$RELATION_NAME = ? AND rf.RDB$FIELD_NAME = ?
-  `, [tabela, coluna]);
-  const len = rows[0]?.MAX_LEN ?? null;
-  cacheCharLen[chave] = len;
-  return len;
-}
 
 // Cache de tamanhos de todas as colunas string de uma tabela (query única por tabela)
 const cacheTamanhosPorTabela = {};
@@ -53,96 +34,6 @@ async function getTamanhosColunas(db, nomeTabela) {
   for (const row of rows) mapa[row.COLUNA] = row.MAX_LEN;
   cacheTamanhosPorTabela[nomeTabela] = mapa;
   return mapa;
-}
-
-/**
- * Retorna todas as tabelas filhas que referenciam via FK a coluna PK informada.
- * Parte do PK constraint do pai e navega para os FK constraints dos filhos.
- * Resultado: [{ tabela: 'MOVIMENTACOES', coluna: 'ID_PRODUTO' }, ...]
- */
-async function getFKRefs(db, tabelaPai, colunaPai) {
-  const chave = `${tabelaPai}.${colunaPai}`;
-  if (cacheFKRefs[chave]) return cacheFKRefs[chave];
-
-  const rows = await query(db, `
-    SELECT TRIM(rc2.RDB$RELATION_NAME) AS TABELA_FILHA,
-           TRIM(seg2.RDB$FIELD_NAME)   AS COLUNA_FK
-    FROM RDB$RELATION_CONSTRAINTS rc1
-    JOIN RDB$INDEX_SEGMENTS       seg1 ON seg1.RDB$INDEX_NAME        = rc1.RDB$INDEX_NAME
-    JOIN RDB$REF_CONSTRAINTS      ref  ON ref.RDB$CONST_NAME_UQ      = rc1.RDB$CONSTRAINT_NAME
-    JOIN RDB$RELATION_CONSTRAINTS rc2  ON rc2.RDB$CONSTRAINT_NAME    = ref.RDB$CONSTRAINT_NAME
-    JOIN RDB$INDEX_SEGMENTS       seg2 ON seg2.RDB$INDEX_NAME        = rc2.RDB$INDEX_NAME
-                                      AND seg2.RDB$FIELD_POSITION    = seg1.RDB$FIELD_POSITION
-    WHERE TRIM(rc1.RDB$RELATION_NAME)   = ?
-      AND TRIM(rc1.RDB$CONSTRAINT_TYPE) = 'PRIMARY KEY'
-      AND TRIM(seg1.RDB$FIELD_NAME)     = ?
-  `, [tabelaPai, colunaPai]);
-
-  const refs = rows.map(r => ({ tabela: r.TABELA_FILHA.trim(), coluna: r.COLUNA_FK.trim() }));
-  cacheFKRefs[chave] = refs;
-  return refs;
-}
-
-/**
- * Renomeia o PK de um registro local tratando dependências FK em cascata.
- *
- * Se não há filhos FK: simples UPDATE do PK.
- * Se há filhos FK: INSERT cópia com novo PK → UPDATE filhos → DELETE original.
- * Essa sequência é necessária porque o Firebird valida FK por instrução (não por commit),
- * criando um impasse circular se tentarmos apenas fazer UPDATE no pai ou nos filhos primeiro.
- */
-async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
-  const pks = Array.isArray(pk) ? pk : [pk];
-  const pkPrincipal = pks[pks.length - 1];
-  const valorAntigo = registro[pkPrincipal];
-
-  const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
-  const whereValores = pks.map(p => registro[p]);
-
-  if (fkRefs.length === 0) {
-    await execute(db,
-      `UPDATE ${nome} SET ${pkPrincipal} = ? WHERE ${whereParts}`,
-      [novoValorPK, ...whereValores]
-    );
-    return;
-  }
-
-  // Descobrir colunas não-computadas para o INSERT...SELECT
-  const colRows = await query(db, `
-    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
-    FROM RDB$RELATION_FIELDS rf
-    LEFT JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
-    WHERE TRIM(rf.RDB$RELATION_NAME) = ?
-      AND f.RDB$COMPUTED_SOURCE IS NULL
-    ORDER BY rf.RDB$FIELD_POSITION
-  `, [nome]);
-  const colunas = colRows.map(r => r.COLUNA.trim());
-
-  // Monta SELECT substituindo apenas o PK principal pelo novo valor.
-  // Usa literal inline (safe: vem de gerarNovoPK que retorna número ou string controlada).
-  const isNumerico = Number.isFinite(Number(novoValorPK)) && String(novoValorPK).trim() !== '';
-  const pkLiteral = isNumerico
-    ? String(parseInt(novoValorPK, 10))
-    : `'${String(novoValorPK).replace(/'/g, "''")}'`;
-
-  const selectParts = colunas.map(c => (c === pkPrincipal ? pkLiteral : c)).join(', ');
-
-  // 1. Insere cópia com novo PK (agora ambos os valores existem na tabela pai)
-  await execute(db,
-    `INSERT INTO ${nome} (${colunas.join(', ')}) SELECT ${selectParts} FROM ${nome} WHERE ${pkPrincipal} = ?`,
-    [valorAntigo]
-  );
-
-  // 2. Atualiza FK refs para o novo PK (pai já existe; FK satisfeita)
-  for (const ref of fkRefs) {
-    await execute(db,
-      `UPDATE ${ref.tabela} SET ${ref.coluna} = ? WHERE ${ref.coluna} = ?`,
-      [novoValorPK, valorAntigo]
-    );
-  }
-
-  // 3. Remove o registro original (PK antigo livre para o servidor inserir)
-  await execute(db, `DELETE FROM ${nome} WHERE ${whereParts}`, whereValores);
 }
 
 /**
@@ -322,51 +213,6 @@ async function sincronizarGenerator(db, nomeGenerator, novoValor) {
 }
 
 /**
- * Gera um novo valor de PK que não existe na tabela.
- * - PK numérica: MAX(pk) + 1
- * - PK string:   valorAtual + '_1', '_2', ... até achar livre
- *
- * Para PKs compostas, incrementa apenas a última coluna da PK.
- */
-async function gerarNovoPK(db, tabela, pkColuna, registro) {
-  const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
-  const pkPrincipal = pks[pks.length - 1]; // Geralmente a última parte é o ID
-  const valorAtual = registro[pkPrincipal];
-
-  const isNumerico = Number.isFinite(Number(valorAtual)) && String(valorAtual).trim() !== '';
-
-  const constraints = pks.slice(0, -1);
-  const whereBase = constraints.map(p => `${p} = ?`).join(' AND ');
-  const valoresBase = constraints.map(p => registro[p]);
-
-  if (isNumerico) {
-    let sql = `SELECT MAX(${pkPrincipal}) AS MAXIMO FROM ${tabela}`;
-    if (whereBase) sql += ` WHERE ${whereBase}`;
-
-    const rows = await query(db, sql, valoresBase);
-    return (rows[0].MAXIMO || 0) + 1;
-  }
-
-  const maxLen = await getColumnCharLen(db, tabela, pkPrincipal);
-
-  for (let i = 1; i <= 999; i++) {
-    const suffix = `_${i}`;
-    // Trunca a base para caber dentro do tamanho da coluna, deixando espaço para o sufixo
-    const base = maxLen
-      ? String(valorAtual).substring(0, maxLen - suffix.length)
-      : String(valorAtual).substring(0, 50 - suffix.length);
-    if (base.length === 0) break;
-    const candidato = `${base}${suffix}`;
-    let sql = `SELECT 1 FROM ${tabela} WHERE ${pkPrincipal} = ?`;
-    if (whereBase) sql += ` AND ${whereBase}`;
-
-    const existe = await query(db, sql, [candidato, ...valoresBase]);
-    if (existe.length === 0) return candidato;
-  }
-  throw new Error(`Não foi possível gerar novo PK para ${tabela}.${pkPrincipal}=${valorAtual}`);
-}
-
-/**
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
 async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
@@ -407,77 +253,67 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
       const pkValor = pks.map(p => String(registro[p] ?? '')).join('|');
 
       try {
-        // Verifica se há alteração local pendente para este registro
+        // node-firebird usa socket único — queries paralelas no mesmo db corrompem as respostas.
+        // versaoConhecida = null em erro (distinto de [] = "nunca recebido do servidor").
         const pendentes = await query(db,
           `SELECT 1 FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
           [nome, pkValor]
         ).catch(() => []);
+        const versaoConhecida = await query(db,
+          `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM SYNC_VERSOES_SERVIDOR WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
+          [nome, pkValor]
+        ).catch(() => null);
+
+        log(`[${nome}] pk=${pkValor} pendentes=${pendentes.length} versaoConhecida=${versaoConhecida === null ? 'ERRO' : versaoConhecida.length === 0 ? 'NUNCA_RECEBIDO' : versaoConhecida[0].ID_ULTIMA_ATUALIZACAO_MATRIZ} versaoServidor=${registro.ID_ULTIMA_ATUALIZACAO_MATRIZ}`);
 
         if (pendentes.length > 0) {
-          // Verifica se o registro foi alguma vez recebido do servidor (ou é criação local)
-          const versaoConhecida = await query(db,
-            `SELECT 1 FROM SYNC_VERSOES_SERVIDOR WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
-            [nome, pkValor]
-          ).catch(() => []);
 
-          if (versaoConhecida.length === 0) {
-            // Verifica se o registro local ainda existe — pode ter sido deletado
-            // depois do push, re-enfileirando o pendente como deleção via trigger.
-            // Se não existe, o correto é deixar o push enviar o delete ao servidor.
+          if (versaoConhecida !== null && versaoConhecida.length === 0) {
+            // ── Colisão de PK: dois registros criados independentemente com o mesmo PK ──
             const wherePartsLocal = pks.map(p => `${p} = ?`).join(' AND ');
             const existeLocal = await query(db,
-              `SELECT 1 FROM ${nome} WHERE ${wherePartsLocal}`,
+              `SELECT * FROM ${nome} WHERE ${wherePartsLocal}`,
               pks.map(p => registro[p])
-            ).catch(() => [null]);
+            ).catch(() => []);
+
+            const novoIdColisao = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
 
             if (existeLocal.length === 0) {
               // Registro deletado localmente — pendente é uma deleção, não colisão.
               // Avança o cursor e deixa a fase de push propagar o delete ao servidor.
-              const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
-              if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
+              if (novoIdColisao) await salvarCursor(db, nome, novoIdColisao, 0).catch(() => {});
               log(`[${nome}] Registro ${pkValor} deletado localmente — aguardando push de deleção`);
               continue;
             }
 
-            // ── Colisão de PK: dois registros distintos com mesmo PK ──────────
-            // O registro local foi criado independentemente; renomeia o PK local
-            // para liberar o PK original para o registro do servidor.
-            try {
-              const novoValorPK = await gerarNovoPK(db, nome, pk, registro);
-              const pkPrincipal = pks[pks.length - 1];
+            // Colisão real: usuário criou um registro e o servidor também criou um com o mesmo PK.
+            // Não há precedência automática — salva conflito para resolução manual.
+            salvarConflito({
+              tabela: nome,
+              pk,
+              pkValor,
+              versaoLocal: existeLocal[0],
+              versaoServidor: registro,
+            });
+            if (novoIdColisao) await salvarCursor(db, nome, novoIdColisao, 0).catch(() => {});
+            log(`[${nome}] Colisão de PK (${pkValor}) — conflito salvo para resolução manual`);
+            continue; // Não aplica upsert — usuário decide na webui
+          } else if (versaoConhecida !== null && versaoConhecida.length > 0) {
+            // ── Registro conhecido dos dois lados ──
+            const versaoConhecidaNum = versaoConhecida[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
+            const versaoServidorNum  = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
 
-              const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
-              const whereValores = pks.map(p => registro[p]);
-
-              const fkRefs = await getFKRefs(db, nome, pkPrincipal);
-              await renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs);
-              await sincronizarGenerator(db, generator, novoValorPK);
-
-              // Calcula o novo PK_VALOR (concatenado) para atualizar a fila de pendentes
-              const registroAtualizado = { ...registro, [pkPrincipal]: novoValorPK };
-              const novoPKValor = pks.map(p => String(registroAtualizado[p] ?? '')).join('|');
-
-              await execute(db,
-                `UPDATE SYNC_ALTERACOES_PENDENTES SET PK_VALOR = ? WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
-                [String(novoPKValor), nome, pkValor]
-              ).catch(() => { });
-
-              log(`[${nome}] PK duplicada (${pkValor}) — registro local renomeado para ${novoPKValor}`);
-            } catch (e) {
-              log(`[${nome}] Erro ao resolver colisão de PK (${pkValor}): ${e.message}`);
-              // Salva como conflito para resolução manual e avança o cursor para não travar o sync
-              salvarConflito({ tabela: nome, pk, pkValor, versaoLocal: null, versaoServidor: registro });
-              const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
-              if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
+            if (versaoServidorNum && versaoConhecidaNum && versaoServidorNum <= versaoConhecidaNum) {
+              // Servidor não mudou desde o último sync — apenas o cliente alterou.
+              // Avança cursor e deixa o push enviar a mudança local sem conflito.
+              log(`[${nome}] pk=${pkValor} servidor não mudou (versaoServidor=${versaoServidorNum} <= conhecido=${versaoConhecidaNum}) — push local pendente`);
+              await salvarCursor(db, nome, versaoServidorNum, 0).catch(() => {});
               continue;
             }
-            // Agora aplica o registro do servidor com o PK original (flui para o upsert abaixo)
-          } else {
-            // ── Conflito de conteúdo: mesmo registro editado nos dois lados ───
-            // Lê a versão local ANTES de sobrescrever e salva para resolução manual.
-            const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
-            const whereValores = pks.map(p => registro[p]);
 
+            // Servidor tem versão mais nova E cliente tem mudança pendente → conflito real.
+            const whereParts  = pks.map(p => `${p} = ?`).join(' AND ');
+            const whereValores = pks.map(p => registro[p]);
             const localRows = await query(db,
               `SELECT * FROM ${nome} WHERE ${whereParts}`, whereValores
             ).catch(() => []);
@@ -493,17 +329,16 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               log(`[${nome}] Conflito detectado (${pkValor}) — resolva em http://localhost:3001`);
             }
 
-            // Remove dos pendentes (conflito já registrado; push não deve re-enviar)
             await execute(db,
               `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? AND PK_VALOR = ?`,
               [nome, pkValor]
-            ).catch(() => { });
+            ).catch(() => {});
 
-            // Avança o cursor para não ficar preso neste registro
             const novoId = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
-            if (novoId) await salvarCursor(db, nome, novoId, 0);
+            if (novoId) await salvarCursor(db, nome, novoId, 0).catch(() => {});
             continue; // Não aplica o upsert — usuário decide na webui
           }
+          // versaoConhecida === null (erro na query): cai para upsert por segurança.
         }
 
         // Eco de push: o servidor devolveu um registro que acabamos de enviar.
@@ -517,6 +352,32 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             [nome, pkValor, idServidor]
           ).catch(() => {});
           continue;
+        }
+
+        // Proteção contra overwrite de dado pré-existente no cliente:
+        // se nunca recebemos este registro do servidor (versaoConhecida vazia)
+        // e ele já existe localmente, é um dado local que não passou pelo push.
+        // Salva conflito para revisão manual em vez de sobrescrever silenciosamente.
+        if (versaoConhecida !== null && versaoConhecida.length === 0) {
+          const whereLocal = pks.map(p => `${p} = ?`).join(' AND ');
+          const localRows = await query(db,
+            `SELECT * FROM ${nome} WHERE ${whereLocal}`,
+            pks.map(p => registro[p])
+          ).catch(() => []);
+
+          if (localRows.length > 0) {
+            salvarConflito({
+              tabela: nome,
+              pk,
+              pkValor,
+              versaoLocal: localRows[0],
+              versaoServidor: registro,
+            });
+            const novoIdConflito = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+            if (novoIdConflito) await salvarCursor(db, nome, novoIdConflito, 0).catch(() => {});
+            log(`[${nome}] Registro ${pkValor} existe localmente sem histórico de sync — conflito salvo`);
+            continue;
+          }
         }
 
         await upsertRegistro(db, nome, pk, registro, log);
