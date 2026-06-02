@@ -128,6 +128,9 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
   if (!email || !senha || !role)
     return res.status(400).json({ erro: 'email, senha e role são obrigatórios' });
 
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim()))
+    return res.status(400).json({ erro: 'E-mail inválido — use o formato usuario@dominio.com' });
+
   if (!ROLES_VALIDOS.includes(role))
     return res.status(400).json({ erro: `role inválido. Use: ${ROLES_VALIDOS.join(' | ')}` });
 
