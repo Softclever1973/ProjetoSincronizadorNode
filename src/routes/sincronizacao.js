@@ -10,6 +10,9 @@ const cacheComputadas = {};
 // Cache de colunas existentes no servidor por tabela
 const cacheColunasServidor = {};
 
+// Cache da PK real de cada tabela (schema:tabela → string[])
+const cachePkServidor = {};
+
 // Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL.
 // Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
 // inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
@@ -26,18 +29,27 @@ function inferirTipoPg(valor) {
  * Cria a tabela no schema do tenant usando os tipos inferidos do primeiro registro recebido.
  * Chamado quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente).
  */
-async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks) {
+async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks, useSrvId = false) {
   const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
-  const colunas = Object.keys(registro).map(nome => {
-    const tipo = inferirTipoPg(registro[nome]);
-    return `${nome} ${tipo}${pkSet.has(nome) ? ' NOT NULL' : ''}`;
-  });
+  const colunas = Object.keys(registro)
+    .filter(nome => !COLUNAS_IGNORADAS_SERVIDOR.has(nome))
+    .map(nome => {
+      const tipo = inferirTipoPg(registro[nome]);
+      return `${nome} ${tipo}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`;
+    });
   if (!Object.prototype.hasOwnProperty.call(registro, 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
     colunas.push('ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER');
   }
-  await execute(db,
-    `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
-  );
+  if (useSrvId) {
+    colunas.unshift('SRV_ID INTEGER NOT NULL');
+    await execute(db,
+      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (SRV_ID))`
+    );
+  } else {
+    await execute(db,
+      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
+    );
+  }
   const triggerName = `tg_${nomeTabela.toLowerCase()}_seq`;
   await execute(db, `DROP TRIGGER IF EXISTS ${triggerName} ON ${nomeTabela}`);
   await execute(db, `
@@ -66,6 +78,33 @@ async function getColunasServidor(db, nomeTabela, schemaName) {
   );
   cacheColunasServidor[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
   return cacheColunasServidor[key];
+}
+
+/**
+ * Retorna as colunas que compõem a PRIMARY KEY real da tabela no PostgreSQL.
+ * Para tabelas srvId criadas pelo servidor, isso retorna ['SRV_ID'].
+ * Para tabelas legadas (PK original), retorna as colunas da PK Firebird.
+ * Resultado cacheado por schema:tabela — invalidar junto com cacheColunasServidor.
+ */
+async function getPkServidor(db, nomeTabela, schemaName) {
+  const key = `${schemaName}:${nomeTabela}`;
+  if (cachePkServidor[key]) return cachePkServidor[key];
+  const rows = await query(db,
+    `SELECT kcu.column_name AS "COLUNA"
+     FROM information_schema.key_column_usage kcu
+     JOIN information_schema.table_constraints tc
+       ON tc.constraint_name = kcu.constraint_name
+      AND tc.table_schema    = kcu.table_schema
+      AND tc.table_name      = kcu.table_name
+     WHERE kcu.table_schema  = lower($1)
+       AND kcu.table_name    = lower($2)
+       AND tc.constraint_type = 'PRIMARY KEY'
+     ORDER BY kcu.ordinal_position`,
+    [schemaName, nomeTabela]
+  );
+  const pkCols = rows.map(r => (r.COLUNA || '').trim().toUpperCase());
+  cachePkServidor[key] = pkCols.length > 0 ? pkCols : null;
+  return cachePkServidor[key];
 }
 
 function normalizarBlobs(row) {
@@ -109,6 +148,7 @@ async function registrarFilial(db, idLoja, nomeFilial) {
 const COLUNAS_IGNORADAS_SERVIDOR = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ',
   'ID_ULTIMA_ATUALIZACAO_WEB',
+  'SRV_ID', // rastreado em srv_id_map; não existe como coluna nas tabelas do servidor
 ]);
 
 // Tabelas internas do servidor que nunca devem ser lidas ou escritas pela filial
@@ -146,7 +186,6 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
   const colunaData = req.query.colunaData
     ? String(req.query.colunaData).trim().toUpperCase()
     : null;
-
   if (!nomeTabela) {
     return res.status(400).json({
       message: 'Ocorreu um erro ao tentar listar os registros para atualizar pois o campo nomeTabela não foi informado',
@@ -157,7 +196,6 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não é permitida para sincronização` });
   }
 
-  // Valida nomes de coluna para evitar SQL injection
   if (filtroFilial && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilial)) {
     return res.status(400).json({ message: `Nome de coluna inválido: '${filtroFilial}'` });
   }
@@ -218,7 +256,9 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
                    ORDER BY ID_ULTIMA_ATUALIZACAO_MATRIZ
                    LIMIT 50`;
 
-      return query(db, sql, params);
+      const registros = await query(db, sql, params);
+
+      return registros;
     });
 
     res.json(rows);
@@ -376,7 +416,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
   const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
-  const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false } = req.body || {};
+  const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false, temSrvId = false } = req.body || {};
 
   if (!idLoja) {
     return res.status(400).json({ message: 'idLoja não informado' });
@@ -401,17 +441,55 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
       const pks = Array.isArray(pk) ? pk : [pk];
 
+      // Para tabelas srvId, SRV_ID é a PK real no PostgreSQL — obtém antes de qualquer operação.
+      let srvId = null;
+      if (temSrvId && !deletar) {
+        const pkValorStr = pks.map(p => String(registro[p])).join('|');
+        const [mapa] = await query(db,
+          `INSERT INTO srv_id_map (filial_id, tabela, id_local)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = srv_id_map.filial_id
+           RETURNING srv_id`,
+          [idLoja, nomeTabela, pkValorStr]
+        );
+        srvId = mapa?.SRV_ID ?? null;
+      }
+
       if (deletar) {
-        const whereValores = pks.map(p => registro[p]);
-        const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-        try {
-          await execute(db, `DELETE FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
-          await execute(db,
-            `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
-            [nomeTabela, whereValores.join('|')]
-          );
-        } catch (e) {
-          if (!isMissingTableError(e)) throw e;
+        if (temSrvId) {
+          const pkValorStr = pks.map(p => registro[p]).join('|');
+          const [mapa] = await query(db,
+            `SELECT srv_id FROM srv_id_map WHERE tabela = $1 AND id_local = $2`,
+            [nomeTabela, pkValorStr]
+          ).catch(() => [null]);
+          const srvIdDel = mapa?.SRV_ID;
+          try {
+            if (srvIdDel) {
+              await execute(db, `DELETE FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvIdDel]);
+              await execute(db,
+                `DELETE FROM srv_id_map WHERE tabela = $1 AND id_local = $2`,
+                [nomeTabela, pkValorStr]
+              );
+            }
+            await execute(db,
+              `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
+              [nomeTabela, pkValorStr]
+            );
+          } catch (e) {
+            if (!isMissingTableError(e)) throw e;
+          }
+        } else {
+          const whereValores = pks.map(p => registro[p]);
+          const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+          try {
+            await execute(db, `DELETE FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+            await execute(db,
+              `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
+              [nomeTabela, whereValores.join('|')]
+            );
+          } catch (e) {
+            if (!isMissingTableError(e)) throw e;
+          }
         }
         res.json({ ok: true });
         return;
@@ -421,19 +499,57 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.
       const computadas = await getColunasComputadas(db, nomeTabela, req.schemaName);
       let colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
-      if (colunasServidor.size === 0) {
-        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks);
+      const tabelaJaExistia = colunasServidor.size > 0;
+
+      if (!tabelaJaExistia) {
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
         const cacheKey = `${req.schemaName}:${nomeTabela}`;
         delete cacheColunasServidor[cacheKey];
         delete cacheComputadas[cacheKey];
+        delete cachePkServidor[cacheKey];
+        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+      } else if (temSrvId && !colunasServidor.has('SRV_ID')) {
+        // Migração: tabela existe (criada antes do srvId ser ativado) sem coluna SRV_ID.
+        // Adiciona como coluna comum nullable — não destrói a PK original da tabela.
+        await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS srv_id INTEGER`);
+        const cacheKey = `${req.schemaName}:${nomeTabela}`;
+        delete cacheColunasServidor[cacheKey];
+        delete cachePkServidor[cacheKey];
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       }
 
-      // Busca o registro atual no servidor para detecção de conflito
-      const whereValores = pks.map(p => registro[p]);
-      const whereParts = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      // srvIdEhPk: true quando SRV_ID é a PK real da tabela no PostgreSQL.
+      // Detectado consultando information_schema (cacheado) em vez de depender de
+      // tabelaJaExistia — que era falso apenas no primeiro push e causava ON CONFLICT
+      // com ID_PRODUTO (sem constraint única) em todas as chamadas subsequentes.
+      const pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
+      const srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
 
-      const atual = await query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+      // Detecção de conflito: SRV_ID como chave só quando é a PK real da tabela.
+      // Se a tabela não existir (cache obsoleto), limpa, recria e continua com atual=[].
+      const _selecionarAtual = async () => {
+        if (srvIdEhPk) {
+          return query(db, `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]);
+        }
+        const whereValores = pks.map(p => registro[p]);
+        const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+        return query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+      };
+
+      let atual;
+      try {
+        atual = await _selecionarAtual();
+      } catch (eSel) {
+        if (!isMissingTableError(eSel)) throw eSel;
+        // Cache obsoleto: tabela foi dropada após ser cacheada — recria agora mesmo.
+        const cacheKey = `${req.schemaName}:${nomeTabela}`;
+        delete cacheColunasServidor[cacheKey];
+        delete cacheComputadas[cacheKey];
+        delete cachePkServidor[cacheKey];
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
+        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+        atual = [];
+      }
 
       if (!forcar && atual.length > 0) {
         const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
@@ -442,6 +558,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           return;
         }
       }
+
       const colunas = Object.keys(registro).filter(k =>
         registro[k] !== undefined &&
         !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
@@ -449,35 +566,72 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor.has(k)
       );
 
+      // Para tabelas migradas (SRV_ID como coluna comum, não como PK real):
+      // inclui srv_id no próprio UPSERT em vez de um UPDATE separado — evita que
+      // fn_seq_atualizacao dispare duas vezes, o que geraria duas versões distintas
+      // e causaria falsos conflitos no pull seguinte.
+      // Condição: srvId disponível, SRV_ID existe na tabela, mas NÃO é a PK real.
+      const temSrvIdMigrado = temSrvId && srvId != null && !srvIdEhPk && colunasServidor.has('SRV_ID');
+
       let novoId = null;
-      if (colunas.length > 0) {
-        const placeholders = colunas.map((_, i) => `$${i + 1}`).join(', ');
-        // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes
-        // vindos de dados binários ou padding de campo de tamanho fixo.
-        const valores = colunas.map(c => {
+      if (colunas.length > 0 || srvIdEhPk || temSrvIdMigrado) {
+        // Monta listas de colunas/valores:
+        // - tabela nova: SRV_ID no início (é a PK real)
+        // - tabela migrada: srv_id no final (coluna comum)
+        // - demais: só as colunas do registro
+        const colunasFinais = srvIdEhPk
+          ? ['SRV_ID', ...colunas]
+          : temSrvIdMigrado
+            ? [...colunas, 'srv_id']
+            : colunas;
+        // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes.
+        const valoresFinais = colunasFinais.map(c => {
+          if (c === 'SRV_ID' || c === 'srv_id') return srvId;
           const v = registro[c] === undefined ? null : registro[c];
           return typeof v === 'string' ? v.replace(/\x00/g, '') : v;
         });
-        const nonPkCols = colunas.filter(c => !pks.includes(c));
-        const updateSet = nonPkCols.length > 0
-          ? nonPkCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
-          : `${pks[0]} = EXCLUDED.${pks[0]}`; // sem colunas não-PK: no-op seguro
+        const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
+        const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
+        const nonConflictCols = colunasFinais.filter(c => c !== 'SRV_ID' && !pks.includes(c));
+        const updateSet = nonConflictCols.length > 0
+          ? nonConflictCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
+          : `${conflictTarget} = EXCLUDED.${conflictTarget}`;
         await execute(db,
-          `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})
-           ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updateSet}`,
-          valores
+          `INSERT INTO ${nomeTabela} (${colunasFinais.join(', ')}) VALUES (${placeholders})
+           ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`,
+          valoresFinais
         );
+
         // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
-        const [linha] = await query(db,
-          `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE ${whereParts}`,
-          whereValores
-        ).catch(() => [null]);
-        novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
+        if (srvIdEhPk) {
+          const [linha] = await query(db,
+            `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]
+          ).catch(() => [null]);
+          novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
+        } else {
+          const whereValores2 = pks.map(p => registro[p]);
+          const whereParts2   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+          const [linha] = await query(db,
+            `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE ${whereParts2}`,
+            whereValores2
+          ).catch(() => [null]);
+          novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
+        }
       }
 
-      res.json({ ok: true, novoId });
+      res.json({ ok: true, novoId, srvId });
     });
   } catch (e) {
+    if (isMissingTableError(e)) {
+      // Garante que o próximo push vai recriar a tabela (limpa cache obsoleto).
+      const nomeTabela = ((req.body?.tabela) || '').toUpperCase().trim();
+      if (nomeTabela && req.schemaName) {
+        const cacheKey = `${req.schemaName}:${nomeTabela}`;
+        delete cacheColunasServidor[cacheKey];
+        delete cacheComputadas[cacheKey];
+        delete cachePkServidor[cacheKey];
+      }
+    }
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
   }
 });

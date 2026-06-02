@@ -89,7 +89,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
     try {
       log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registro[p]}`).join(', ') : `${pk}=${registro[pk]}`}) ao servidor`);
-      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV, nomeFilial);
+      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV, nomeFilial, false, configTabela.srvId ?? false);
 
       if (resultado.conflito) {
         // Remove dos pendentes para não re-enviar indefinidamente no próximo ciclo
@@ -114,6 +114,25 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
           [nome, pkValor]
         );
         if (resultado.novoId) registrarEcho(nome, pkValor, resultado.novoId);
+        // Atualiza SYNC_VERSOES_SERVIDOR imediatamente após push bem-sucedido.
+        // Sem isso, um carga-parcial que re-enfileira este registro antes do próximo pull
+        // causaria um falso conflito (versaoConhecida < novoId do servidor).
+        if (resultado.novoId) {
+          await execute(db,
+            `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+             VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+            [nome, pkValor, resultado.novoId]
+          ).catch(() => {});
+        }
+        if (resultado.srvId && configTabela.srvId) {
+          const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
+          await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => {});
+          await execute(db,
+            `UPDATE ${nome} SET SRV_ID = ? WHERE ${whereParts}`,
+            [resultado.srvId, ...pkValores]
+          ).catch(e => log(`[${nome}] Aviso: não foi possível gravar SRV_ID local: ${e.message}`));
+          await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => {});
+        }
         totalEnviados++;
       }
     } catch (e) {

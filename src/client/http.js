@@ -140,12 +140,12 @@ function buscarProdutosParaAtualizar(baseURI, idLoja, idUltimaAtualizacaoMatriz,
  * Se forcar=true, o servidor aplica sem verificar conflito.
  * Retorna { ok: true } ou { conflito: true, versaoServidor: {...} }
  */
-function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false, idPDV = null, nomeFilial = '', deletar = false) {
+function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhecida, forcar = false, idPDV = null, nomeFilial = '', deletar = false, temSrvId = false) {
   let url = `${baseURI}/datasnap/rest/TSMSincronizacao/ReceberRegistro` +
     `?token=${TOKEN}&idLoja=${idLoja}`;
   if (idPDV != null) url += `&idPDV=${idPDV}`;
   if (nomeFilial)    url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
-  return post(url, { tabela, pk, registro, ultimaVersaoConhecida, forcar, deletar });
+  return post(url, { tabela, pk, registro, ultimaVersaoConhecida, forcar, deletar, temSrvId });
 }
 
 /**

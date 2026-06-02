@@ -202,7 +202,93 @@ async function setup(db, log = console.log, token = null) {
     }
   }
 
+  // 8. Coluna SRV_ID e índice nas tabelas onde a filial cria registros localmente
+  for (const t of TABELAS.filter(t => t.srvId && t.generator)) {
+    if (!(await tabelaExiste(db, t.nome))) continue;
+
+    try {
+      const colRows = await query(db,
+        `SELECT COUNT(*) AS CNT FROM RDB$RELATION_FIELDS
+         WHERE TRIM(RDB$RELATION_NAME) = ? AND TRIM(RDB$FIELD_NAME) = ?`,
+        [t.nome, 'SRV_ID']
+      );
+      if ((colRows[0].CNT || 0) === 0) {
+        await execute(db, `ALTER TABLE ${t.nome} ADD SRV_ID INTEGER`);
+        log(`[SETUP] ${t.nome}: coluna SRV_ID adicionada`);
+      }
+    } catch (e) {
+      log(`[SETUP] Aviso: não foi possível adicionar SRV_ID em ${t.nome}: ${e.message}`);
+    }
+
+    try {
+      const idxNome = ('IDX_' + t.nome + '_SRV_ID').substring(0, 31);
+      const idxRows = await query(db,
+        `SELECT COUNT(*) AS CNT FROM RDB$INDICES WHERE TRIM(RDB$INDEX_NAME) = ?`,
+        [idxNome]
+      );
+      if ((idxRows[0].CNT || 0) === 0) {
+        await execute(db, `CREATE INDEX ${idxNome} ON ${t.nome} (SRV_ID)`);
+        log(`[SETUP] ${t.nome}: índice ${idxNome} criado`);
+      }
+    } catch (e) {
+      log(`[SETUP] Aviso: não foi possível criar índice SRV_ID em ${t.nome}: ${e.message}`);
+    }
+  }
+
   log('[SETUP] Infraestrutura de sync bidirecional pronta');
 }
 
-module.exports = { setup, enfileirarTodosRegistros };
+/**
+ * Enfileira os últimos `limite` registros de cada tabela para push ao servidor.
+ * Diferente da carga inicial completa, preserva cursores de pull e SYNC_VERSOES_SERVIDOR.
+ * Útil para sincronizar um subconjunto recente sem refazer tudo do zero.
+ */
+async function enfileirarRegistrosParcial(db, limite, log, tabelasFiltro = null) {
+  const lista = tabelasFiltro && tabelasFiltro.length > 0
+    ? TABELAS.filter(t => tabelasFiltro.includes(t.nome))
+    : TABELAS;
+
+  let totalEnfileirados = 0;
+  const resumo = [];
+
+  for (const tabela of lista) {
+    if (!(await tabelaExiste(db, tabela.nome))) {
+      log(`[SETUP] Tabela ${tabela.nome} não existe — pulando`);
+      continue;
+    }
+
+    const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
+    const pkPrincipal = pks[0];
+    const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
+
+    try {
+      await execute(db,
+        `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
+        [tabela.nome]
+      ).catch(() => {});
+
+      await execute(db,
+        `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+         SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP
+         FROM (SELECT FIRST ${limite} * FROM ${tabela.nome} ORDER BY ${pkPrincipal} DESC) AS T`
+      );
+
+      const cnt = await query(db,
+        `SELECT COUNT(*) AS CNT FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
+        [tabela.nome]
+      );
+      const n = Number(cnt[0]?.CNT || 0);
+      totalEnfileirados += n;
+      resumo.push({ tabela: tabela.nome, enfileirados: n });
+      if (n > 0) log(`[SETUP] ${tabela.nome}: ${n} registro(s) enfileirado(s) (últimos ${limite})`);
+    } catch (e) {
+      log(`[SETUP] Aviso: não foi possível enfileirar ${tabela.nome}: ${e.message}`);
+      resumo.push({ tabela: tabela.nome, enfileirados: 0, erro: e.message });
+    }
+  }
+
+  log(`[SETUP] Carga parcial: ${totalEnfileirados} registro(s) enfileirado(s) no total`);
+  return { totalEnfileirados, resumo };
+}
+
+module.exports = { setup, enfileirarTodosRegistros, enfileirarRegistrosParcial };

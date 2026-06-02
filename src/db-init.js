@@ -127,6 +127,19 @@ function ddlTenant(schema) {
     `INSERT INTO ${schema}.sync_config (chave, valor)
  VALUES ('filtro_filial_clientes', NULL)
  ON CONFLICT (chave) DO NOTHING`,
+    `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (
+      id        SERIAL  PRIMARY KEY,
+      filial_id INTEGER,
+      tabela    TEXT    NOT NULL,
+      id_local  TEXT    NOT NULL,
+      srv_id    INTEGER NOT NULL DEFAULT nextval('${schema}.seq_srv_id'),
+      UNIQUE (tabela, id_local)
+    )`,
+    // Migrações para instalações existentes com schema antigo (filial_id NOT NULL, chave composta)
+    `ALTER TABLE IF EXISTS ${schema}.srv_id_map ALTER COLUMN filial_id DROP NOT NULL`,
+    `ALTER TABLE IF EXISTS ${schema}.srv_id_map DROP CONSTRAINT IF EXISTS srv_id_map_filial_id_tabela_id_local_key`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS srv_id_map_tabela_id_local_key ON ${schema}.srv_id_map (tabela, id_local)`,
   ];
 }
 

@@ -26,6 +26,12 @@
 // ── Tipo ─────────────────────────────────────────────────────────────────────
 
 /**
+ * @typedef {Object} FKRef
+ * @property {string} coluna   — coluna nesta tabela que referencia outra
+ * @property {string} tabela   — nome da tabela referenciada
+ */
+
+/**
  * @typedef {Object} TabelaConfig
  * @property {string}           nome
  * @property {string|string[]}  pk
@@ -37,6 +43,8 @@
  * @property {string|null}      generator
  * @property {string|null}      colunaData
  * @property {boolean}          defaultAtivo
+ * @property {boolean}          srvId     — servidor atribui e rastreia um SRV_ID global para esta tabela
+ * @property {FKRef[]}          fks       — FKs para outras tabelas sincronizadas (topological sort)
  */
 
 // ── Constantes de grupo ───────────────────────────────────────────────────────
@@ -73,8 +81,10 @@ function tabela({
   generator = null,
   colunaData = null,
   defaultAtivo = false,
+  srvId = false,
+  fks = [],
 }) {
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo };
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo, srvId, fks };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
@@ -112,9 +122,10 @@ const TABELAS = [
     endpoint: 'TSMProdutos/ProdutosParaAtualizar',
     generator: 'NOVO_PRODUTO',
     defaultAtivo: true,
+    srvId: true,
   }),
-  tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES' }),
-  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA' }),
+  tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
+  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
   tabela({
     nome: 'MOVIMENTACOES',
     pk: 'ID_MOVIMENTACAO',
@@ -123,28 +134,29 @@ const TABELAS = [
     generator: 'NOVA_MOVIMENTACAO',
     colunaData: 'DATA',
     defaultAtivo: true,
+    srvId: true,
   }),
 
   // ── Clientes ────────────────────────────────────────────────────────────────
   // Candidatas a filtroFilial: 'ID_LOJA' — confirmar colunas no banco KR antes de ativar
-  tabela({ nome: 'CLIENTES', pk: 'ID_CLIENTE', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTE', defaultAtivo: true }),
-  tabela({ nome: 'CLIENTES_X_ENTREGA', pk: 'ID_CLIENTE_X_ENTREGA', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTES_X_ENTREGA' }),
+  tabela({ nome: 'CLIENTES', pk: 'ID_CLIENTE', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTE', defaultAtivo: true, srvId: true }),
+  tabela({ nome: 'CLIENTES_X_ENTREGA', pk: 'ID_CLIENTE_X_ENTREGA', grupo: GRUPOS.CLIENTES, generator: 'NOVO_CLIENTES_X_ENTREGA', srvId: true, fks: [{ coluna: 'ID_CLIENTE', tabela: 'CLIENTES' }] }),
   tabela({ nome: 'ENDERECOS_DE_RETIRADA', pk: 'ID_ENDERECO_DE_RETIRADA', grupo: GRUPOS.CLIENTES }),
 
   // ── Fornecedores ────────────────────────────────────────────────────────────
-  tabela({ nome: 'FORNECEDORES', pk: 'ID_FORNECEDOR', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR' }),
-  tabela({ nome: 'FORN_CONTATOS_ADICIONAIS', pk: 'ID_FORN_CONTATO_ADICIONAL', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORN_CONTATO_ADICIONAL' }),
+  tabela({ nome: 'FORNECEDORES', pk: 'ID_FORNECEDOR', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR', srvId: true }),
+  tabela({ nome: 'FORN_CONTATOS_ADICIONAIS', pk: 'ID_FORN_CONTATO_ADICIONAL', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORN_CONTATO_ADICIONAL', srvId: true, fks: [{ coluna: 'ID_FORNECEDOR', tabela: 'FORNECEDORES' }] }),
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS_SISPAG', pk: 'ID_FORMA_DE_PAGAMENTO_SISPAG', grupo: GRUPOS.FORNECEDORES }),
 
   // ── Transportadores ─────────────────────────────────────────────────────────
-  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR' }),
-  tabela({ nome: 'TRANSP_CONTATOS_ADICIONAIS', pk: 'ID_TRANS_CONTATO_ADICIONAL', grupo: GRUPOS.TRANSPORTADORES, generator: 'NOVO_TRANSP_CONTATO_ADICIONAL' }),
-  tabela({ nome: 'TRANSPORTADORES_PLACAS', pk: 'ID_TRANSPORTADOR_PLACA', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA' }),
+  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR', srvId: true }),
+  tabela({ nome: 'TRANSP_CONTATOS_ADICIONAIS', pk: 'ID_TRANS_CONTATO_ADICIONAL', grupo: GRUPOS.TRANSPORTADORES, generator: 'NOVO_TRANSP_CONTATO_ADICIONAL', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
+  tabela({ nome: 'TRANSPORTADORES_PLACAS', pk: 'ID_TRANSPORTADOR_PLACA', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
 
   // ── Vendedores / Representantes ─────────────────────────────────────────────
   // Candidatas a filtroFilial: 'ID_LOJA' — confirmar colunas no banco KR antes de ativar
   tabela({ nome: 'VENDEDORES', pk: 'ID_VENDEDOR', grupo: GRUPOS.VENDEDORES, defaultAtivo: true }),
-  tabela({ nome: 'REPRESENTANTES', pk: 'ID_REPRESENTANTE', grupo: GRUPOS.VENDEDORES, generator: 'NOVO_REPRESENTANTE' }),
+  tabela({ nome: 'REPRESENTANTES', pk: 'ID_REPRESENTANTE', grupo: GRUPOS.VENDEDORES, generator: 'NOVO_REPRESENTANTE', srvId: true }),
   tabela({ nome: 'SUPERVISORES', pk: 'ID_SUPERVISOR', grupo: GRUPOS.VENDEDORES }),
 
   // ── Pedidos ─────────────────────────────────────────────────────────────────
@@ -157,6 +169,7 @@ const TABELAS = [
     generator: 'NOVO_PEDIDO',
     colunaData: 'DATA_HORA',
     defaultAtivo: true,
+    srvId: true,
   }),
   tabela({
     nome: 'PEDIDOS_ITENS',
@@ -165,6 +178,8 @@ const TABELAS = [
     filtroFilialViaFK: 'ID_PEDIDO',
     generator: 'NOVO_PEDIDO_ITEM',
     defaultAtivo: true,
+    srvId: true,
+    fks: [{ coluna: 'ID_PEDIDO', tabela: 'PEDIDOS' }],
   }),
   tabela({
     nome: 'PEDIDOS_PARCELAS_PAGAMENTOS',
@@ -173,6 +188,7 @@ const TABELAS = [
     temDelete: false,
     filtroFilialViaFK: 'ID_PEDIDO',
     defaultAtivo: true,
+    fks: [{ coluna: 'ID_PEDIDO', tabela: 'PEDIDOS' }],
   }),
 
   // ── Kits ────────────────────────────────────────────────────────────────────

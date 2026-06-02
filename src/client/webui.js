@@ -1002,6 +1002,28 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     }
   });
 
+  app.post('/api/carga-parcial', async (req, res) => {
+    const limite = parseInt(req.body?.limite, 10);
+    if (!limite || limite <= 0) {
+      return res.status(400).json({ ok: false, message: 'Informe limite (inteiro positivo). Ex: {"limite":5000}' });
+    }
+    const tabelasFiltro = Array.isArray(req.body?.tabelas) && req.body.tabelas.length > 0
+      ? req.body.tabelas
+      : null;
+
+    const { enfileirarRegistrosParcial } = require('./setup');
+    const db = await getConnection();
+    try {
+      const resultado = await enfileirarRegistrosParcial(db, limite, console.log, tabelasFiltro);
+      estadoEnvio = { total: resultado.totalEnfileirados, inicio: Date.now() };
+      res.json({ ok: true, limite, tabelas: tabelasFiltro ?? 'todas', ...resultado });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
+    } finally {
+      await closeConnection(db);
+    }
+  });
+
   app.post('/configuracoes/toggle-todos', async (req, res) => {
     const { ativo } = req.body || {};
     if (typeof ativo !== 'boolean') {
