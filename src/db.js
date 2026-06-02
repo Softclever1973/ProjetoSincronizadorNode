@@ -65,6 +65,10 @@ function isMissingTableError(error) {
   );
 }
 
+function isMissingColumnError(error) {
+  return Boolean(error && error.code === '42703');
+}
+
 // Mantém getConnection/closeConnection como wrappers do pool para compatibilidade
 // com rotas que abrem conexão manualmente (produtos, pedidos, distribuicao, movCaixas).
 async function getConnection() {
@@ -76,4 +80,4 @@ function closeConnection(client) {
   return Promise.resolve();
 }
 
-module.exports = { pool, withConnection, withTenantConnection, query, execute, getConnection, closeConnection, isMissingTableError };
+module.exports = { pool, withConnection, withTenantConnection, query, execute, getConnection, closeConnection, isMissingTableError, isMissingColumnError };

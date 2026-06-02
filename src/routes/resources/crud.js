@@ -9,7 +9,7 @@ const router  = express.Router();
 const authJwt             = require('../../middleware/authJwt');
 const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, execute, isMissingTableError } = require('../../db');
+const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
 const { colunasTabela, resolveIdLoja, registrarAuditLog }   = require('./helpers');
 
@@ -79,7 +79,7 @@ router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async
     );
     res.json(rows.map(r => r[col.toUpperCase()]));
   } catch (e) {
-    if (isMissingTableError(e)) return res.json([]);
+    if (isMissingTableError(e) || isMissingColumnError(e)) return res.json([]);
     erroServidor(res, e, `GET ${tabela}/distinct`);
   }
 });
