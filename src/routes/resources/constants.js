@@ -81,6 +81,22 @@ function campo(registro, nome) {
 }
 
 const REGRAS_TABELA = Object.freeze({
+  PRODUTOS: {
+    validacoes: [
+      r => {
+        const cest = String(campo(r, 'CODIGO_CEST') ?? '').replace(/\D/g, '');
+        if (cest.length > 0 && cest.length !== 7)
+          return 'CEST inválido — deve ter exatamente 7 dígitos';
+        return null;
+      },
+      r => {
+        const cst = String(campo(r, 'CST_ICMS_ECF') ?? '').trim();
+        if (cst === '00' && campo(r, 'ALIQUOTA_ICMS') === undefined)
+          return 'Alíquota ICMS é obrigatória quando CST ICMS é 00';
+        return null;
+      },
+    ],
+  },
   CLIENTES: {
     obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA'],
     validacoes: [

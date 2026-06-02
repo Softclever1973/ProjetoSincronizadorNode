@@ -13,6 +13,16 @@ const { withTenantConnection, query, execute, isMissingTableError } = require('.
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
 const { colunasTabela, resolveIdLoja, registrarAuditLog }   = require('./helpers');
 
+/**
+ * Loga o erro com um ID rastreável e responde 500 com JSON.
+ * O ID aparece tanto no log do servidor quanto na resposta — use-o para grep.
+ */
+function erroServidor(res, e, rota) {
+  const id = `CRUD-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+  console.error(`[${id}] ${rota}:`, e.stack || e.message);
+  res.status(500).json({ erro: e.message, id });
+}
+
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
 router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req, res) => {
   const { schema, tabela } = req.params;
@@ -21,7 +31,7 @@ router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req,
     const cols = await withTenantConnection(schema, db => colunasTabela(db, schema, tabela));
     res.json(cols);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `GET ${tabela}/colunas`);
   }
 });
 
@@ -37,7 +47,7 @@ router.get('/:schema/tabelas/:tabela/next-pk', authJwt, checkSchema, async (req,
     );
     res.json({ next: rows[0]?.NEXT ?? 1 });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `GET ${tabela}/next-pk`);
   }
 });
 
@@ -54,7 +64,7 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
     res.json(rows[0] || null);
   } catch (e) {
     if (isMissingTableError(e)) return res.json(null);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `GET ${tabela}/by-pk`);
   }
 });
 
@@ -70,7 +80,7 @@ router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async
     res.json(rows.map(r => r[col.toUpperCase()]));
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `GET ${tabela}/distinct`);
   }
 });
 
@@ -211,7 +221,7 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json({ total: 0, registros: [] });
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `GET ${tabela}`);
   }
 });
 
@@ -323,7 +333,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `POST ${tabela}`);
   }
 });
 
@@ -355,7 +365,7 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('ger
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, `DELETE ${tabela}`);
   }
 });
 

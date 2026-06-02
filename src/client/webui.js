@@ -30,6 +30,21 @@ async function getColunasComputadas(db, nomeTabela) {
   return cacheColunasComputadas[nomeTabela];
 }
 
+// Cache de todas as colunas existentes no Firebird por tabela
+const cacheColunasFirebird = {};
+
+async function getColunasFirebird(db, nomeTabela) {
+  if (cacheColunasFirebird[nomeTabela]) return cacheColunasFirebird[nomeTabela];
+  const rows = await dbQuery(db,
+    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+     FROM RDB$RELATION_FIELDS rf
+     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
+    [nomeTabela]
+  );
+  cacheColunasFirebird[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  return cacheColunasFirebird[nomeTabela];
+}
+
 // Colunas excluídas da comparação de auditoria e das escritas locais.
 // São campos de controle de sincronização ou metadados populados por triggers locais
 // que usam generators independentes (sobrescrever causaria divergências de GEN).
@@ -687,8 +702,9 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       try {
         const reg = conflito.versaoServidor;
         const computadas = await getColunasComputadas(db, conflito.tabela);
+        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
         const colunas = Object.keys(reg).filter(k =>
-          reg[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k)
+          reg[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
         );
         const placeholders = colunas.map(() => '?').join(', ');
         const valores = colunas.map(c => (reg[c] === undefined ? null : reg[c]));
@@ -723,8 +739,9 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       const db = await getConnection();
       try {
         const computadas = await getColunasComputadas(db, conflito.tabela);
+        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
         const colunas = Object.keys(base).filter(k =>
-          base[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k)
+          base[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
         );
         const placeholders = colunas.map(() => '?').join(', ');
         const valores = colunas.map(c => (base[c] === undefined ? null : base[c]));
@@ -790,10 +807,11 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         novoPKValorStr = pks.map((p, i) => p === pkPrincipal ? String(novoValorPK) : pkValores[i]).join('|');
 
         // 2. Insere o registro do servidor localmente com o novo PK
-        const regServidor  = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
-        const computadas   = await getColunasComputadas(db, conflito.tabela);
-        const colunasServ  = Object.keys(regServidor).filter(k =>
-          regServidor[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k)
+        const regServidor     = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
+        const computadas      = await getColunasComputadas(db, conflito.tabela);
+        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
+        const colunasServ     = Object.keys(regServidor).filter(k =>
+          regServidor[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
         );
         await dbExecute(db,
           `UPDATE OR INSERT INTO ${conflito.tabela} (${colunasServ.join(', ')}) VALUES (${colunasServ.map(() => '?').join(', ')}) MATCHING (${pks.join(', ')})`,

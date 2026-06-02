@@ -1,6 +1,12 @@
 const fs   = require('fs');
 const path = require('path');
 
+// Evita que rejeições não tratadas encerrem o processo silenciosamente
+process.on('unhandledRejection', (reason) => {
+  const msg = reason instanceof Error ? (reason.stack || reason.message) : String(reason);
+  console.error(`[SRV-UNHANDLED] ${msg}`);
+});
+
 function encerrarComErro(err) {
   const linhas = [
     '',
@@ -108,6 +114,19 @@ function encerrarComErro(err) {
   // ---------------------------------------------------------------------------
   app.use((req, res) => {
     res.status(404).json({ message: `Rota não encontrada: ${req.method} ${req.path}` });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Handler global de erros — captura erros async propagados via next(e)
+  // Gera um ID rastreável que aparece tanto no log do servidor quanto na resposta
+  // ---------------------------------------------------------------------------
+  // eslint-disable-next-line no-unused-vars
+  app.use((err, req, res, _next) => {
+    const id = `SRV-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+    console.error(`[${id}] ${req.method} ${req.path} →`, err.stack || err.message);
+    if (!res.headersSent) {
+      res.status(err.status || 500).json({ erro: err.message || 'Erro interno do servidor', id });
+    }
   });
 
   // ---------------------------------------------------------------------------
