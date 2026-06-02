@@ -272,17 +272,40 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
       const cols = Object.keys(registro).filter(c => NOME_VALIDO.test(c) && allowed.has(c.toUpperCase()));
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
 
-      const vals    = cols.map(c => registro[c]);
-      const ph      = cols.map((_, i) => `$${i + 1}`);
-      const updates = cols
-        .filter(c => !pksUpper.includes(c.toUpperCase()))
-        .map(c => `${c} = EXCLUDED.${c}`);
+      const vals = cols.map(c => registro[c]);
 
-      await execute(db, `
-        INSERT INTO ${tabela} (${cols.join(', ')})
-        VALUES (${ph.join(', ')})
-        ON CONFLICT (${pks.join(', ')}) DO UPDATE SET ${updates.join(', ')}
-      `, vals);
+      // Usa INSERT/UPDATE explícitos em vez de ON CONFLICT para compatibilidade com
+      // tabelas cujo PK no servidor é SRV_ID (não ID_PRODUTO, ID_PEDIDO, etc.).
+      // ON CONFLICT exige constraint única na coluna alvo — que não existe nesses casos.
+      if (update) {
+        const setCols = cols.filter(c => !pksUpper.includes(c.toUpperCase()));
+        if (setCols.length > 0) {
+          const setVals  = setCols.map(c => registro[c]);
+          const setPhase = setCols.map((c, i) => `${c} = $${i + 1}`).join(', ');
+          const whrPhase = pksUpper.map((p, i) => `${p} = $${setCols.length + i + 1}`).join(' AND ');
+          await execute(db,
+            `UPDATE ${tabela} SET ${setPhase} WHERE ${whrPhase}`,
+            [...setVals, ...pkVals]
+          );
+        }
+      } else {
+        let insertCols = cols;
+        let insertVals = vals;
+        // Tabela com SRV_ID como PK (NOT NULL sem DEFAULT): aloca da sequência
+        // para registros criados diretamente no servidor via web UI.
+        if (allowed.has('SRV_ID') && !insertCols.some(c => c.toUpperCase() === 'SRV_ID')) {
+          const [seq] = await query(db, `SELECT nextval('${schema}.seq_srv_id') AS v`);
+          if (seq?.V != null) {
+            insertCols = ['SRV_ID', ...insertCols];
+            insertVals = [seq.V, ...insertVals];
+          }
+        }
+        const insertPh = insertCols.map((_, i) => `$${i + 1}`);
+        await execute(db,
+          `INSERT INTO ${tabela} (${insertCols.join(', ')}) VALUES (${insertPh.join(', ')})`,
+          insertVals
+        );
+      }
 
       if (allowed.has('ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
         const where = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
