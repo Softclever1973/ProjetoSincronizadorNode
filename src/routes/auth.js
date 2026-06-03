@@ -1,9 +1,10 @@
-const express  = require('express');
-const router   = express.Router();
-const bcrypt   = require('bcryptjs');
-const jwt      = require('jsonwebtoken');
-const { pool } = require('../db');
-const authJwt  = require('../middleware/authJwt');
+const express        = require('express');
+const router         = express.Router();
+const bcrypt         = require('bcryptjs');
+const jwt            = require('jsonwebtoken');
+const { pool }       = require('../db');
+const authJwt        = require('../middleware/authJwt');
+const tokenBlacklist = require('../tokenBlacklist');
 
 router.post('/login', async (req, res) => {
   const { email, senha } = req.body;
@@ -28,17 +29,24 @@ router.post('/login', async (req, res) => {
     const lojas       = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_loja      ?? null]));
     const vendedores  = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_vendedor  ?? null]));
 
+    const nomeParaJwt = usuario.nome || usuario.email;
     const token = jwt.sign(
-      { id: usuario.id, schemas: schemaList, roles, lojas, vendedores },
+      { id: usuario.id, nome: nomeParaJwt, schemas: schemaList, roles, lojas, vendedores },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
-    const nomeUsuario = usuario.nome || usuario.email;
-    res.json({ token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
+    const nomeUsuario = nomeParaJwt;
+    res.json({ id: usuario.id, token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
+});
+
+router.post('/logout', authJwt, (req, res) => {
+  const token = req.headers.authorization.slice(7);
+  tokenBlacklist.revogar(token);
+  res.json({ ok: true });
 });
 
 router.get('/me', authJwt, (req, res) => {

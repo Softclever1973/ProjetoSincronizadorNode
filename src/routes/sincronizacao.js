@@ -553,7 +553,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
       if (!forcar && atual.length > 0) {
         const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
-        if (versaoServidor && versaoServidor > ultimaVersaoConhecida) {
+        if (versaoServidor && ultimaVersaoConhecida > 0 && versaoServidor > ultimaVersaoConhecida) {
           res.json({ conflito: true, versaoServidor: atual[0] });
           return;
         }

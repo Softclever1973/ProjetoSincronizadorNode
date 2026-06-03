@@ -125,6 +125,9 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
   const callerRole = req.userRoles[schema];
   const { nome, email, senha, role, id_loja, id_vendedor, criarVendedor } = req.body;
 
+  if (!nome || !String(nome).trim())
+    return res.status(400).json({ erro: 'nome é obrigatório' });
+
   if (!email || !senha || !role)
     return res.status(400).json({ erro: 'email, senha e role são obrigatórios' });
 
@@ -244,7 +247,8 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
       return res.status(404).json({ erro: 'Usuário não encontrado neste schema.' });
 
     const targetRole = vinculo.rows[0].role;
-    if (!PODE_EDITAR[callerRole]?.includes(targetRole))
+    const isSelf = String(req.userId) === String(id);
+    if (!isSelf && !PODE_EDITAR[callerRole]?.includes(targetRole))
       return res.status(403).json({ erro: `Você não pode editar um usuário com papel "${targetRole}".` });
 
     // Monta SET dinâmico

@@ -21,7 +21,7 @@ const COLS_OCULTAS = new Set([
 const COLS_DATA_PEDIDO = Object.freeze(['DATA_DO_PEDIDO', 'DATA_HORA', 'DATA_EMISSAO']);
 
 /** Chaves aceitas em PUT /admin/sync-config. */
-const CHAVES_PERMITIDAS = Object.freeze(new Set(['filtro_filial_clientes']));
+const CHAVES_PERMITIDAS = Object.freeze(new Set(['filtro_filial_clientes', 'venda_saldo_negativo']));
 
 /** Colunas candidatas ao nome do vendedor em VENDEDORES, em ordem de preferência. */
 const NAME_CANDIDATES = Object.freeze(['NOME_VENDEDOR', 'NOME', 'RAZAO_SOCIAL', 'DESCRICAO']);

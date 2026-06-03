@@ -20,7 +20,7 @@ const { colunasTabela, resolveIdLoja, registrarAuditLog }   = require('./helpers
 function erroServidor(res, e, rota) {
   const id = `CRUD-${Date.now().toString(36).slice(-6).toUpperCase()}`;
   console.error(`[${id}] ${rota}:`, e.stack || e.message);
-  res.status(500).json({ erro: e.message, id });
+  res.status(500).json({ erro: 'Erro interno do servidor.', id });
 }
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
@@ -256,6 +256,25 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
   // Validações de negócio por tabela
   const erroValidacao = validarRegistro(tabela, registro);
   if (erroValidacao) return res.status(400).json({ erro: erroValidacao });
+
+  // Campos automáticos para pedidos criados via web
+  if (tabela.toUpperCase() === 'PEDIDOS') {
+    const now        = new Date();
+    const hojeIso    = now.toISOString().slice(0, 10);
+    const horaUtcZ   = now.toISOString().slice(11, 19) + 'Z';
+    const dataPedido = registro.DATA_DO_PEDIDO || hojeIso;
+    const nomeUser   = req.userName || null;
+
+    if (!registro.HORA_DO_PEDIDO)     registro.HORA_DO_PEDIDO    = horaUtcZ;
+    if (!registro.TIPO_OPERACAO)      registro.TIPO_OPERACAO     = 'VD';
+    if (!registro.DATA_DE_EMISSAO)    registro.DATA_DE_EMISSAO   = dataPedido;
+    if (!registro.DATA_DE_EMISSAO_NF) registro.DATA_DE_EMISSAO_NF = dataPedido;
+    if (!registro.USUARIO && nomeUser)      registro.USUARIO      = nomeUser;
+    if (!registro.USUARIO_NOME && nomeUser) registro.USUARIO_NOME = nomeUser;
+    if (!registro.AUTORIZADO_POR && nomeUser) registro.AUTORIZADO_POR = nomeUser;
+    if (!registro.DATA_REALIZACAO && registro.STATUS === 'R')
+      registro.DATA_REALIZACAO = dataPedido;
+  }
 
   try {
     const { isUpdate, dadosAntes } = await withTenantConnection(schema, async db => {
