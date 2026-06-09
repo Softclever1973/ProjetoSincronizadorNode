@@ -131,6 +131,16 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
   if (!email || !senha || !role)
     return res.status(400).json({ erro: 'email, senha e role são obrigatórios' });
 
+  if (String(nome).trim().toLowerCase() === String(email).trim().toLowerCase())
+    return res.status(400).json({ erro: 'o nome não pode ser igual ao e-mail' });
+
+  const nomeConflito = await pool.query(
+    'SELECT id FROM public.usuarios WHERE LOWER(nome) = LOWER($1)',
+    [String(nome).trim()]
+  );
+  if (nomeConflito.rows.length > 0)
+    return res.status(409).json({ erro: 'já existe um usuário com este nome' });
+
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim()))
     return res.status(400).json({ erro: 'E-mail inválido — use o formato usuario@dominio.com' });
 
@@ -250,6 +260,26 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
     const isSelf = String(req.userId) === String(id);
     if (!isSelf && !PODE_EDITAR[callerRole]?.includes(targetRole))
       return res.status(403).json({ erro: `Você não pode editar um usuário com papel "${targetRole}".` });
+
+    // Valida nome ≠ email usando os valores finais (pode vir só um dos dois)
+    if (nome !== undefined || email !== undefined) {
+      const atual = await pool.query('SELECT nome, email FROM public.usuarios WHERE id = $1', [id]);
+      const nomeAtual  = atual.rows[0]?.nome  || '';
+      const emailAtual = atual.rows[0]?.email || '';
+      const nomeFinal  = nome  !== undefined ? String(nome).trim()  : nomeAtual;
+      const emailFinal = email !== undefined ? String(email).trim() : emailAtual;
+      if (nomeFinal && nomeFinal.toLowerCase() === emailFinal.toLowerCase())
+        return res.status(400).json({ erro: 'o nome não pode ser igual ao e-mail' });
+
+      if (nome !== undefined && nomeFinal) {
+        const nomeConflito = await pool.query(
+          'SELECT id FROM public.usuarios WHERE LOWER(nome) = LOWER($1) AND id <> $2',
+          [nomeFinal, id]
+        );
+        if (nomeConflito.rows.length > 0)
+          return res.status(409).json({ erro: 'já existe um usuário com este nome' });
+      }
+    }
 
     // Monta SET dinâmico
     const sets = [];

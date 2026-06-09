@@ -21,6 +21,10 @@ router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'd
   const operacao   = req.query.operacao?.trim().toUpperCase() || '';
   const dataInicio = req.query.dataInicio?.trim() || '';
   const dataFim    = req.query.dataFim?.trim()    || '';
+
+  const SORT_MAP = { criado_em: 'al.criado_em', tabela: 'al.tabela', operacao: 'al.operacao', pk_valor: 'al.pk_valor', email: 'u.email', id: 'al.id' };
+  const sortExpr = SORT_MAP[req.query.sortCol] || 'al.criado_em';
+  const sortDir  = (req.query.sortDir || '').toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
   const idLojaUsuario = req.userLojas?.[schema] ?? null;
 
   const conds  = ['al.schema_name = $1'];
@@ -55,7 +59,7 @@ router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'd
          FROM public.audit_log al
          LEFT JOIN public.usuarios u ON u.id = al.id_usuario
          WHERE ${where}
-         ORDER BY al.criado_em DESC
+         ORDER BY ${sortExpr} ${sortDir}
          LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
         [...params, pageSize, offset]
       ),

@@ -37,7 +37,7 @@ router.post('/login', async (req, res) => {
     );
 
     const nomeUsuario = nomeParaJwt;
-    res.json({ id: usuario.id, token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
+    res.json({ id: usuario.id, email: usuario.email, token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
