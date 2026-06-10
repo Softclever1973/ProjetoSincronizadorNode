@@ -19,6 +19,8 @@
  *   --fb-host=localhost                (padrão: localhost)
  *   --fb-port=3050                     (padrão: 3050)
  *   --fb-user=SYSDBA                   (padrão: SYSDBA)
+ *   --fb-timeout=30000                 (timeout em ms para UPDATE SRV_ID, padrão: 30000)
+ *   --skip-fb-srv-id                   (pula a limpeza de SRV_ID — útil quando há locks nas tabelas)
  *
  * Opções adicionais:
  *   --json-dir=C:\caminho              (diretório dos .json, padrão: cwd)
@@ -52,15 +54,17 @@ const args = Object.fromEntries(
     })
 );
 
-const schema     = args['schema'];
-const pgUrl      = args['pg-url'] || process.env.DATABASE_URL;
-const fbDatabase = args['fb-database'];
-const fbPassword = args['fb-password'];
-const fbHost     = args['fb-host'] || 'localhost';
-const fbPort     = parseInt(args['fb-port'] || '3050', 10);
-const fbUser     = args['fb-user']  || 'SYSDBA';
-const jsonDir    = args['json-dir'] || process.cwd();
-const force      = 'force' in args;
+const schema      = args['schema'];
+const pgUrl       = args['pg-url'] || process.env.DATABASE_URL;
+const fbDatabase  = args['fb-database'];
+const fbPassword  = args['fb-password'];
+const fbHost      = args['fb-host'] || 'localhost';
+const fbPort      = parseInt(args['fb-port'] || '3050', 10);
+const fbUser      = args['fb-user']  || 'SYSDBA';
+const jsonDir     = args['json-dir'] || process.cwd();
+const force       = 'force' in args;
+const skipFbSrvId = 'skip-fb-srv-id' in args;
+const fbTimeout   = parseInt(args['fb-timeout'] || '30000', 10);
 
 // ── Validação ─────────────────────────────────────────────────────────────────
 
@@ -95,11 +99,12 @@ function confirmar() {
   console.log(`  PostgreSQL (${urlLog})`);
   console.log(`    • Remover TODAS as tabelas de dados do schema "${schema}"`);
   console.log(`    • Truncar as tabelas de infraestrutura (filiais, config, srv_id_map, etc.)`);
-  console.log(`    • Reiniciar as sequências seq_atualizacao_matriz e seq_srv_id`);
+  console.log(`    • Reiniciar as sequências seq_atualizacao_matriz, seq_srv_id e seq_srv_id_<tabela>`);
   if (fbDatabase) {
     console.log(`\n  Firebird (${fbDatabase})`);
     console.log('    • Limpar SYNC_ALTERACOES_PENDENTES, SYNC_VERSOES_SERVIDOR, SYNC_ERROS');
     console.log('    • Zerar cursores em ULTIMOS_REGISTROS_MATRIZ');
+    console.log('    • Limpar coluna SRV_ID em todas as tabelas sincronizadas');
     console.log(`\n  JSON (${jsonDir})`);
     console.log('    • Limpar conflitos.json e erros.json');
   }
@@ -173,12 +178,25 @@ async function resetPostgres() {
       }
     }
 
-    // Reinicia sequências
+    // Reinicia sequências globais
     console.log('\n[PostgreSQL] Reiniciando sequências:');
     await client.query(`ALTER SEQUENCE IF EXISTS "${schema}".seq_atualizacao_matriz RESTART WITH 1`);
     console.log('  ✓ seq_atualizacao_matriz → 1');
     await client.query(`ALTER SEQUENCE IF EXISTS "${schema}".seq_srv_id RESTART WITH 1`);
     console.log('  ✓ seq_srv_id → 1');
+
+    // Remove sequences por-tabela criadas pelo novo sistema (seq_srv_id_<tabela>)
+    const { rows: seqsPortabela } = await client.query(
+      `SELECT sequencename FROM pg_sequences
+       WHERE schemaname = $1 AND sequencename LIKE 'seq_srv_id_%' AND sequencename <> 'seq_srv_id'`,
+      [schema]
+    );
+    if (seqsPortabela.length > 0) {
+      for (const { sequencename } of seqsPortabela) {
+        await client.query(`DROP SEQUENCE IF EXISTS "${schema}"."${sequencename}"`);
+        console.log(`  ✓ ${sequencename} removida`);
+      }
+    }
 
     console.log('\n[PostgreSQL] Reset concluído.');
   } finally {
@@ -199,6 +217,16 @@ function fbQuery(db, sql, params = []) {
   return new Promise((resolve, reject) =>
     db.query(sql, params, (err, result) => err ? reject(err) : resolve(result || []))
   );
+}
+
+// fbQuery com timeout — evita travar se outra aplicação tiver lock na tabela
+function fbQueryComTimeout(db, sql, params = [], ms = 8000) {
+  return Promise.race([
+    fbQuery(db, sql, params),
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error(`timeout (${ms / 1000}s) — feche o Delphi e outras conexões ao Firebird`)), ms)
+    ),
+  ]);
 }
 
 function fbDetach(db) {
@@ -263,6 +291,32 @@ async function resetFirebird() {
         console.log('  - ULTIMOS_REGISTROS_MATRIZ não existe (ignorado)');
       } else {
         throw e;
+      }
+    }
+
+    // Limpa a coluna SRV_ID nas tabelas que a possuem
+    if (skipFbSrvId) {
+      console.log('\n[Firebird] Limpeza de SRV_ID ignorada (--skip-fb-srv-id).');
+    } else {
+      const tabelasComSrvId = [
+        'PRODUTOS', 'PRODUTOS_GRADES', 'PRODUTOS_X_LISTA', 'MOVIMENTACOES',
+        'CLIENTES', 'CLIENTES_X_ENTREGA', 'FORNECEDORES', 'FORN_CONTATOS_ADICIONAIS',
+        'TRANSPORTADORES', 'TRANSP_CONTATOS_ADICIONAIS', 'TRANSPORTADORES_PLACAS',
+        'REPRESENTANTES', 'PEDIDOS', 'PEDIDOS_ITENS',
+      ];
+      console.log(`\n[Firebird] Limpando SRV_ID (timeout: ${fbTimeout / 1000}s — feche o Delphi antes se travar):`);
+      console.log('           Use --skip-fb-srv-id para pular esta etapa se houver locks.\n');
+      for (const tabela of tabelasComSrvId) {
+        try {
+          await fbQueryComTimeout(db, `UPDATE ${tabela} SET SRV_ID = NULL`, [], fbTimeout);
+          console.log(`  ✓ ${tabela}.SRV_ID = NULL`);
+        } catch (e) {
+          if (ehErroDeTabelaNaoEncontrada(e)) {
+            console.log(`  - ${tabela} não existe (ignorado)`);
+          } else {
+            console.warn(`  ⚠ ${tabela}: ${e.message}`);
+          }
+        }
       }
     }
 

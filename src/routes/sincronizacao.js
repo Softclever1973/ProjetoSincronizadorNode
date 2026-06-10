@@ -13,6 +13,10 @@ const cacheColunasServidor = {};
 // Cache da PK real de cada tabela (schema:tabela → string[])
 const cachePkServidor = {};
 
+// Cache de sequences por-tabela já criadas nesta execução do servidor.
+// Evita DDL (CREATE SEQUENCE IF NOT EXISTS) em toda requisição de push.
+const seqsSrvIdInicializadas = new Set();
+
 // Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL.
 // Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
 // inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
@@ -442,17 +446,50 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       const pks = Array.isArray(pk) ? pk : [pk];
 
       // Para tabelas srvId, SRV_ID é a PK real no PostgreSQL — obtém antes de qualquer operação.
+      // Cada tabela tem sua própria sequence (seq_srv_id_<tabela>) criada na primeira vez,
+      // garantindo que o contador recomece do 1 por tabela em vez de usar um global.
       let srvId = null;
       if (temSrvId && !deletar) {
         const pkValorStr = pks.map(p => String(registro[p])).join('|');
-        const [mapa] = await query(db,
-          `INSERT INTO srv_id_map (filial_id, tabela, id_local)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = srv_id_map.filial_id
-           RETURNING srv_id`,
-          [idLoja, nomeTabela, pkValorStr]
-        );
-        srvId = mapa?.SRV_ID ?? null;
+        const seqNome = `seq_srv_id_${nomeTabela.toLowerCase()}`;
+        const seqKey  = `${req.schemaName}:${seqNome}`;
+
+        // Se a filial enviou um SRV_ID no payload, significa que este registro já existe
+        // no servidor com esse ID (ex: foi criado via web UI com PK null e recebido no
+        // pull). Reutiliza o ID existente em vez de alocar um novo — evita duplicatas.
+        const srvIdFilial = registro.SRV_ID != null ? Number(registro.SRV_ID) : null;
+
+        if (srvIdFilial != null) {
+          // Registra o mapeamento id_local → srv_id existente (sem alocar novo valor)
+          await execute(db,
+            `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = EXCLUDED.filial_id, srv_id = EXCLUDED.srv_id`,
+            [idLoja, nomeTabela, pkValorStr, srvIdFilial]
+          ).catch(() => {});
+          srvId = srvIdFilial;
+        } else {
+          if (!seqsSrvIdInicializadas.has(seqKey)) {
+            // Começa a sequence após o maior SRV_ID já atribuído à tabela,
+            // para não colidir com valores de instalações existentes.
+            const [maxRow] = await query(db,
+              `SELECT COALESCE(MAX(srv_id), 0) + 1 AS inicio FROM srv_id_map WHERE tabela = $1`,
+              [nomeTabela]
+            ).catch(() => [{ INICIO: 1 }]);
+            const inicio = maxRow?.INICIO ?? 1;
+            await execute(db, `CREATE SEQUENCE IF NOT EXISTS ${seqNome} START WITH ${inicio}`).catch(() => {});
+            seqsSrvIdInicializadas.add(seqKey);
+          }
+
+          const [mapa] = await query(db,
+            `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
+             VALUES ($1, $2, $3, nextval('${seqNome}'))
+             ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = srv_id_map.filial_id
+             RETURNING srv_id`,
+            [idLoja, nomeTabela, pkValorStr]
+          );
+          srvId = mapa?.SRV_ID ?? null;
+        }
       }
 
       if (deletar) {
@@ -592,7 +629,13 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         });
         const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
         const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
-        const nonConflictCols = colunasFinais.filter(c => c !== 'SRV_ID' && !pks.includes(c));
+        // Quando srvIdEhPk, o conflito é resolvido por SRV_ID (não pelos pks da filial como
+        // ID_CLIENTE). Portanto ID_CLIENTE e similares devem aparecer no UPDATE SET — sem isso
+        // o servidor nunca grava o PK local recebido da filial e continua enviando o registro
+        // com ID_CLIENTE=null a cada ciclo, gerando um loop infinito de inserções.
+        const nonConflictCols = colunasFinais.filter(c =>
+          c !== 'SRV_ID' && (srvIdEhPk || !pks.includes(c))
+        );
         const updateSet = nonConflictCols.length > 0
           ? nonConflictCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
           : `${conflictTarget} = EXCLUDED.${conflictTarget}`;

@@ -285,11 +285,14 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
       const allowed  = new Set(serverCols.map(r => r.COL));
       const pksUpper = pks.map(p => p.toUpperCase());
 
-      // Detecta se é INSERT ou UPDATE antes do upsert
-      const pkWhere = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-      const pkVals  = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
-      const existing = await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
-      const update   = existing.length > 0;
+      // Detecta se é INSERT ou UPDATE antes do upsert.
+      // Se todos os PKs estão ausentes do payload (registro novo sem ID atribuído),
+      // vai direto para INSERT — evita SELECT com NULL que nunca encontra linhas.
+      const pkWhere    = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      const pkVals     = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
+      const allPKsNull = pkVals.every(v => v == null);
+      const existing   = allPKsNull ? [] : await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
+      const update     = existing.length > 0;
 
       // Captura estado anterior para o audit log de UPDATE
       let dadosAntes = null;
@@ -321,9 +324,23 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
         let insertCols = cols;
         let insertVals = vals;
         // Tabela com SRV_ID como PK (NOT NULL sem DEFAULT): aloca da sequência
-        // para registros criados diretamente no servidor via web UI.
+        // por-tabela (mesma usada pelo push de sincronização — evita colisão de PKs).
         if (allowed.has('SRV_ID') && !insertCols.some(c => c.toUpperCase() === 'SRV_ID')) {
-          const [seq] = await query(db, `SELECT nextval('${schema}.seq_srv_id') AS v`);
+          const seqNome = `seq_srv_id_${tabela.toLowerCase()}`;
+          await execute(db, `CREATE SEQUENCE IF NOT EXISTS "${schema}"."${seqNome}"`).catch(() => {});
+          // Avança a sequência além do maior SRV_ID existente na tabela.
+          // Necessário quando o Firebird re-envia registros com SRV_IDs já atribuídos
+          // (ramo srvIdFilial != null em sincronizacao.js), que não avança a sequência.
+          // Sem isso, a sequência pode começar em 1 enquanto a tabela já tem SRV_ID=1.
+          const [seqInfo] = await query(db, `
+            SELECT
+              COALESCE((SELECT MAX(SRV_ID) FROM ${tabela}), 0) AS max_srv,
+              (SELECT last_value FROM "${schema}"."${seqNome}") AS seq_last
+          `).catch(() => [null]);
+          if (seqInfo && Number(seqInfo.MAX_SRV ?? 0) >= Number(seqInfo.SEQ_LAST ?? 0)) {
+            await execute(db, `SELECT setval('${schema}.${seqNome}', $1)`, [Number(seqInfo.MAX_SRV)]).catch(() => {});
+          }
+          const [seq] = await query(db, `SELECT nextval('${schema}.${seqNome}') AS v`);
           if (seq?.V != null) {
             insertCols = ['SRV_ID', ...insertCols];
             insertVals = [seq.V, ...insertVals];

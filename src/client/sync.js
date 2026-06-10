@@ -135,7 +135,8 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     !COLUNAS_SEMPRE_IGNORADAS.has(k) &&
     !computadas.has(k) &&
     existentes.has(k) &&
-    !(registro[k] === null && naoNulas.has(k))  // não escreve null em coluna NOT NULL
+    !(registro[k] === null && naoNulas.has(k)) &&  // não escreve null em coluna NOT NULL
+    !(registro[k] === null && pks.some(p => p.toUpperCase() === k.toUpperCase()))  // não escreve null em coluna PK (NOT NULL via constraint, não via flag)
   );
 
   if (colunas.length === 0) return;
@@ -155,10 +156,14 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     return v;
   });
 
-  const sql =
-    `UPDATE OR INSERT INTO ${nomeTabela} (${colunas.join(', ')})` +
-    ` VALUES (${placeholders})` +
-    ` MATCHING (${pks.join(', ')})`;
+  // MATCHING só pode referenciar colunas presentes no INSERT.
+  // Quando o PK é null (registro criado via web sem ID Firebird), ele é filtrado
+  // das colunas NOT NULL — nesse caso usa INSERT puro e deixa o trigger gerar o PK.
+  const colsUpper    = new Set(colunas.map(c => c.toUpperCase()));
+  const matchingPks  = pks.filter(p => colsUpper.has(p.toUpperCase()));
+  const sql = matchingPks.length > 0
+    ? `UPDATE OR INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${matchingPks.join(', ')})`
+    : `INSERT INTO ${nomeTabela} (${colunas.join(', ')}) VALUES (${placeholders})`;
 
   await execute(db, sql, valores);
 }
@@ -380,16 +385,76 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
-        await upsertRegistro(db, nome, pk, registro, log);
+        // Quando o PK é nulo (registro criado via web sem ID Firebird), pré-gera o PK
+        // diretamente do generator para não depender do trigger BEFORE INSERT, que é
+        // suprimido pelo SYNC_SKIP ativo durante o pull em lote.
+        const allPKsNull = pks.every(p => registro[p] == null);
+        let registroParaUpsert = registro;
+        let pkPreGerado = null;
+
+        if (allPKsNull && generator && !Array.isArray(pk)) {
+          const genRows = await query(db,
+            `SELECT GEN_ID(${generator}, 1) AS NOVO_ID FROM RDB$DATABASE`
+          ).catch((err) => {
+            log(`[${nome}] Falha ao pré-gerar PK com generator '${generator}': ${err.message}`);
+            return [];
+          });
+          const novoPK = genRows[0]?.NOVO_ID;
+          if (novoPK != null) {
+            pkPreGerado = novoPK;
+            registroParaUpsert = { ...registro, [pk]: novoPK };
+          }
+        }
+
+        await upsertRegistro(db, nome, pk, registroParaUpsert, log);
         totalAtualizados++;
+
+        if (allPKsNull && registro.SRV_ID != null) {
+          let pkGerado = null;
+
+          if (pkPreGerado != null) {
+            pkGerado = String(pkPreGerado);
+          } else {
+            // Fallback: PK composto ou sem generator — busca pelo SRV_ID
+            const gerados = await query(db,
+              `SELECT FIRST 1 ${pks.join(', ')} FROM ${nome} WHERE SRV_ID = ?`,
+              [registro.SRV_ID]
+            ).catch(() => []);
+            if (gerados.length > 0) {
+              pkGerado = pks.map(p => String(gerados[0][p] ?? '')).join('|');
+              await sincronizarGenerator(db, generator, Number(gerados[0][pks[pks.length - 1]]));
+            }
+          }
+
+          if (pkGerado) {
+            await execute(db,
+              `UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+               VALUES (?, ?, CURRENT_TIMESTAMP) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [nome, pkGerado]
+            ).catch(() => {});
+            // Marca a versão atual do servidor para este PK gerado.
+            // Sem isso, no próximo pull o Firebird vê pendente=true + versaoConhecida=0
+            // e trata o registro como colisão de PK, gerando outro id — loop infinito.
+            const versaoAtual = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+            if (versaoAtual) {
+              await execute(db,
+                `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+                 VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+                [nome, pkGerado, versaoAtual]
+              ).catch(() => {});
+            }
+            log(`[${nome}] PK null → PK gerado: ${pkGerado} (SRV_ID=${registro.SRV_ID}) — enfileirado para push`);
+          }
+        }
 
         // Mantém o generator da filial sempre à frente dos IDs que o servidor já atribuiu,
         // evitando que o próximo INSERT do Delphi produza um ID que o servidor já usa.
         await sincronizarGenerator(db, generator, registro[pks[pks.length - 1]]);
 
         // Registra a versão do servidor para detecção futura de conflitos
+        // (omite para PKs nulos — pkValor seria "" e causaria entradas inválidas)
         const versaoServidor = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
-        if (versaoServidor) {
+        if (versaoServidor && !allPKsNull) {
           await execute(db,
             `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
              VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
