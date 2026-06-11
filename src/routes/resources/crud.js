@@ -277,7 +277,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
   }
 
   try {
-    const { isUpdate, dadosAntes } = await withTenantConnection(schema, async db => {
+    const { isUpdate, dadosAntes, srvId } = await withTenantConnection(schema, async db => {
       const serverCols = await query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
@@ -296,6 +296,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
 
       // Captura estado anterior para o audit log de UPDATE
       let dadosAntes = null;
+      let insertedSrvId = null;
       if (update) {
         const before = await query(db, `SELECT * FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
         dadosAntes = before[0] ?? null;
@@ -344,6 +345,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
           if (seq?.V != null) {
             insertCols = ['SRV_ID', ...insertCols];
             insertVals = [seq.V, ...insertVals];
+            insertedSrvId = seq.V;
           }
         }
         const insertPh = insertCols.map((_, i) => `$${i + 1}`);
@@ -360,14 +362,14 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
           pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
         );
       }
-      return { isUpdate: update, dadosAntes };
+      return { isUpdate: update, dadosAntes, srvId: insertedSrvId ?? null };
     });
 
     // Audit log universal (fire-and-forget)
     const pkStr = pks.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p.toUpperCase())]).join('|');
     registrarAuditLog(req, schema, tabela, isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, dadosAntes);
 
-    res.json({ ok: true });
+    res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
     erroServidor(res, e, `POST ${tabela}`);
   }
