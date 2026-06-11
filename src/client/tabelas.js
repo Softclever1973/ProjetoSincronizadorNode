@@ -27,8 +27,12 @@
 
 /**
  * @typedef {Object} FKRef
- * @property {string} coluna   — coluna nesta tabela que referencia outra
- * @property {string} tabela   — nome da tabela referenciada
+ * @property {string}  coluna         — coluna nesta tabela que referencia outra
+ * @property {string}  tabela         — nome da tabela referenciada
+ * @property {boolean} [traduzirSrvId] — se true, o valor armazenado é um SRV_ID e deve
+ *                                       ser traduzido para o PK local antes do UPSERT
+ * @property {string}  [pkRef]        — nome da coluna PK na tabela referenciada (obrigatório
+ *                                       quando traduzirSrvId=true)
  */
 
 /**
@@ -130,11 +134,11 @@ const TABELAS = [
     nome: 'MOVIMENTACOES',
     pk: 'ID_MOVIMENTACAO',
     grupo: GRUPOS.PRODUTOS,
-    filtroFilial: 'ID_LOJA',
     generator: 'NOVA_MOVIMENTACAO',
     colunaData: 'DATA',
     defaultAtivo: true,
     srvId: true,
+    fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS', traduzirSrvId: true, pkRef: 'ID_PRODUTO' }],
   }),
 
   // ── Clientes ────────────────────────────────────────────────────────────────

@@ -406,6 +406,22 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
+        // Traduz FKs que armazenam SRV_ID para o PK local correspondente.
+        // Necessário para registros criados via web que referenciam PRODUTOS pelo SRV_ID
+        // em vez do ID_PRODUTO nativo do Firebird (ex: MOVIMENTACOES.ID_PRODUTO).
+        for (const fkRef of (configTabela.fks || [])) {
+          if (!fkRef.traduzirSrvId || !fkRef.pkRef) continue;
+          const valFk = registroParaUpsert[fkRef.coluna];
+          if (valFk == null) continue;
+          const localRows = await query(db,
+            `SELECT FIRST 1 ${fkRef.pkRef} FROM ${fkRef.tabela} WHERE SRV_ID = ?`, [valFk]
+          ).catch(() => []);
+          if (localRows.length > 0 && localRows[0][fkRef.pkRef] != null) {
+            log(`[${nome}] FK ${fkRef.coluna}: SRV_ID=${valFk} → ${fkRef.pkRef}=${localRows[0][fkRef.pkRef]}`);
+            registroParaUpsert = { ...registroParaUpsert, [fkRef.coluna]: localRows[0][fkRef.pkRef] };
+          }
+        }
+
         await upsertRegistro(db, nome, pk, registroParaUpsert, log);
         totalAtualizados++;
 
