@@ -84,4 +84,12 @@ async function getParam(db, idParametro) {
   return rows.length > 0 ? (rows[0].PARAMETRO || '').trim() : '';
 }
 
-module.exports = { getConnection, query, execute, closeConnection, getParam, tabelaExiste, getTabelasExistentes, opcoes };
+async function setParam(db, idParametro, valor) {
+  await execute(
+    db,
+    'UPDATE OR INSERT INTO PARAMETROS (ID_PARAMETRO, PARAMETRO) VALUES (?, ?) MATCHING (ID_PARAMETRO)',
+    [idParametro, valor]
+  );
+}
+
+module.exports = { getConnection, query, execute, closeConnection, getParam, setParam, tabelaExiste, getTabelasExistentes, opcoes };

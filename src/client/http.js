@@ -158,10 +158,28 @@ function atualizarRegime(baseURI, regime) {
   );
 }
 
+/**
+ * Envia parâmetros lidos do Firebird ao servidor para armazenamento em sync_config.
+ * @param {string} baseURI
+ * @param {Record<string, string>} parametros — ex: { codigo_interno_unico: 'S' }
+ */
+function atualizarParametros(baseURI, parametros) {
+  return post(
+    `${baseURI}/datasnap/rest/TSMSincronizacao/AtualizarParametros?token=${TOKEN}`,
+    { parametros }
+  );
+}
+
+function buscarParametros(baseURI) {
+  return get(`${baseURI}/datasnap/rest/TSMSincronizacao/BuscarParametros?token=${TOKEN}`);
+}
+
 module.exports = {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
   enviarRegistro,
   atualizarRegime,
+  atualizarParametros,
+  buscarParametros,
 };

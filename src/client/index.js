@@ -128,10 +128,10 @@ async function main() {
 
   require('dotenv').config({ path: ENV_PATH });
 
-  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
+  const { getConnection, closeConnection, getParam, setParam, getTabelasExistentes } = require('./db');
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
-  const { atualizarRegime } = require('./http');
+  const { atualizarRegime, atualizarParametros, buscarParametros } = require('./http');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./tabelas');
@@ -176,6 +176,31 @@ async function main() {
       const regimeFirebird = await getParam(db, 40026).catch(() => null);
       if (regimeFirebird && baseURI) {
         atualizarRegime(baseURI, regimeFirebird).catch(() => {});
+      }
+      if (baseURI) {
+        try {
+          const resps = await buscarParametros(baseURI);
+          const serverParams = resps[0]?.parametros ?? {};
+          const paramsSyncMap = [
+            { fbId: 67,  chave: 'utilizar_codigo_interno' },
+            { fbId: 122, chave: 'codigo_interno_unico'     },
+          ];
+          for (const { fbId, chave } of paramsSyncMap) {
+            const serverVal = serverParams[chave] ?? null;
+            const fbVal = (await getParam(db, fbId).catch(() => '')) || null;
+            if (serverVal) {
+              if (fbVal !== serverVal) {
+                log(`[Parametros] ${chave} mudou: servidor='${serverVal}', Firebird='${fbVal}' — atualizando Firebird`);
+                await setParam(db, fbId, serverVal).catch(e => log(`[Parametros] erro ao atualizar Firebird (${chave}): ${e.message}`));
+              }
+            } else if (fbVal) {
+              log(`[Parametros] ${chave}: servidor sem valor — seed do Firebird: '${fbVal}'`);
+              atualizarParametros(baseURI, { [chave]: fbVal }).catch(() => {});
+            }
+          }
+        } catch (e) {
+          log(`[Parametros] erro ao sincronizar parametros: ${e.message}`);
+        }
       }
 
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));

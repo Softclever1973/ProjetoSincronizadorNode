@@ -13,6 +13,7 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError } = require('../../db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('./constants');
+const { registrarAuditLog } = require('./helpers');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
@@ -41,13 +42,18 @@ router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono
   }
 
   try {
-    await withTenantConnection(schema, db =>
-      execute(db,
+    let dadosAntes = null;
+    await withTenantConnection(schema, async db => {
+      const rows = await query(db, 'SELECT valor FROM sync_config WHERE chave = $1', [chave]);
+      dadosAntes = rows.length > 0 ? { chave, valor: rows[0].VALOR } : null;
+      await execute(db,
         `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
          ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
         [chave, valor || null]
-      )
-    );
+      );
+    });
+    registrarAuditLog(req, schema, 'SYNC_CONFIG', dadosAntes ? 'UPDATE' : 'INSERT', chave,
+      { chave, valor: valor || null }, dadosAntes);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });

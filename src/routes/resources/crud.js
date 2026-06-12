@@ -302,6 +302,32 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
         dadosAntes = before[0] ?? null;
       }
 
+      // Unicidade de CODIGO em PRODUTOS quando parâmetro 122 = 'S' no Firebird da filial
+      if (tabela.toUpperCase() === 'PRODUTOS') {
+        const codigoKey = Object.keys(registro).find(k => k.toUpperCase() === 'CODIGO');
+        const codigoVal = codigoKey ? String(registro[codigoKey] ?? '').trim() : '';
+        if (codigoVal) {
+          const [cfg] = await query(db,
+            `SELECT valor FROM sync_config WHERE chave = 'codigo_interno_unico'`
+          ).catch(() => [null]);
+          if (cfg?.VALOR === 'S') {
+            const srvIdKey = Object.keys(registro).find(k => k.toUpperCase() === 'SRV_ID');
+            const srvIdAtual = srvIdKey !== undefined ? registro[srvIdKey] : null;
+            const qParams = [codigoVal];
+            const excludeClause = srvIdAtual != null ? ' AND SRV_ID != $2' : '';
+            if (srvIdAtual != null) qParams.push(srvIdAtual);
+            const [dup] = await query(db,
+              `SELECT 1 FROM PRODUTOS WHERE UPPER(TRIM(CODIGO)) = UPPER(TRIM($1))${excludeClause} LIMIT 1`,
+              qParams
+            ).catch(() => [null]);
+            if (dup) throw Object.assign(
+              new Error(`Código "${codigoVal}" já está em uso por outro produto.`),
+              { isValidation: true }
+            );
+          }
+        }
+      }
+
       const cols = Object.keys(registro).filter(c => NOME_VALIDO.test(c) && allowed.has(c.toUpperCase()));
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
 
@@ -371,6 +397,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
+    if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `POST ${tabela}`);
   }
 });

@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
+const { registrarAuditLog } = require('./resources/helpers');
 
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
@@ -702,6 +703,46 @@ router.post('/AtualizarRegime', auth, async (req, res) => {
       'UPDATE public.sync_tenants SET regime_tributario = $1 WHERE schema_name = $2',
       [regime, req.schemaName]
     );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+router.get('/BuscarParametros', auth, async (req, res) => {
+  try {
+    const parametros = await withTenantConnection(req.schemaName, async (db) => {
+      const rows = await query(db, `SELECT chave, valor FROM sync_config WHERE chave IN ('codigo_interno_unico', 'utilizar_codigo_interno')`);
+      return Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR]));
+    });
+    res.json({ parametros });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+router.post('/AtualizarParametros', auth, async (req, res) => {
+  const { parametros } = req.body || {};
+  if (!parametros || typeof parametros !== 'object') return res.json({ ok: true });
+  const CHAVES_ACEITAS = new Set(['codigo_interno_unico', 'utilizar_codigo_interno']);
+  const schema = req.schemaName;
+  try {
+    await withTenantConnection(schema, async (db) => {
+      for (const [chave, valor] of Object.entries(parametros)) {
+        if (!CHAVES_ACEITAS.has(chave)) continue;
+        const valorStr = String(valor);
+        const rows = await query(db, 'SELECT valor FROM sync_config WHERE chave = $1', [chave]);
+        const dadosAntes = rows.length > 0 ? { chave, valor: rows[0].VALOR } : null;
+        if (dadosAntes?.valor === valorStr) continue;
+        await execute(db,
+          `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
+           ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+          [chave, valorStr]
+        );
+        registrarAuditLog(req, schema, 'SYNC_CONFIG', dadosAntes ? 'UPDATE' : 'INSERT', chave,
+          { chave, valor: valorStr, _fonte: 'sync_client' }, dadosAntes);
+      }
+    });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
