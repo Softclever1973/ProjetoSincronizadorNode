@@ -74,6 +74,35 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
       registro.ID_LOJA = idLoja;
     }
 
+    // Traduz FKs: PK local → SRV_ID antes de enviar ao servidor.
+    // O servidor usa SRV_ID como referência global entre tenants; o Firebird local
+    // armazena o ID nativo (ex: MOVIMENTACOES.ID_PRODUTO = ID local de PRODUTOS).
+    let registroParaEnviar = registro;
+    let fkNaoResolvida = false;
+    for (const fkRef of (configTabela.fks || [])) {
+      if (!fkRef.traduzirSrvId || !fkRef.pkRef) continue;
+      const localId = registroParaEnviar[fkRef.coluna];
+      if (localId == null) continue;
+      let srvRows;
+      try {
+        srvRows = await query(db,
+          `SELECT FIRST 1 SRV_ID FROM ${fkRef.tabela} WHERE ${fkRef.pkRef} = ?`, [localId]
+        );
+      } catch (err) {
+        log(`[${nome}] ERRO ao traduzir FK ${fkRef.coluna} (${fkRef.pkRef}=${localId}): ${err.message}`);
+        fkNaoResolvida = true;
+        break;
+      }
+      if (srvRows.length === 0 || srvRows[0].SRV_ID == null) {
+        log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} sem SRV_ID — aguardando sync do produto`);
+        fkNaoResolvida = true;
+        break;
+      }
+      log(`[${nome}] FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} → SRV_ID=${srvRows[0].SRV_ID}`);
+      registroParaEnviar = { ...registroParaEnviar, [fkRef.coluna]: srvRows[0].SRV_ID };
+    }
+    if (fkNaoResolvida) continue;
+
     // Última versão conhecida do servidor para este registro (para detecção de conflito)
     let ultimaVersaoConhecida = 0;
     try {
@@ -88,8 +117,8 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     } catch { }
 
     try {
-      log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registro[p]}`).join(', ') : `${pk}=${registro[pk]}`}) ao servidor`);
-      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registro, ultimaVersaoConhecida, false, idPDV, nomeFilial, false, configTabela.srvId ?? false);
+      log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registroParaEnviar[p]}`).join(', ') : `${pk}=${registroParaEnviar[pk]}`}) ao servidor`);
+      const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registroParaEnviar, ultimaVersaoConhecida, false, idPDV, nomeFilial, false, configTabela.srvId ?? false);
 
       if (resultado.conflito) {
         // Remove dos pendentes para não re-enviar indefinidamente no próximo ciclo

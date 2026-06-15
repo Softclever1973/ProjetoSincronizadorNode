@@ -328,7 +328,11 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
         }
       }
 
-      const cols = Object.keys(registro).filter(c => NOME_VALIDO.test(c) && allowed.has(c.toUpperCase()));
+      const cols = Object.keys(registro).filter(c =>
+        NOME_VALIDO.test(c) &&
+        allowed.has(c.toUpperCase()) &&
+        !(c.toUpperCase() === 'SRV_ID' && registro[c] == null)
+      );
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
 
       const vals = cols.map(c => registro[c]);
