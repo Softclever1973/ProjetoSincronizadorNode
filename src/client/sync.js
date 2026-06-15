@@ -422,6 +422,22 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
+        // Normaliza sinal de colunas de quantidade: o servidor armazena QTDE como positivo
+        // para todos os tipos de movimento, usando TP.MOV para indicar direção.
+        // O Firebird local (Sirius Delphi) espera QTDE negativo para Saídas — sem isso,
+        // o ERP soma a quantidade ao saldo em vez de subtrair.
+        if (configTabela.normalizarSinal) {
+          const { coluna, colunaRef, negativoQuando } = configTabela.normalizarSinal;
+          const tipoMov = registroParaUpsert[colunaRef];
+          const qtde = registroParaUpsert[coluna];
+          const ehSaida = typeof tipoMov === 'string' &&
+            negativoQuando.some(p => tipoMov.toLowerCase().trim() === p.toLowerCase());
+          if (ehSaida && typeof qtde === 'number' && Number.isFinite(qtde) && qtde > 0) {
+            registroParaUpsert = { ...registroParaUpsert, [coluna]: -qtde };
+            log(`[${nome}] ${coluna}: ${qtde} → ${-qtde} (TP_MOV='${tipoMov}' → negativo)`);
+          }
+        }
+
         await upsertRegistro(db, nome, pk, registroParaUpsert, log);
         totalAtualizados++;
 

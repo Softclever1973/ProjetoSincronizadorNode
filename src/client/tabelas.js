@@ -47,8 +47,12 @@
  * @property {string|null}      generator
  * @property {string|null}      colunaData
  * @property {boolean}          defaultAtivo
- * @property {boolean}          srvId     — servidor atribui e rastreia um SRV_ID global para esta tabela
- * @property {FKRef[]}          fks       — FKs para outras tabelas sincronizadas (topological sort)
+ * @property {boolean}          srvId            — servidor atribui e rastreia um SRV_ID global para esta tabela
+ * @property {FKRef[]}          fks              — FKs para outras tabelas sincronizadas (topological sort)
+ * @property {string[]}         colunasAbsolutas — colunas cujo valor absoluto deve ser enviado ao servidor (push)
+ * @property {{ coluna: string, colunaRef: string, negativoQuando: string[] }} [normalizarSinal]
+ *   — ao receber do servidor (pull), nega `coluna` quando `colunaRef` contém qualquer string de `negativoQuando`
+ *     e o valor atual é positivo (ex: QTDE em MOVIMENTACOES — servidor usa positivo, Firebird espera negativo)
  */
 
 // ── Constantes de grupo ───────────────────────────────────────────────────────
@@ -87,8 +91,10 @@ function tabela({
   defaultAtivo = false,
   srvId = false,
   fks = [],
+  colunasAbsolutas = [],
+  normalizarSinal = null,
 }) {
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo, srvId, fks };
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
@@ -98,7 +104,7 @@ const TABELAS = [
 
   // ── Auxiliares ──────────────────────────────────────────────────────────────
   tabela({ nome: 'UNIDADES', pk: 'UNIDADE', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
-  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES, defaultAtiv: true }),
+  tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_CODIFICACAO_GRUPOS', pk: 'SIGLA_GRUPO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
   tabela({ nome: 'AUX_ESPECIES_EMBALAGENS', pk: 'ID_AUX_ESPECIE_EMBALAGEM', grupo: GRUPOS.AUXILIARES }),
   tabela({ nome: 'AUX_GENERICA', pk: ['SUB_TABELA', 'ID_SUB_TABELA'], grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
@@ -139,6 +145,10 @@ const TABELAS = [
     defaultAtivo: true,
     srvId: true,
     fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS', traduzirSrvId: true, pkRef: 'ID_PRODUTO' }],
+    // Pull: o servidor (pré-fix) enviava QUANTIDADE positivo para Saídas. Nega antes de gravar
+    // no Firebird para que o Sirius Delphi subtraia corretamente (usa QUANTIDADE negativo).
+    // Novos registros criados pelo web já chegam negativos — guard qtde>0 evita dupla negação.
+    normalizarSinal: { coluna: 'QUANTIDADE', colunaRef: 'TIPO_MOVIMENTACAO', negativoQuando: ['Saída'] },
   }),
 
   // ── Clientes ────────────────────────────────────────────────────────────────

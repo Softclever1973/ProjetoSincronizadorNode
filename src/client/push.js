@@ -103,6 +103,18 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     }
     if (fkNaoResolvida) continue;
 
+    // Normaliza colunas declaradas como absolutas: o Firebird filial pode armazenar
+    // quantidades com sinal negativo (ex: Saídas em MOVIMENTACOES.QTDE = -5), mas o
+    // servidor usa apenas valores positivos — a direção é indicada por TP.MOV.
+    for (const col of (configTabela.colunasAbsolutas || [])) {
+      const val = registroParaEnviar[col];
+      if (typeof val === 'number' && Number.isFinite(val) && val < 0) {
+        const absVal = Math.abs(val);
+        registroParaEnviar = { ...registroParaEnviar, [col]: absVal };
+        log(`[${nome}] coluna ${col}: ${val} → ${absVal} (normalização absoluta)`);
+      }
+    }
+
     // Última versão conhecida do servidor para este registro (para detecção de conflito)
     let ultimaVersaoConhecida = 0;
     try {
