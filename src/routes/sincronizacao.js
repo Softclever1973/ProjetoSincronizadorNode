@@ -486,9 +486,24 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
             `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
              VALUES ($1, $2, $3, nextval('${seqNome}'))
              ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = srv_id_map.filial_id
-             RETURNING srv_id`,
+             RETURNING srv_id, filial_id`,
             [idLoja, nomeTabela, pkValorStr]
           );
+
+          // Se o mapeamento existente pertence a uma FILIAL DIFERENTE, o ID local colidiu
+          // com um registro de outra loja. Bloqueia o push para evitar sobrescrever o
+          // produto errado silenciosamente. O operador deve corrigir o generator do Firebird.
+          if (mapa?.FILIAL_ID != null && mapa.FILIAL_ID !== idLoja) {
+            throw Object.assign(
+              new Error(
+                `COLISÃO DE ID: ${nomeTabela} id_local=${pkValorStr} já pertence à filial ${mapa.FILIAL_ID} ` +
+                `(SRV_ID=${mapa.SRV_ID}). Avance o generator do Firebird da filial ${idLoja} ` +
+                `para um valor acima de ${mapa.SRV_ID} e recrie o registro com um novo ID.`
+              ),
+              { isValidation: true }
+            );
+          }
+
           srvId = mapa?.SRV_ID ?? null;
         }
       }

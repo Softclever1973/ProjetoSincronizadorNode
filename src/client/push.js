@@ -2,6 +2,7 @@ const { query, execute } = require('./db');
 const { enviarRegistro } = require('./http');
 const { atualizarOuSalvarConflito } = require('./conflitos');
 const { registrarEcho } = require('./echos');
+const { salvarErro } = require('./erros');
 
 /**
  * Envia ao servidor os registros locais que foram alterados desde o último sync.
@@ -178,6 +179,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
       }
     } catch (e) {
       log(`[${nome}] Erro ao enviar (${pk}=${pkValor}): ${e.message}`);
+      salvarErro({ tabela: nome, operacao: 'push', mensagem: e.message });
     }
   }
 

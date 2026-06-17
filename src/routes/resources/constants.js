@@ -98,11 +98,22 @@ const REGRAS_TABELA = Object.freeze({
     ],
   },
   CLIENTES: {
-    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA'],
+    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'INSC_ESTADUAL', 'E_MAIL_DANFE'],
     validacoes: [
-      r => (!campo(r, 'CPF') && !campo(r, 'CNPJ'))
-        ? 'Informe o CPF ou o CNPJ do cliente'
-        : null,
+      r => {
+        const razao = String(campo(r, 'RAZAO_SOCIAL') ?? '').trim();
+        if (razao.length > 60) return 'Razão Social deve ter no máximo 60 caracteres';
+        if (razao && !/^[A-Za-zÀ-ÖØ-öø-ÿ0-9 &]+$/.test(razao))
+          return 'Razão Social: use apenas letras, números, espaços e o caractere &';
+        return null;
+      },
+      r => {
+        const temCPF  = !!campo(r, 'CPF');
+        const temCNPJ = !!campo(r, 'CNPJ');
+        if (!temCPF && !temCNPJ) return 'Informe o CPF ou o CNPJ do cliente';
+        if (temCPF  && temCNPJ)  return 'Informe apenas CPF ou CNPJ, não os dois ao mesmo tempo';
+        return null;
+      },
     ],
   },
   PEDIDOS: {

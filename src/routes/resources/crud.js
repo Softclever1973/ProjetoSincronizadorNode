@@ -12,6 +12,7 @@ const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
 const { colunasTabela, resolveIdLoja, registrarAuditLog }   = require('./helpers');
+const { getCurrentTime } = require('../../services/timeService');
 
 /**
  * Loga o erro com um ID rastreável e responde 500 com JSON.
@@ -121,7 +122,10 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   }
   if (statusCol && !NOME_VALIDO.test(statusCol)) return res.status(400).json({ erro: 'statusCol inválido' });
   if (statusVal && !['A', 'I'].includes(statusVal)) return res.status(400).json({ erro: 'statusVal inválido' });
-  if (sortCol && !NOME_VALIDO.test(sortCol)) return res.status(400).json({ erro: 'sortCol inválido' });
+  if (sortCol) {
+    const sortCols = sortCol.split(',').map(c => c.trim()).filter(Boolean);
+    if (sortCols.some(c => !NOME_VALIDO.test(c))) return res.status(400).json({ erro: 'sortCol inválido' });
+  }
   if (!['ASC', 'DESC'].includes(sortDir)) return res.status(400).json({ erro: 'sortDir inválido' });
 
   try {
@@ -210,7 +214,9 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
       const total     = parseInt(countRows[0].CNT);
       const offset    = (page - 1) * pageSize;
-      const orderBy   = sortCol ? `${sortCol} ${sortDir}` : '1';
+      const orderBy   = sortCol
+        ? sortCol.split(',').map(c => `${c.trim()} ${sortDir}`).join(', ')
+        : '1';
       params.push(pageSize, offset);
       const registros = await query(db,
         `SELECT * FROM ${tabela} ${where} ORDER BY ${orderBy} LIMIT $${params.length - 1} OFFSET $${params.length}`,
@@ -328,6 +334,41 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
         }
       }
 
+      // Unicidade de CPF/CNPJ em CLIENTES
+      if (tabela.toUpperCase() === 'CLIENTES') {
+        const idClienteKey = Object.keys(registro).find(k => k.toUpperCase() === 'ID_CLIENTE');
+        const idClienteAtual = (idClienteKey !== undefined && registro[idClienteKey] != null)
+          ? registro[idClienteKey] : null;
+        for (const campo of ['CPF', 'CNPJ']) {
+          const key = Object.keys(registro).find(k => k.toUpperCase() === campo);
+          const rawVal = key ? String(registro[key] ?? '').trim() : '';
+          if (!rawVal) continue;
+          const digits = rawVal.replace(/\D/g, '');
+          if (!digits) continue;
+          const excludeClause = idClienteAtual != null ? ' AND ID_CLIENTE != $2' : '';
+          const qParams = [digits];
+          if (idClienteAtual != null) qParams.push(idClienteAtual);
+          const [dup] = await query(db,
+            `SELECT 1 FROM CLIENTES WHERE regexp_replace(${campo}::TEXT, '[^0-9]', '', 'g') = $1${excludeClause} LIMIT 1`,
+            qParams
+          ).catch(() => [null]);
+          if (dup) throw Object.assign(
+            new Error(`${campo} já está cadastrado para outro cliente.`),
+            { isValidation: true }
+          );
+        }
+      }
+
+      // Injeta timestamps via API de tempo externa (America/Sao_Paulo)
+      const agora = (await getCurrentTime()).toISOString();
+      if (!update) {
+        // Só preenche data de criação se ainda não veio do formulário
+        if (allowed.has('DATA_FOI_CADASTRADO') && registro['DATA_FOI_CADASTRADO'] == null)
+          registro['DATA_FOI_CADASTRADO'] = agora;
+      }
+      if (allowed.has('DATA_ULTIMA_ATUALIZACAO'))
+        registro['DATA_ULTIMA_ATUALIZACAO'] = agora;
+
       const cols = Object.keys(registro).filter(c =>
         NOME_VALIDO.test(c) &&
         allowed.has(c.toUpperCase()) &&
@@ -379,10 +420,26 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
           }
         }
         const insertPh = insertCols.map((_, i) => `$${i + 1}`);
-        await execute(db,
-          `INSERT INTO ${tabela} (${insertCols.join(', ')}) VALUES (${insertPh.join(', ')})`,
-          insertVals
-        );
+        try {
+          await execute(db,
+            `INSERT INTO ${tabela} (${insertCols.join(', ')}) VALUES (${insertPh.join(', ')})`,
+            insertVals
+          );
+        } catch (eInsert) {
+          // Unique constraint violation (23505): outra requisição concorrente inseriu este
+          // registro entre o SELECT e o INSERT. Retenta como UPDATE para evitar falha visível.
+          if (eInsert.code !== '23505') throw eInsert;
+          const setCols = cols.filter(c => !pksUpper.includes(c.toUpperCase()));
+          if (setCols.length > 0) {
+            const setVals  = setCols.map(c => registro[c]);
+            const setPhase = setCols.map((c, i) => `${c} = $${i + 1}`).join(', ');
+            const whrPhase = pksUpper.map((p, i) => `${p} = $${setCols.length + i + 1}`).join(' AND ');
+            await execute(db,
+              `UPDATE ${tabela} SET ${setPhase} WHERE ${whrPhase}`,
+              [...setVals, ...pkVals]
+            );
+          }
+        }
       }
 
       if (allowed.has('ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
