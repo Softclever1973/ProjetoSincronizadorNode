@@ -214,8 +214,11 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
       const countRows = await query(db, `SELECT COUNT(*) AS cnt FROM ${tabela} ${where}`, params);
       const total     = parseInt(countRows[0].CNT);
       const offset    = (page - 1) * pageSize;
-      const orderBy   = sortCol
-        ? sortCol.split(',').map(c => `${c.trim()} ${sortDir}`).join(', ')
+      // DESC padrão do PostgreSQL = NULLS FIRST (NULLs no topo), que distorce a ordenação
+      // quando há colunas opcionais como HORA. Forçamos NULLS LAST para DESC.
+      const nullsClause = sortDir === 'DESC' ? ' NULLS LAST' : '';
+      const orderBy     = sortCol
+        ? sortCol.split(',').map(c => `${c.trim()} ${sortDir}${nullsClause}`).join(', ')
         : '1';
       params.push(pageSize, offset);
       const registros = await query(db,

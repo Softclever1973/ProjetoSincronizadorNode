@@ -694,10 +694,24 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
             ? [...colunas, 'srv_id']
             : colunas;
         // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes.
+        // Firebird TIME columns são retornados pelo node-firebird como Date com epoch 1970-01-01.
+        // Se passados direto ao pg, viram "1970-01-01T12:47:13.000Z" numa coluna TEXT — inútil
+        // para display. Normaliza para 'HH:MM:SS' antes de persistir.
         const valoresFinais = colunasFinais.map(c => {
           if (c === 'SRV_ID' || c === 'srv_id') return srvId;
           const v = registro[c] === undefined ? null : registro[c];
-          return typeof v === 'string' ? v.replace(/\x00/g, '') : v;
+          if (typeof v === 'string') return v.replace(/\x00/g, '');
+          if (v instanceof Date) {
+            const ms = v.getTime();
+            if (ms >= 0 && ms < 86_400_000) {
+              // É um valor TIME do Firebird (epoch + HH:MM:SS sem parte de data)
+              const hh = String(Math.floor(ms / 3_600_000)).padStart(2, '0');
+              const mm = String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0');
+              const ss = String(Math.floor((ms % 60_000) / 1_000)).padStart(2, '0');
+              return `${hh}:${mm}:${ss}`;
+            }
+          }
+          return v;
         });
         const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
         const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
