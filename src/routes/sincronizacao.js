@@ -18,6 +18,10 @@ const cachePkServidor = {};
 // Evita DDL (CREATE SEQUENCE IF NOT EXISTS) em toda requisição de push.
 const seqsSrvIdInicializadas = new Set();
 
+// Cache de tabelas que já receberam a UNIQUE constraint nas chaves de negócio.
+// Evita DDL repetido em cada push após a constraint já existir.
+const constraintsUqAdicionadas = new Set();
+
 // Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL.
 // Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
 // inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
@@ -50,6 +54,13 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
     await execute(db,
       `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (SRV_ID))`
     );
+    // Garante que as chaves de negócio do Firebird sejam únicas no servidor,
+    // impedindo duplicatas caso o srv_id_map perca a entrada e o registro seja re-inserido.
+    if (pkSet.size > 0) {
+      await execute(db,
+        `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${[...pkSet].join(', ')})`
+      ).catch(e => { if (e.code !== '42710') throw e; }); // 42710 = duplicate_object
+    }
   } else {
     await execute(db,
       `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
@@ -571,6 +582,26 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       }
 
+      // Migração one-time: adiciona UNIQUE nas chaves de negócio de tabelas já existentes
+      // que foram criadas antes desta versão do código (sem a constraint).
+      // Marcado em constraintsUqAdicionadas para não emitir DDL em cada push subsequente.
+      if (tabelaJaExistia && temSrvId && pks.length > 0) {
+        const cqKey = `${req.schemaName}:${nomeTabela}`;
+        if (!constraintsUqAdicionadas.has(cqKey)) {
+          constraintsUqAdicionadas.add(cqKey);
+          await execute(db,
+            `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${pks.join(', ')})`
+          ).catch(e => {
+            if (e.code === '42710') return; // constraint já existe — normal
+            if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
+              console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${pks.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
+              return;
+            }
+            throw e;
+          });
+        }
+      }
+
       // srvIdEhPk: true quando SRV_ID é a PK real da tabela no PostgreSQL.
       // Detectado consultando information_schema (cacheado) em vez de depender de
       // tabelaJaExistia — que era falso apenas no primeiro push e causava ON CONFLICT
@@ -602,6 +633,31 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
         atual = [];
+      }
+
+      // Recuperação de mapeamento perdido: quando um SRV_ID recém-alocado não encontra
+      // linha na tabela (atual=[]), mas um registro com as mesmas chaves de negócio
+      // já existe com SRV_ID diferente (srv_id_map foi limpo/resetado), reutiliza o
+      // SRV_ID da linha existente e corrige o mapeamento — evita criar linha duplicada.
+      if (srvIdEhPk && atual.length === 0 && tabelaJaExistia) {
+        const pkWhere = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+        const pkVals  = pks.map(p => registro[p]);
+        const [existente] = await query(db,
+          `SELECT SRV_ID FROM ${nomeTabela} WHERE ${pkWhere} LIMIT 1`,
+          pkVals
+        ).catch(() => [null]);
+
+        if (existente?.SRV_ID != null) {
+          const pkValorStrLocal = pks.map(p => String(registro[p])).join('|');
+          await execute(db,
+            `UPDATE srv_id_map SET srv_id = $1 WHERE tabela = $2 AND id_local = $3`,
+            [existente.SRV_ID, nomeTabela, pkValorStrLocal]
+          ).catch(() => {});
+          srvId = existente.SRV_ID;
+          atual = await query(db,
+            `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]
+          ).catch(() => []);
+        }
       }
 
       if (!forcar && atual.length > 0) {

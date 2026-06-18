@@ -98,13 +98,19 @@ const REGRAS_TABELA = Object.freeze({
     ],
   },
   CLIENTES: {
-    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'INSC_ESTADUAL', 'E_MAIL_DANFE'],
+    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'E_MAIL_DANFE'],
     validacoes: [
       r => {
         const razao = String(campo(r, 'RAZAO_SOCIAL') ?? '').trim();
         if (razao.length > 60) return 'Razão Social deve ter no máximo 60 caracteres';
         if (razao && !/^[A-Za-zÀ-ÖØ-öø-ÿ0-9 &]+$/.test(razao))
           return 'Razão Social: use apenas letras, números, espaços e o caractere &';
+        return null;
+      },
+      r => {
+        const insc = String(campo(r, 'INSC_ESTADUAL') ?? '').trim();
+        if (insc && !/^\d{9}$/.test(insc))
+          return 'Inscrição Estadual deve conter exatamente 9 números';
         return null;
       },
       r => {

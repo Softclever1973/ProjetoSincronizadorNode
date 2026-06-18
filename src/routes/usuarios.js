@@ -247,6 +247,9 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
   if (email !== undefined && !email)
     return res.status(400).json({ erro: 'E-mail não pode ser vazio.' });
 
+  if (email !== undefined && email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email).trim()))
+    return res.status(400).json({ erro: 'E-mail inválido — use o formato usuario@dominio.com' });
+
   try {
     // Verifica role do alvo
     const vinculo = await pool.query(
