@@ -103,8 +103,8 @@ const REGRAS_TABELA = Object.freeze({
       r => {
         const razao = String(campo(r, 'RAZAO_SOCIAL') ?? '').trim();
         if (razao.length > 60) return 'Razão Social deve ter no máximo 60 caracteres';
-        if (razao && !/^[A-Za-zÀ-ÖØ-öø-ÿ0-9 &]+$/.test(razao))
-          return 'Razão Social: use apenas letras, números, espaços e o caractere &';
+        if (razao && !/^[A-Za-zÀ-ÖØ-öø-ÿ0-9 &.\-]+$/.test(razao))
+          return 'Razão Social: use apenas letras, números, espaços e os caracteres & . -';
         return null;
       },
       r => {
