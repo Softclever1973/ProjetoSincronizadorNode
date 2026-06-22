@@ -63,6 +63,7 @@ const GRUPOS = Object.freeze({
   PRODUTOS: 'Produtos',
   CLIENTES: 'Clientes',
   FORNECEDORES: 'Fornecedores',
+  FINANCEIRO: 'Financeiro',
   TRANSPORTADORES: 'Transportadores',
   VENDEDORES: 'Vendedores',
   PEDIDOS: 'Pedidos',
@@ -209,6 +210,37 @@ const TABELAS = [
   tabela({ nome: 'KITS_PRODUTOS', pk: 'ID_KIT_PRODUTO', grupo: GRUPOS.KITS }),
   tabela({ nome: 'KITS_ITENS_PROD', pk: 'ID_KIT_ITEM_PROD', grupo: GRUPOS.KITS }),
   tabela({ nome: 'KITS_ITENS_SUB_PROD', pk: 'ID_KIT_ITEM_SUB_PROD', grupo: GRUPOS.KITS }),
+
+  // ── Financeiro ──────────────────────────────────────────────────────────────
+  tabela({
+    nome: 'A_RECEBER',
+    pk: 'ID_A_RECEBER',
+    grupo: GRUPOS.FINANCEIRO,
+    filtroFilial: 'ID_LOJA',
+    generator: 'GEN_A_RECEBER',
+    colunaData: 'VENCIMENTO',
+    defaultAtivo: false,
+    srvId: true,
+    fks: [
+      { coluna: 'ID_CLIENTE', tabela: 'CLIENTES', traduzirSrvId: true, pkRef: 'ID_CLIENTE' },
+      { coluna: 'ID_PEDIDO',  tabela: 'PEDIDOS',  traduzirSrvId: true, pkRef: 'ID_PEDIDO'  },
+    ],
+  }),
+
+  tabela({
+    nome: 'A_PAGAR',
+    pk: 'ID_A_PAGAR',
+    grupo: GRUPOS.FINANCEIRO,
+    filtroFilial: 'ID_LOJA',
+    generator: 'GEN_A_PAGAR',  // confirmar nome no Firebird
+    colunaData: 'VENCIMENTO',
+    defaultAtivo: false,
+    srvId: true,
+    fks: [
+      { coluna: 'ID_FORNECEDOR', tabela: 'FORNECEDORES', traduzirSrvId: true, pkRef: 'ID_FORNECEDOR' },
+      { coluna: 'ID_PEDIDO',     tabela: 'PEDIDOS',      traduzirSrvId: true, pkRef: 'ID_PEDIDO'     },
+    ],
+  }),
 
   // ── Sync4Market (desativado — tabelas não existem neste banco) ───────────────
   // tabela({ nome: 'SYNC_4M_PRODUTOS',    pk: 'ID_4M_PRODUTO',    grupo: 'Sync4Market' }),

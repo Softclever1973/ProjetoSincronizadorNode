@@ -287,6 +287,91 @@ async function enfileirarRegistrosParcial(db, limite, log, tabelasFiltro = null)
     }
   }
 
+  // Quando o filtro de tabelas está ativo, enfileira também os registros de FK
+  // referenciados pelos registros acima — independente de estarem nos últimos `limite`.
+  //
+  // Atenção: mesmo que a tabela referenciada (ex: PRODUTOS) já esteja em
+  // tabelasFiltro, a carga parcial acima só enfileirou os últimos `limite`
+  // registros dela. Se o registro pai (ex: PRODUTOS 414) ficou fora dos últimos
+  // `limite`, ele não estará em SYNC_ALTERACOES_PENDENTES. Por isso, precisamos
+  // enfileirar os pais específicos referenciados pelas FKs com traduzirSrvId=true
+  // (aquelas que bloqueiam o push do filho quando SRV_ID=NULL), independente de
+  // a tabela pai já ter sido processada no loop acima.
+  if (tabelasFiltro) {
+    // Controle para não processar a mesma tabela-pai duas vezes neste segundo loop
+    const tabelasPaiJaProcessadas = new Set();
+
+    for (const tabela of lista) {
+      if (!tabela.fks || tabela.fks.length === 0) continue;
+      const pkPrincipal = Array.isArray(tabela.pk) ? tabela.pk[0] : tabela.pk;
+
+      for (const fk of tabela.fks) {
+        // Só precisamos garantir a presença de FKs que bloqueiam o push (traduzirSrvId=true).
+        // FKs sem traduzirSrvId não causam o warning "sem SRV_ID" e não precisam de enqueue antecipado.
+        if (!fk.traduzirSrvId) continue;
+        if (tabelasPaiJaProcessadas.has(fk.tabela)) continue;
+
+        const tabRefConfig = TABELAS.find(t => t.nome === fk.tabela);
+        if (!tabRefConfig || !(await tabelaExiste(db, fk.tabela))) continue;
+
+        const pkRef = fk.pkRef || (Array.isArray(tabRefConfig.pk) ? tabRefConfig.pk[0] : tabRefConfig.pk);
+
+        try {
+          // Coleta os IDs pai referenciados pelos filhos que estão pendentes de push.
+          const fkRows = await query(db,
+            `SELECT DISTINCT ${fk.coluna} AS FKVAL
+             FROM ${tabela.nome}
+             WHERE CAST(${pkPrincipal} AS VARCHAR(100)) IN (
+               SELECT PK_VALOR FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?
+             )
+             AND ${fk.coluna} IS NOT NULL`,
+            [tabela.nome]
+          );
+
+          if (fkRows.length === 0) continue;
+          const ids = fkRows.map(r => r.FKVAL).filter(v => v != null);
+
+          // Filtra apenas os pais que ainda não têm SRV_ID — não adianta re-enfileirar
+          // pais que já foram sincronizados com sucesso (SRV_ID preenchido).
+          const placeholders = ids.map(() => '?').join(', ');
+          const semSrvId = await query(db,
+            `SELECT ${pkRef} AS ID FROM ${fk.tabela}
+             WHERE ${pkRef} IN (${placeholders}) AND (SRV_ID IS NULL)`,
+            ids
+          ).catch(() => ids.map(id => ({ ID: id }))); // fallback: tenta enfileirar todos se a query falhar
+
+          const idsParaEnfileirar = semSrvId.map(r => r.ID).filter(v => v != null);
+          if (idsParaEnfileirar.length === 0) {
+            log(`[SETUP] FK ${fk.tabela} (via ${tabela.nome}.${fk.coluna}): todos os ${ids.length} pai(s) já têm SRV_ID — nada a enfileirar`);
+            tabelasPaiJaProcessadas.add(fk.tabela);
+            continue;
+          }
+
+          const placeholdersPai = idsParaEnfileirar.map(() => '?').join(', ');
+          await execute(db,
+            `MERGE INTO SYNC_ALTERACOES_PENDENTES s
+             USING (
+               SELECT CAST(${pkRef} AS VARCHAR(250)) AS PK_VAL
+               FROM ${fk.tabela}
+               WHERE ${pkRef} IN (${placeholdersPai})
+             ) src ON s.NOME_TABELA = '${fk.tabela}' AND s.PK_VALOR = src.PK_VAL
+             WHEN NOT MATCHED THEN
+               INSERT (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+               VALUES ('${fk.tabela}', src.PK_VAL, CURRENT_TIMESTAMP)`,
+            idsParaEnfileirar
+          );
+
+          log(`[SETUP] FK ${fk.tabela} (via ${tabela.nome}.${fk.coluna}): ${idsParaEnfileirar.length} pai(s) sem SRV_ID enfileirado(s) para push`);
+          totalEnfileirados += idsParaEnfileirar.length;
+          resumo.push({ tabela: fk.tabela, enfileirados: idsParaEnfileirar.length, via: `${tabela.nome}.${fk.coluna}` });
+          tabelasPaiJaProcessadas.add(fk.tabela);
+        } catch (e) {
+          log(`[SETUP] Aviso: FK ${fk.tabela} via ${tabela.nome}.${fk.coluna}: ${e.message}`);
+        }
+      }
+    }
+  }
+
   log(`[SETUP] Carga parcial: ${totalEnfileirados} registro(s) enfileirado(s) no total`);
   return { totalEnfileirados, resumo };
 }

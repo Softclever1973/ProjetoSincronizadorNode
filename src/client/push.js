@@ -169,11 +169,28 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         if (resultado.srvId && configTabela.srvId) {
           const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
           await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => {});
-          await execute(db,
-            `UPDATE ${nome} SET SRV_ID = ? WHERE ${whereParts}`,
-            [resultado.srvId, ...pkValores]
-          ).catch(e => log(`[${nome}] Aviso: não foi possível gravar SRV_ID local: ${e.message}`));
+          let srvIdGravado = false;
+          try {
+            await execute(db,
+              `UPDATE ${nome} SET SRV_ID = ? WHERE ${whereParts}`,
+              [resultado.srvId, ...pkValores]
+            );
+            srvIdGravado = true;
+          } catch (e) {
+            log(`[${nome}] ERRO ao gravar SRV_ID local (${pkValor}): ${e.message} — re-enfileirando para retry`);
+            // Re-enfileira o registro para que o próximo ciclo tente novamente.
+            // Sem isso, o registro sai de SYNC_ALTERACOES_PENDENTES com SRV_ID=NULL
+            // no Firebird, e qualquer FK que dependa dele fica bloqueada indefinidamente.
+            await execute(db,
+              `UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+               VALUES (?, ?, CURRENT_TIMESTAMP) MATCHING (NOME_TABELA, PK_VALOR)`,
+              [nome, pkValor]
+            ).catch(e2 => log(`[${nome}] ERRO ao re-enfileirar (${pkValor}): ${e2.message}`));
+          }
           await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => {});
+          if (srvIdGravado) {
+            log(`[${nome}] SRV_ID=${resultado.srvId} gravado localmente (${pkValor})`);
+          }
         }
         totalEnviados++;
       }

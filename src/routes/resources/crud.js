@@ -262,8 +262,14 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
     }
   }
 
+  // Detecta UPDATE antecipadamente: se todas as PKs estão presentes no payload,
+  // é edição de registro existente — campos obrigatórios não devem bloquear a operação.
+  const pksUpper   = pks.map(p => p.toUpperCase());
+  const pkValsHint = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
+  const likelyUpdate = pkValsHint.every(v => v != null);
+
   // Validações de negócio por tabela
-  const erroValidacao = validarRegistro(tabela, registro);
+  const erroValidacao = validarRegistro(tabela, registro, { isUpdate: likelyUpdate });
   if (erroValidacao) return res.status(400).json({ erro: erroValidacao });
 
   // Campos automáticos para pedidos criados via web

@@ -59,7 +59,7 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
     if (pkSet.size > 0) {
       await execute(db,
         `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${[...pkSet].join(', ')})`
-      ).catch(e => { if (e.code !== '42710') throw e; }); // 42710 = duplicate_object
+      ).catch(e => { if (e.code !== '42710' && e.code !== '42P07') throw e; }); // 42710 = duplicate_object, 42P07 = índice de mesmo nome já existe
     }
   } else {
     await execute(db,
@@ -592,7 +592,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           await execute(db,
             `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${pks.join(', ')})`
           ).catch(e => {
-            if (e.code === '42710') return; // constraint já existe — normal
+            if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
             if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
               console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${pks.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
               return;
@@ -730,6 +730,51 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
            ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`,
           valoresFinais
         );
+
+        if (nomeTabela === 'A_RECEBER') {
+          const idAR = registro['ID_A_RECEBER'];
+          if (idAR != null) {
+            await execute(db, `
+              INSERT INTO financeiro_contas_receber (
+                id_a_receber, descricao, nome_cliente, valor, data_vencimento,
+                data_recebimento, status, forma_pagamento, parcela, total_parcelas,
+                observacao, id_loja
+              )
+              SELECT
+                ar.id_a_receber,
+                ar.descricao,
+                c.razao_social,
+                ar.valor,
+                NULLIF(ar.vencimento, '')::date,
+                NULLIF(ar.data_realizado, '')::date,
+                CASE LOWER(ar.status)
+                  WHEN 'recebido'  THEN 'recebido'
+                  WHEN 'cancelado' THEN 'cancelado'
+                  ELSE 'pendente'
+                END,
+                ar.id_forma_de_pagamento::text,
+                COALESCE(NULLIF(ar.parcela, '')::integer, 1),
+                1,
+                ar.observacao,
+                ar.id_loja::integer
+              FROM a_receber ar
+              LEFT JOIN clientes c ON c.id_cliente = ar.id_cliente
+              WHERE ar.id_a_receber = $1
+              ON CONFLICT (id_a_receber) DO UPDATE SET
+                descricao        = EXCLUDED.descricao,
+                nome_cliente     = EXCLUDED.nome_cliente,
+                valor            = EXCLUDED.valor,
+                data_vencimento  = EXCLUDED.data_vencimento,
+                data_recebimento = EXCLUDED.data_recebimento,
+                status           = EXCLUDED.status,
+                forma_pagamento  = EXCLUDED.forma_pagamento,
+                parcela          = EXCLUDED.parcela,
+                total_parcelas   = EXCLUDED.total_parcelas,
+                observacao       = EXCLUDED.observacao,
+                id_loja          = EXCLUDED.id_loja
+            `, [idAR]).catch(() => {});
+          }
+        }
 
         // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
         if (srvIdEhPk) {

@@ -154,9 +154,13 @@ const REGRAS_TABELA = Object.freeze({
  * @param {object} registro
  * @returns {string|null}
  */
-function validarRegistro(tabela, registro) {
+function validarRegistro(tabela, registro, { isUpdate = false } = {}) {
   const regras = REGRAS_TABELA[tabela.toUpperCase()];
   if (!regras) return null;
+  // Updates: registro já existe no banco e pode ter vindo do Firebird com dados
+  // que não passam pelas regras do formulário web. A validação client-side
+  // (onValidar + _validarForm) garante integridade quando o usuário edita via UI.
+  if (isUpdate) return null;
   for (const c of (regras.obrigatorios || [])) {
     if (campo(registro, c) === undefined)
       return `O campo "${c}" é obrigatório`;

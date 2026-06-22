@@ -175,6 +175,11 @@ function ddlTenant(schema) {
       id_loja          INTEGER,
       criado_em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )`,
+    `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ADD COLUMN IF NOT EXISTS id_a_receber NUMERIC UNIQUE`,
+    `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber DROP CONSTRAINT IF EXISTS financeiro_contas_receber_valor_check`,
+    `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN valor DROP NOT NULL`,
+    `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN descricao DROP NOT NULL`,
+    `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN data_vencimento DROP NOT NULL`,
   ];
 }
 
