@@ -13,7 +13,7 @@ router.post('/login', async (req, res) => {
 
   try {
     const result = await pool.query(
-      'SELECT id, email, nome, senha_hash FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
+      'SELECT id, email, nome, senha_hash, is_super_admin FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
       [email]
     );
     const usuario = result.rows[0];
@@ -29,15 +29,16 @@ router.post('/login', async (req, res) => {
     const lojas       = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_loja      ?? null]));
     const vendedores  = Object.fromEntries(schemas.rows.map(r => [r.schema_name, r.id_vendedor  ?? null]));
 
-    const nomeParaJwt = usuario.nome || usuario.email;
+    const nomeParaJwt   = usuario.nome || usuario.email;
+    const isSuperAdmin  = usuario.is_super_admin === true;
     const token = jwt.sign(
-      { id: usuario.id, nome: nomeParaJwt, schemas: schemaList, roles, lojas, vendedores },
+      { id: usuario.id, nome: nomeParaJwt, schemas: schemaList, roles, lojas, vendedores, isSuperAdmin },
       process.env.JWT_SECRET,
       { expiresIn: '7d' }
     );
 
     const nomeUsuario = nomeParaJwt;
-    res.json({ id: usuario.id, email: usuario.email, token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario });
+    res.json({ id: usuario.id, email: usuario.email, token, schemas: schemaList, roles, lojas, vendedores, nome: nomeUsuario, isSuperAdmin });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -49,8 +50,22 @@ router.post('/logout', authJwt, (req, res) => {
   res.json({ ok: true });
 });
 
-router.get('/me', authJwt, (req, res) => {
-  res.json({ id: req.userId, schemas: req.userSchemas, roles: req.userRoles, lojas: req.userLojas });
+router.get('/me', authJwt, async (req, res) => {
+  try {
+    const { rows: [u] } = await pool.query(
+      'SELECT nome, is_super_admin FROM public.usuarios WHERE id = $1', [req.userId]
+    );
+    res.json({
+      id:          req.userId,
+      nome:        u?.nome || null,
+      schemas:     req.userSchemas,
+      roles:       req.userRoles,
+      lojas:       req.userLojas,
+      isSuperAdmin: u?.is_super_admin === true,
+    });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 module.exports = router;

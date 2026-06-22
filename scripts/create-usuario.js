@@ -5,10 +5,12 @@
  *   node scripts/create-usuario.js --email=admin@empresa.com --senha=senha123
  *   node scripts/create-usuario.js --email=admin@empresa.com --senha=senha123 --schema=empresa_kr --role=dono
  *   node scripts/create-usuario.js --email=ger@empresa.com  --senha=senha123 --schema=empresa_kr --role=gerente --loja=2
+ *   node scripts/create-usuario.js --email=su@sirius.com    --senha=senha123 --super-admin
  *
  * Use este script para criar o primeiro usuário (bootstrap) — não há endpoint público de registro.
  * Roles disponíveis: dono | gerente | vendedor
  * --loja é obrigatório para gerente e vendedor.
+ * --super-admin concede acesso ao painel de gestão de empresas (/admin.html).
  */
 
 require('dotenv').config();
@@ -24,16 +26,17 @@ const args = Object.fromEntries(
     })
 );
 
-const email  = args.email;
-const senha  = args.senha;
-const schema = args.schema ?? null;
-const role   = args.role   ?? 'dono';
-const loja   = args.loja   ? parseInt(args.loja) : null;
+const email       = args.email;
+const senha       = args.senha;
+const schema      = args.schema ?? null;
+const role        = args.role   ?? 'dono';
+const loja        = args.loja   ? parseInt(args.loja) : null;
+const superAdmin  = 'super-admin' in args;
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 
 if (!email || !senha) {
-  console.error('Uso: node scripts/create-usuario.js --email=admin@empresa.com --senha=senha123 [--schema=empresa_kr --role=dono]');
+  console.error('Uso: node scripts/create-usuario.js --email=admin@empresa.com --senha=senha123 [--schema=empresa_kr --role=dono] [--super-admin]');
   process.exit(1);
 }
 
@@ -62,11 +65,12 @@ async function run() {
 
     const senhaHash = await bcrypt.hash(senha, 12);
     const result    = await client.query(
-      'INSERT INTO public.usuarios (email, senha_hash) VALUES ($1, $2) RETURNING id',
-      [email, senhaHash]
+      'INSERT INTO public.usuarios (email, senha_hash, is_super_admin) VALUES ($1, $2, $3) RETURNING id',
+      [email, senhaHash, superAdmin]
     );
     const id = result.rows[0].id;
-    console.log(`  ✓ Usuário criado: id=${id} email=${email}`);
+    const superTag = superAdmin ? ' [SUPER-ADMIN]' : '';
+    console.log(`  ✓ Usuário criado: id=${id} email=${email}${superTag}`);
 
     if (schema) {
       const schemaExiste = await client.query(

@@ -95,6 +95,12 @@ const REGRAS_TABELA = Object.freeze({
           return 'Alíquota ICMS é obrigatória quando CST ICMS é 00';
         return null;
       },
+      r => {
+        const cfop = String(campo(r, 'CFOP_ECF') ?? '').replace(/\D/g, '');
+        if (cfop.length > 0 && cfop.length !== 3)
+          return 'CFOP inválido — deve ter exatamente 3 dígitos';
+        return null;
+      },
     ],
   },
   CLIENTES: {

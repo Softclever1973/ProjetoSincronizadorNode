@@ -52,6 +52,8 @@ const DDL_CONTROLE = [
   `ALTER TABLE public.audit_log ADD COLUMN IF NOT EXISTS dados_antes JSONB`,
   // Migração: regime tributário da filial (lido do param 40026 do Firebird)
   `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS regime_tributario TEXT`,
+  // Migração: flag de super-admin para acesso ao painel de gestão de empresas
+  `ALTER TABLE public.usuarios ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT FALSE`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
@@ -140,6 +142,39 @@ function ddlTenant(schema) {
     `ALTER TABLE IF EXISTS ${schema}.srv_id_map ALTER COLUMN filial_id DROP NOT NULL`,
     `ALTER TABLE IF EXISTS ${schema}.srv_id_map DROP CONSTRAINT IF EXISTS srv_id_map_filial_id_tabela_id_local_key`,
     `CREATE UNIQUE INDEX IF NOT EXISTS srv_id_map_tabela_id_local_key ON ${schema}.srv_id_map (tabela, id_local)`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.financeiro_contas_receber (
+      id               SERIAL PRIMARY KEY,
+      descricao        TEXT NOT NULL,
+      nome_cliente     TEXT,
+      valor            NUMERIC(12,2) NOT NULL CHECK (valor > 0),
+      data_vencimento  DATE NOT NULL,
+      data_recebimento DATE,
+      status           TEXT NOT NULL DEFAULT 'pendente'
+                       CHECK (status IN ('pendente', 'recebido', 'cancelado')),
+      forma_pagamento  TEXT,
+      parcela          INTEGER NOT NULL DEFAULT 1,
+      total_parcelas   INTEGER NOT NULL DEFAULT 1,
+      observacao       TEXT,
+      id_loja          INTEGER,
+      criado_em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.financeiro_contas_pagar (
+      id               SERIAL PRIMARY KEY,
+      descricao        TEXT NOT NULL,
+      fornecedor       TEXT,
+      categoria        TEXT,
+      valor            NUMERIC(12,2) NOT NULL CHECK (valor > 0),
+      data_vencimento  DATE NOT NULL,
+      data_pagamento   DATE,
+      status           TEXT NOT NULL DEFAULT 'pendente'
+                       CHECK (status IN ('pendente', 'pago', 'cancelado')),
+      forma_pagamento  TEXT,
+      parcela          INTEGER NOT NULL DEFAULT 1,
+      total_parcelas   INTEGER NOT NULL DEFAULT 1,
+      observacao       TEXT,
+      id_loja          INTEGER,
+      criado_em        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )`,
   ];
 }
 

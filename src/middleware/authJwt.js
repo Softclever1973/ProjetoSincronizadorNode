@@ -14,11 +14,12 @@ function authJwt(req, res, next) {
   try {
     const payload = jwt.verify(token, process.env.JWT_SECRET);
     req.userId         = payload.id;
-    req.userName       = payload.nome      || null;
-    req.userSchemas    = payload.schemas;
-    req.userRoles      = payload.roles     || {};
-    req.userLojas      = payload.lojas     || {};
-    req.userVendedores = payload.vendedores || {};
+    req.userName       = payload.nome        || null;
+    req.userSchemas    = payload.schemas     || [];
+    req.userRoles      = payload.roles       || {};
+    req.userLojas      = payload.lojas       || {};
+    req.userVendedores = payload.vendedores  || {};
+    req.isSuperAdmin   = payload.isSuperAdmin === true;
     next();
   } catch {
     res.status(401).json({ erro: 'token inválido ou expirado' });

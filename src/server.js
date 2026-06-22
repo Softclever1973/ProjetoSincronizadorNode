@@ -58,8 +58,12 @@ function encerrarComErro(err) {
   const distribuicaoRoutes       = require('./routes/distribuicao');
   const authRoutes               = require('./routes/auth');
   const userEmpresasRoutes       = require('./routes/userEmpresas');
+  const adminEmpresasRoutes      = require('./routes/adminEmpresas');
   const tabelasRoutes            = require('./routes/resources');
   const usuariosRoutes           = require('./routes/usuarios');
+  const financeiroRoutes         = require('./routes/financeiro');
+  const authJwt                  = require('./middleware/authJwt');
+  const requireSuperAdmin        = require('./middleware/requireSuperAdmin');
 
   const app = express();
 
@@ -83,7 +87,9 @@ function encerrarComErro(err) {
   app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
   app.use('/auth',          authRoutes);
   app.use('/user/empresas', userEmpresasRoutes);
+  app.use('/superadmin',    authJwt, requireSuperAdmin, adminEmpresasRoutes);
   app.use('/api',           usuariosRoutes);
+  app.use('/api',           financeiroRoutes);
   app.use('/api',           tabelasRoutes);
 
   // ---------------------------------------------------------------------------
