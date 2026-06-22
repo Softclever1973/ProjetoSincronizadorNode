@@ -95,7 +95,14 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         break;
       }
       if (srvRows.length === 0 || srvRows[0].SRV_ID == null) {
-        log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} sem SRV_ID — aguardando sync do produto`);
+        log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} sem SRV_ID — enfileirando ${fkRef.tabela} para sync`);
+        // Auto-enfileira o registro pai para que o próximo ciclo resolva o SRV_ID.
+        // Sem isso, o filho fica bloqueado indefinidamente até intervenção manual.
+        await execute(db,
+          `UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+           VALUES (?, ?, CURRENT_TIMESTAMP) MATCHING (NOME_TABELA, PK_VALOR)`,
+          [fkRef.tabela, String(localId)]
+        ).catch(e2 => log(`[${nome}] WARN: não foi possível enfileirar ${fkRef.tabela}/${localId}: ${e2.message}`));
         fkNaoResolvida = true;
         break;
       }

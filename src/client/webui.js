@@ -294,7 +294,13 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       });
     }
 
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).render('status', {
+        tabelas: [], totalOk: 0, totalPendente: 0, totalErro: 0,
+        error: `Firebird indisponível: ${e.message}`,
+      });
+    }
     const tabelas = [];
     let totalOk = 0, totalPendente = 0, totalErro = 0;
 
@@ -370,7 +376,10 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     const getPKValor  = (r) => pks.map(p => String(r[p] || '')).join('|');
     const mapServidor = new Map(registrosServidor.map(r => [getPKValor(r), r]));
 
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.render('auditoria', { ...base, error: `Firebird indisponível: ${e.message}` });
+    }
     const mapLocal = new Map();
     try {
       /* PERF-02: Antes era 1 query Firebird por registro (N+1 sequencial).
@@ -960,7 +969,12 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
 
     const { enfileirarTodosRegistros } = require('./setup');
     const log = (msg) => console.log(msg);
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      enviar('erro', { message: `Firebird indisponível: ${e.message}` });
+      res.end();
+      return;
+    }
     const inicio = Date.now();
 
     try {
@@ -1003,7 +1017,10 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
 
   app.get('/api/carga-inicial/progresso', async (_req, res) => {
     if (!estadoEnvio) return res.json({ ativo: false });
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ erro: `Firebird indisponível: ${e.message}` });
+    }
     try {
       const rows = await dbQuery(db, `SELECT COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES`);
       const pendentes = Number(rows[0]?.TOTAL || 0);
@@ -1030,7 +1047,10 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       : null;
 
     const { enfileirarRegistrosParcial } = require('./setup');
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
     try {
       const resultado = await enfileirarRegistrosParcial(db, limite, console.log, tabelasFiltro);
       estadoEnvio = { total: resultado.totalEnfileirados, inicio: Date.now() };
