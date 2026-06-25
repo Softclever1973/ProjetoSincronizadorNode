@@ -180,6 +180,71 @@ function ddlTenant(schema) {
     `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN valor DROP NOT NULL`,
     `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN descricao DROP NOT NULL`,
     `ALTER TABLE IF EXISTS ${schema}.financeiro_contas_receber ALTER COLUMN data_vencimento DROP NOT NULL`,
+    // Backfill: popula/atualiza financeiro_contas_receber a partir dos registros em a_receber.
+    // Executado em cada startup (idempotente via ON CONFLICT DO UPDATE).
+    // JOIN usa c.srv_id = ar.id_cliente porque a_receber armazena o SRV_ID após tradução de FK.
+    `DO $$
+     DECLARE tbl_exists BOOLEAN;
+     BEGIN
+       SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = '${schema}' AND table_name = 'a_receber'
+       ) INTO tbl_exists;
+       IF tbl_exists THEN
+         INSERT INTO ${schema}.financeiro_contas_receber (
+           id_a_receber, descricao, nome_cliente, valor, data_vencimento,
+           status, parcela, id_loja
+         )
+         SELECT
+           ar.id_a_receber,
+           ar.descricao,
+           c.razao_social,
+           ar.valor,
+           CASE WHEN ar.vencimento IS NULL THEN NULL
+                ELSE ar.vencimento::text::date END,
+           CASE WHEN LOWER(COALESCE(ar.status::text,'')) IN ('recebido','recebida','realizada','realizado') THEN 'recebido'
+                WHEN LOWER(COALESCE(ar.status::text,'')) IN ('cancelado','cancelada')                   THEN 'cancelado'
+                ELSE 'pendente' END,
+           COALESCE(NULLIF(ar.parcela::text, '')::integer, 1),
+           ar.id_loja::integer
+         FROM ${schema}.a_receber ar
+         LEFT JOIN ${schema}.clientes c ON c.srv_id = ar.id_cliente
+         WHERE ar.id_a_receber IS NOT NULL
+         ON CONFLICT (id_a_receber) DO UPDATE SET
+           descricao       = EXCLUDED.descricao,
+           nome_cliente    = EXCLUDED.nome_cliente,
+           valor           = EXCLUDED.valor,
+           data_vencimento = EXCLUDED.data_vencimento,
+           status          = EXCLUDED.status,
+           parcela         = EXCLUDED.parcela,
+           id_loja         = EXCLUDED.id_loja;
+       END IF;
+     EXCEPTION WHEN OTHERS THEN
+       RAISE WARNING '[backfill] ${schema}.financeiro_contas_receber: %', SQLERRM;
+     END $$`,
+    // Garante que a_receber tem a coluna de cursor de sync (idempotente).
+    `ALTER TABLE IF EXISTS ${schema}.a_receber ADD COLUMN IF NOT EXISTS id_ultima_atualizacao_matriz INTEGER`,
+    // Garante trigger de seq em a_receber + backfill de registros sem cursor.
+    // Idempotente: DROP IF EXISTS antes de CREATE; bloco inteiro protegido por EXCEPTION.
+    `DO $$
+     DECLARE tbl_exists BOOLEAN;
+     BEGIN
+       SELECT EXISTS (
+         SELECT 1 FROM information_schema.tables
+         WHERE table_schema = '${schema}' AND table_name = 'a_receber'
+       ) INTO tbl_exists;
+       IF tbl_exists THEN
+         DROP TRIGGER IF EXISTS tg_a_receber_seq ON ${schema}.a_receber;
+         CREATE TRIGGER tg_a_receber_seq
+           BEFORE INSERT OR UPDATE ON ${schema}.a_receber
+           FOR EACH ROW EXECUTE FUNCTION ${schema}.fn_seq_atualizacao();
+         UPDATE ${schema}.a_receber
+           SET id_ultima_atualizacao_matriz = nextval('${schema}.seq_atualizacao_matriz')
+           WHERE id_ultima_atualizacao_matriz IS NULL;
+       END IF;
+     EXCEPTION WHEN OTHERS THEN
+       RAISE WARNING '[migration] ${schema}.a_receber seq trigger: %', SQLERRM;
+     END $$`,
   ];
 }
 

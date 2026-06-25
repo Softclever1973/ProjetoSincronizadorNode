@@ -69,6 +69,8 @@ async function lerTodos() {
       mensagem: r.MENSAGEM,
       criadoEm: r.CRIADO_EM instanceof Date ? r.CRIADO_EM.toISOString() : r.CRIADO_EM,
     }));
+  } catch (e) {
+    return [];
   } finally {
     if (db) await closeConnection(db);
   }

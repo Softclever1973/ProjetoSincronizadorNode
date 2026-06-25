@@ -1,6 +1,6 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool }     = require('../db');
+const { pool, withTenantConnection, query } = require('../db');
 const authJwt      = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
 
@@ -14,40 +14,75 @@ const guard = [authJwt, checkSchema, requireRole('gerente', 'dono')];
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
 
+const CR_SORT_MAP = {
+  data_vencimento: 'ar.vencimento',
+  nome_cliente:    'c.razao_social',
+  descricao:       'ar.descricao',
+  parcela:         'ar.parcela',
+  valor:           'ar.valor',
+  status:          'ar.status',
+  srv_id:          'ar.srv_id',
+};
+const CP_SORTABLE = new Set(['data_vencimento','fornecedor','descricao','categoria','valor','status']);
+
 router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   const s = req.params.schema;
-  const { status, data_inicio, data_fim, q } = req.query;
+  const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
   const pageSize = Math.min(100, parseInt(req.query.pageSize || '50'));
   const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
+  const orderCol = CR_SORT_MAP[sortCol] ?? 'ar.vencimento';
+  const orderDir = sortDir === 'DESC' ? 'DESC' : 'ASC';
 
   const conds = ['TRUE'];
   const params = [];
 
   if (status && status !== 'todos') {
     if (status === 'vencido') {
-      conds.push(`status = 'pendente' AND data_vencimento < CURRENT_DATE`);
+      conds.push(`LOWER(ar.status::text) NOT IN ('recebido','realizada','recebida','pago','paga','cancelado','cancelada') AND ar.vencimento < CURRENT_DATE`);
+    } else if (status === 'recebido') {
+      conds.push(`LOWER(ar.status::text) IN ('recebido','realizada','recebida')`);
+    } else if (status === 'cancelado') {
+      conds.push(`LOWER(ar.status::text) LIKE 'cancelad%'`);
     } else {
       params.push(status);
-      conds.push(`status = $${params.length}`);
+      conds.push(`ar.status ILIKE $${params.length}`);
     }
   }
-  if (data_inicio) { params.push(data_inicio); conds.push(`data_vencimento >= $${params.length}`); }
-  if (data_fim)    { params.push(data_fim);    conds.push(`data_vencimento <= $${params.length}`); }
-  if (q)           { params.push(`%${q}%`);    conds.push(`(descricao ILIKE $${params.length} OR nome_cliente ILIKE $${params.length})`); }
-  if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`id_loja = $${params.length}`); }
+  if (data_inicio) { params.push(data_inicio); conds.push(`ar.vencimento >= $${params.length}`); }
+  if (data_fim)    { params.push(data_fim);    conds.push(`ar.vencimento <= $${params.length}`); }
+  if (q)           { params.push(`%${q}%`);    conds.push(`(ar.descricao ILIKE $${params.length} OR c.razao_social ILIKE $${params.length})`); }
+  if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`ar.id_loja = $${params.length}`); }
 
   const where = conds.join(' AND ');
+  const joinClientes = `FROM ${s}.a_receber ar LEFT JOIN ${s}.clientes c ON c.srv_id = ar.id_cliente`;
 
   try {
     const [rows, total] = await Promise.all([
       pool.query(
-        `SELECT * FROM ${s}.financeiro_contas_receber WHERE ${where}
-         ORDER BY data_vencimento ASC, id DESC
+        `SELECT
+           ar.srv_id                                         AS id,
+           ar.id_a_receber,
+           ar.descricao,
+           COALESCE(c.fantasia, c.razao_social)              AS nome_cliente,
+           ar.valor,
+           ar.vencimento                                     AS data_vencimento,
+           ar.data_realizado                                  AS data_recebimento,
+           ar.status,
+           ar.id_forma_de_pagamento::text                    AS forma_pagamento,
+           ar.parcela,
+           ar.observacao,
+           ar.id_loja
+         ${joinClientes}
+         WHERE ${where}
+         ORDER BY ${orderCol} ${orderDir} NULLS LAST, ar.srv_id DESC
          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
         params
       ),
-      pool.query(`SELECT COUNT(*)::INTEGER AS total FROM ${s}.financeiro_contas_receber WHERE ${where}`, params),
+      pool.query(
+        `SELECT COUNT(*)::INTEGER AS total ${joinClientes} WHERE ${where}`,
+        params
+      ),
     ]);
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
@@ -60,19 +95,59 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
 router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   const s = req.params.schema;
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, observacao } = req.body;
+  // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
+  const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
   if (!descricao || !valor || !data_vencimento)
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
 
   try {
+    let id_cliente = null;
+    if (nome_cliente) {
+      const { rows: cli } = await pool.query(
+        `SELECT srv_id FROM ${s}.clientes
+         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         LIMIT 1`,
+        [nome_cliente]
+      );
+      id_cliente = cli[0]?.srv_id ?? null;
+    }
+
+    // O sync usa uma sequence por tabela: seq_srv_id_a_receber.
+    // Criamos se não existir e avançamos para além do max atual antes de alocar.
+    await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
+    await pool.query(`
+      SELECT setval(
+        '${s}.seq_srv_id_a_receber',
+        GREATEST(
+          (SELECT last_value FROM ${s}.seq_srv_id_a_receber),
+          (SELECT COALESCE(MAX(srv_id), 0) FROM ${s}.a_receber)
+        )
+      )
+    `);
+    const { rows: [{ next_srv_id }] } = await pool.query(
+      `SELECT nextval('${s}.seq_srv_id_a_receber') AS next_srv_id`
+    );
+    // Registra no srv_id_map com chave sintética para que o sync não reutilize este srv_id.
+    await pool.query(
+      `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
+       VALUES ('A_RECEBER', $1, $2)
+       ON CONFLICT (tabela, id_local) DO NOTHING`,
+      [`web:${next_srv_id}`, next_srv_id]
+    );
+
     const { rows: [r] } = await pool.query(
-      `INSERT INTO ${s}.financeiro_contas_receber
-         (descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [descricao, nome_cliente || null, valor, data_vencimento, data_recebimento || null,
-       status || 'pendente', forma_pagamento || null, parcela || 1, total_parcelas || 1,
+      `INSERT INTO ${s}.a_receber
+         (srv_id, descricao, id_cliente, valor, vencimento, data_realizado,
+          status, id_forma_de_pagamento, parcela, observacao, id_loja)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING
+         srv_id AS id, descricao, valor,
+         vencimento AS data_vencimento, data_realizado AS data_recebimento,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
+      [next_srv_id, descricao, id_cliente, valor, data_vencimento, data_recebimento || null,
+       status || 'pendente', parseInt(forma_pagamento) || null, parcela || 1,
        observacao || null, id_loja || null]
     );
     res.status(201).json(r);
@@ -90,23 +165,37 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
           status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
 
   try {
+    let id_cliente = null;
+    if (nome_cliente) {
+      const { rows: cli } = await pool.query(
+        `SELECT srv_id FROM ${s}.clientes
+         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         LIMIT 1`,
+        [nome_cliente]
+      );
+      id_cliente = cli[0]?.srv_id ?? null;
+    }
+
     const { rows: [r], rowCount } = await pool.query(
-      `UPDATE ${s}.financeiro_contas_receber SET
-         descricao        = COALESCE($1, descricao),
-         nome_cliente     = $2,
-         valor            = COALESCE($3, valor),
-         data_vencimento  = COALESCE($4, data_vencimento),
-         data_recebimento = $5,
-         status           = COALESCE($6, status),
-         forma_pagamento  = $7,
-         parcela          = COALESCE($8, parcela),
-         total_parcelas   = COALESCE($9, total_parcelas),
-         observacao       = $10,
-         id_loja          = $11
-       WHERE id = $12 RETURNING *`,
-      [descricao || null, nome_cliente ?? null, valor || null, data_vencimento || null,
-       data_recebimento ?? null, status || null, forma_pagamento ?? null,
-       parcela || null, total_parcelas || null, observacao ?? null, id_loja ?? null, id]
+      `UPDATE ${s}.a_receber SET
+         descricao       = COALESCE($1, descricao),
+         id_cliente      = COALESCE($2, id_cliente),
+         valor           = COALESCE($3, valor),
+         vencimento      = COALESCE($4, vencimento),
+         data_realizado       = $5,
+         status               = COALESCE($6, status),
+         id_forma_de_pagamento = $7,
+         parcela              = COALESCE($8, parcela),
+         observacao           = $9,
+         id_loja              = $10
+       WHERE srv_id = $11
+       RETURNING
+         srv_id AS id, descricao, valor,
+         vencimento AS data_vencimento, data_realizado AS data_recebimento,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
+      [descricao || null, id_cliente, valor || null, data_vencimento || null,
+       data_recebimento ?? null, status || null, parseInt(forma_pagamento) || null,
+       parcela || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     res.json(r);
@@ -122,10 +211,24 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guard, async (req, re
   const id = parseInt(req.params.id);
   try {
     const { rowCount } = await pool.query(
-      `DELETE FROM ${s}.financeiro_contas_receber WHERE id = $1`, [id]
+      `DELETE FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── GET /api/:schema/financeiro/filiais ──────────────────────────────────────
+
+router.get('/:schema/financeiro/filiais', ...guard, async (req, res) => {
+  const s = req.params.schema;
+  try {
+    const rows = await withTenantConnection(s, (db) =>
+      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
+    );
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
@@ -135,10 +238,12 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guard, async (req, re
 
 router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
-  const { status, data_inicio, data_fim, q, categoria } = req.query;
+  const { status, data_inicio, data_fim, q, categoria, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
   const pageSize = Math.min(100, parseInt(req.query.pageSize || '50'));
   const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
+  const orderCol = CP_SORTABLE.has(sortCol) ? sortCol : 'data_vencimento';
+  const orderDir = sortDir === 'DESC' ? 'DESC' : 'ASC';
 
   const conds = ['TRUE'];
   const params = [];
@@ -163,7 +268,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     const [rows, total] = await Promise.all([
       pool.query(
         `SELECT * FROM ${s}.financeiro_contas_pagar WHERE ${where}
-         ORDER BY data_vencimento ASC, id DESC
+         ORDER BY ${orderCol} ${orderDir}, id DESC
          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
         params
       ),

@@ -164,7 +164,15 @@ async function main() {
   async function executarCiclo() {
     if (rodando) return;
     rodando = true;
-    const db = await getConnection();
+    let db;
+    try {
+      db = await getConnection();
+    } catch (e) {
+      log(`Firebird indisponível no ciclo: ${e.message} — aguardando próximo intervalo`);
+      salvarErro({ operacao: 'ciclo', mensagem: e.message });
+      rodando = false;
+      return;
+    }
     try {
       const tabelasExistentes = await getTabelasExistentes(db);
       const baseURI = (await getParam(db, 60024)).replace(/\/+$/, '');
@@ -275,6 +283,10 @@ async function main() {
     }
   }
 
+  // Pausa breve para o Firebird liberar a sessão do setup antes do primeiro ciclo.
+  // Sem isso, o detach() e a nova conexão chegam ao servidor quase simultaneamente
+  // e ele rejeita com "user name and password not defined".
+  await new Promise(r => setTimeout(r, 1000));
   await executarCiclo();
   setInterval(executarCiclo, INTERVALO_MS);
 }

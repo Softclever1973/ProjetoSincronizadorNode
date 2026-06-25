@@ -734,32 +734,35 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         if (nomeTabela === 'A_RECEBER') {
           const idAR = registro['ID_A_RECEBER'];
           if (idAR != null) {
+            // Busca nome do cliente via SRV_ID (ID_CLIENTE já foi traduzido para SRV_ID pelo push)
+            const idClienteSrv = registro['ID_CLIENTE'];
+            let nomeCliente = null;
+            if (idClienteSrv != null) {
+              const [cliRow] = await query(db,
+                `SELECT razao_social FROM clientes WHERE srv_id = $1 LIMIT 1`, [idClienteSrv]
+              ).catch(() => [null]);
+              nomeCliente = cliRow?.razao_social ?? null;
+            }
+            const vencimento      = registro['VENCIMENTO']          ?? registro['DATA_VENCIMENTO']  ?? null;
+            const dataRealizado   = registro['DATA_REALIZADO']       ?? registro['DATA_RECEBIMENTO'] ?? null;
+            const formaPagamento  = String(registro['FORMA_PAGAMENTO'] ?? registro['ID_FORMA_DE_PAGAMENTO'] ?? '').trim() || null;
+            const parcela         = parseInt(registro['PARCELA'])       || 1;
+            const totalParcelas   = parseInt(registro['TOTAL_PARCELAS']) || parcela;
+            const idLoja          = registro['ID_LOJA'] != null ? (parseInt(registro['ID_LOJA']) || null) : null;
+            const statusRaw       = String(registro['STATUS'] ?? '').toLowerCase();
+            const status          = (statusRaw === 'recebido' || statusRaw === 'recebida' || statusRaw === 'realizada' || statusRaw === 'realizado')
+                                      ? 'recebido'
+                                      : (statusRaw === 'cancelado' || statusRaw === 'cancelada')
+                                        ? 'cancelado'
+                                        : 'pendente';
+            const observacao      = registro['OBSERVACAO'] ?? registro['OBS'] ?? null;
+
             await execute(db, `
               INSERT INTO financeiro_contas_receber (
                 id_a_receber, descricao, nome_cliente, valor, data_vencimento,
                 data_recebimento, status, forma_pagamento, parcela, total_parcelas,
                 observacao, id_loja
-              )
-              SELECT
-                ar.id_a_receber,
-                ar.descricao,
-                c.razao_social,
-                ar.valor,
-                NULLIF(ar.vencimento, '')::date,
-                NULLIF(ar.data_realizado, '')::date,
-                CASE LOWER(ar.status)
-                  WHEN 'recebido'  THEN 'recebido'
-                  WHEN 'cancelado' THEN 'cancelado'
-                  ELSE 'pendente'
-                END,
-                ar.id_forma_de_pagamento::text,
-                COALESCE(NULLIF(ar.parcela, '')::integer, 1),
-                1,
-                ar.observacao,
-                ar.id_loja::integer
-              FROM a_receber ar
-              LEFT JOIN clientes c ON c.id_cliente = ar.id_cliente
-              WHERE ar.id_a_receber = $1
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
               ON CONFLICT (id_a_receber) DO UPDATE SET
                 descricao        = EXCLUDED.descricao,
                 nome_cliente     = EXCLUDED.nome_cliente,
@@ -772,7 +775,11 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
                 total_parcelas   = EXCLUDED.total_parcelas,
                 observacao       = EXCLUDED.observacao,
                 id_loja          = EXCLUDED.id_loja
-            `, [idAR]).catch(() => {});
+            `, [
+              idAR, registro['DESCRICAO'] ?? null, nomeCliente,
+              registro['VALOR'] ?? null, vencimento, dataRealizado,
+              status, formaPagamento, parcela, totalParcelas, observacao, idLoja,
+            ]).catch(e => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e.message}`));
           }
         }
 

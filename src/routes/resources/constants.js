@@ -115,8 +115,8 @@ const REGRAS_TABELA = Object.freeze({
       },
       r => {
         const insc = String(campo(r, 'INSC_ESTADUAL') ?? '').trim();
-        if (insc && !/^\d{9}$/.test(insc))
-          return 'Inscrição Estadual deve conter exatamente 9 números';
+        if (insc && !/^\d{8,14}$/.test(insc))
+          return 'Inscrição Estadual deve ter entre 8 e 14 dígitos, ou deixe em branco';
         return null;
       },
       r => {

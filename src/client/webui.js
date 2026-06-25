@@ -466,7 +466,10 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     const pks = Array.isArray(pk) ? pk : [pk];
     const whereParts = pks.map(p => `${p} = ?`).join(' AND ');
 
-    const db = await getConnection();
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
     try {
       for (const srv of registrosServidor) {
         try {

@@ -234,8 +234,8 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
   }
 });
 
-/* ── POST /api/:schema/tabelas/:tabela — upsert ── */
-router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+/* ── POST (criar) e PUT (editar) /api/:schema/tabelas/:tabela ── */
+async function handleSave(req, res, forceUpdate) {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 
@@ -266,7 +266,7 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
   // é edição de registro existente — campos obrigatórios não devem bloquear a operação.
   const pksUpper   = pks.map(p => p.toUpperCase());
   const pkValsHint = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
-  const likelyUpdate = pkValsHint.every(v => v != null);
+  const likelyUpdate = forceUpdate || pkValsHint.every(v => v != null);
 
   // Validações de negócio por tabela
   const erroValidacao = validarRegistro(tabela, registro, { isUpdate: likelyUpdate });
@@ -303,11 +303,16 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
       // Detecta se é INSERT ou UPDATE antes do upsert.
       // Se todos os PKs estão ausentes do payload (registro novo sem ID atribuído),
       // vai direto para INSERT — evita SELECT com NULL que nunca encontra linhas.
-      const pkWhere    = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-      const pkVals     = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
-      const allPKsNull = pkVals.every(v => v == null);
-      const existing   = allPKsNull ? [] : await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
-      const update     = existing.length > 0;
+      const pkWhere = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      const pkVals  = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
+      let update;
+      if (forceUpdate) {
+        update = true;
+      } else {
+        const allPKsNull = pkVals.every(v => v == null);
+        const existing   = allPKsNull ? [] : await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
+        update = existing.length > 0;
+      }
 
       // Captura estado anterior para o audit log de UPDATE
       let dadosAntes = null;
@@ -344,19 +349,19 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
       }
 
       // Unicidade de CPF/CNPJ em CLIENTES
+      // O frontend declara pk: 'SRV_ID', então pkVals[0] é sempre o SRV_ID do servidor —
+      // nunca nulo em edição, independente do ID_CLIENTE do ERP local.
       if (tabela.toUpperCase() === 'CLIENTES') {
-        const idClienteKey = Object.keys(registro).find(k => k.toUpperCase() === 'ID_CLIENTE');
-        const idClienteAtual = (idClienteKey !== undefined && registro[idClienteKey] != null)
-          ? registro[idClienteKey] : null;
+        const srvIdAtual = pkVals[0] != null ? pkVals[0] : null;
         for (const campo of ['CPF', 'CNPJ']) {
           const key = Object.keys(registro).find(k => k.toUpperCase() === campo);
           const rawVal = key ? String(registro[key] ?? '').trim() : '';
           if (!rawVal) continue;
           const digits = rawVal.replace(/\D/g, '');
           if (!digits) continue;
-          const excludeClause = idClienteAtual != null ? ' AND ID_CLIENTE != $2' : '';
+          const excludeClause = srvIdAtual != null ? ' AND SRV_ID != $2' : '';
           const qParams = [digits];
-          if (idClienteAtual != null) qParams.push(idClienteAtual);
+          if (srvIdAtual != null) qParams.push(srvIdAtual);
           const [dup] = await query(db,
             `SELECT 1 FROM CLIENTES WHERE regexp_replace(${campo}::TEXT, '[^0-9]', '', 'g') = $1${excludeClause} LIMIT 1`,
             qParams
@@ -468,9 +473,13 @@ router.post('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('geren
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
     if (e.isValidation) return res.status(400).json({ erro: e.message });
-    erroServidor(res, e, `POST ${tabela}`);
+    erroServidor(res, e, `${req.method} ${tabela}`);
   }
-});
+}
+
+const _saveMw = [authJwt, checkSchema, requireRole('gerente', 'dono')];
+router.post('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, false));
+router.put ('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, true));
 
 /* ── DELETE /api/:schema/tabelas/:tabela ── */
 router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {

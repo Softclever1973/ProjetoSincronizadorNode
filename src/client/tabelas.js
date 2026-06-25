@@ -219,7 +219,7 @@ const TABELAS = [
     filtroFilial: 'ID_LOJA',
     generator: 'GEN_A_RECEBER',
     colunaData: 'VENCIMENTO',
-    defaultAtivo: false,
+    defaultAtivo: true,
     srvId: true,
     fks: [
       { coluna: 'ID_CLIENTE', tabela: 'CLIENTES', traduzirSrvId: true, pkRef: 'ID_CLIENTE' },
