@@ -188,8 +188,10 @@ async function main() {
       if (baseURI) {
         try {
           const paramsSyncMap = [
-            { fbId: 67,  chave: 'utilizar_codigo_interno' },
-            { fbId: 122, chave: 'codigo_interno_unico'     },
+            { fbId: 67,    chave: 'utilizar_codigo_interno' },
+            { fbId: 122,   chave: 'codigo_interno_unico'     },
+            { fbId: 71,    chave: 'venda_saldo_negativo'     },
+            { fbId: 45051, chave: 'modalidade_frete'         },
           ];
           const parametros = {};
           for (const { fbId, chave } of paramsSyncMap) {

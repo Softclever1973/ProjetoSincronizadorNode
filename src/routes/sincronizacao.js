@@ -861,7 +861,7 @@ router.get('/BuscarParametros', auth, async (req, res) => {
 router.post('/AtualizarParametros', auth, async (req, res) => {
   const { parametros } = req.body || {};
   if (!parametros || typeof parametros !== 'object') return res.json({ ok: true });
-  const CHAVES_ACEITAS = new Set(['codigo_interno_unico', 'utilizar_codigo_interno']);
+  const CHAVES_ACEITAS = new Set(['codigo_interno_unico', 'utilizar_codigo_interno', 'venda_saldo_negativo', 'modalidade_frete']);
   const schema = req.schemaName;
   try {
     await withTenantConnection(schema, async (db) => {

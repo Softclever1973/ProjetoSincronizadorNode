@@ -60,6 +60,20 @@ router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono
   }
 });
 
+/* ── GET /api/:schema/sync-flags — flags públicas sem restrição de role ── */
+router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
+  const { schema } = req.params;
+  try {
+    const rows = await withTenantConnection(schema, db =>
+      query(db, `SELECT chave, valor FROM sync_config WHERE chave IN ('venda_saldo_negativo', 'modalidade_frete')`)
+    );
+    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR])));
+  } catch (e) {
+    if (isMissingTableError(e)) return res.json({});
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 /* ── GET /api/:schema/filiais ── */
 router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;

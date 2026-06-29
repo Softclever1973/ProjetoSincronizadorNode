@@ -119,6 +119,37 @@ function normalizarBlobs(row) {
   );
 }
 
+// Lê um campo BLOB do node-firebird (retornado como função) e resolve como string.
+// ATENÇÃO: só funciona se chamado DENTRO do callback de db.query/db.sequentially —
+// db.query() comita a transação quando o callback retorna, invalidando os BLOBs.
+// Para queries com BLOBs, prefira CAST(col AS VARCHAR(N)) no SQL.
+function lerBlobTexto(blobFn) {
+  return new Promise(resolve => {
+    try {
+      blobFn((err, _name, e) => {
+        if (err || !e) { resolve(null); return; }
+        try {
+          const chunks = [];
+          e.on('data',  chunk => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk))));
+          e.on('end',   () => resolve(Buffer.concat(chunks).toString('utf8')));
+          e.on('error', () => resolve(null));
+          if (typeof e.resume === 'function') e.resume();
+        } catch { resolve(null); }
+      });
+    } catch { resolve(null); }
+  });
+}
+
+// Como normalizarBlobs mas resolve BLOBs para string em vez de null.
+// Usar apenas onde o conteúdo textual do BLOB é necessário (ex.: PARAMETROS).
+async function resolverBlobsRow(row) {
+  if (!row || typeof row !== 'object') return row;
+  const entries = await Promise.all(
+    Object.entries(row).map(async ([k, v]) => [k, typeof v === 'function' ? await lerBlobTexto(v) : v])
+  );
+  return Object.fromEntries(entries);
+}
+
 function getJSON(url) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
@@ -1230,11 +1261,14 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       return res.render('parametros', { rows: [], error: `Firebird indisponível: ${e.message}` });
     }
     try {
+      // OBSERVACOES é BLOB SUB_TYPE 1; db.query() comita a tx antes de retornar,
+      // então funções BLOB ficam inválidas (Invalid BLOB ID). Usar CAST no SQL
+      // converte o BLOB para VARCHAR dentro da tx, sem precisar da API de BLOB.
       const rows = await dbQuery(db,
-        `SELECT ID_PARAMETRO, NOME_DA_TABELA, DESCRICAO, PARAMETRO, OBSERVACOES
+        `SELECT ID_PARAMETRO, NOME_DA_TABELA, DESCRICAO, PARAMETRO,
+                CAST(OBSERVACOES AS VARCHAR(4000)) AS OBSERVACOES
          FROM PARAMETROS ORDER BY ID_PARAMETRO`
       );
-      // Normaliza BLOBs (campos function → null)
       const normalizado = rows.map(r => normalizarBlobs(r));
       res.render('parametros', { rows: normalizado, error: null });
     } catch (e) {
