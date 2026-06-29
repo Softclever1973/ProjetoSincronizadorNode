@@ -68,7 +68,11 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
            ar.valor,
            ar.vencimento                                     AS data_vencimento,
            ar.data_realizado                                  AS data_recebimento,
-           ar.status,
+           CASE
+             WHEN LOWER(ar.status::text) IN ('recebido','recebida','realizada','realizado') THEN 'recebido'
+             WHEN LOWER(ar.status::text) LIKE 'cancelad%' THEN 'cancelado'
+             ELSE 'pendente'
+           END                                               AS status,
            ar.id_forma_de_pagamento::text                    AS forma_pagamento,
            ar.parcela,
            ar.observacao,
@@ -165,6 +169,15 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
           status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
 
   try {
+    // Impede reativação de registro cancelado
+    const { rows: [atual] } = await pool.query(
+      `SELECT status FROM ${s}.a_receber WHERE srv_id = $1`, [id]
+    );
+    if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (atual.status === 'cancelado' && status && status !== 'cancelado') {
+      return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
+    }
+
     let id_cliente = null;
     if (nome_cliente) {
       const { rows: cli } = await pool.query(
@@ -315,6 +328,15 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
           status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
 
   try {
+    // Impede reativação de registro cancelado
+    const { rows: [atual] } = await pool.query(
+      `SELECT status FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
+    );
+    if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (atual.status === 'cancelado' && status && status !== 'cancelado') {
+      return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
+    }
+
     const { rows: [r], rowCount } = await pool.query(
       `UPDATE ${s}.financeiro_contas_pagar SET
          descricao       = COALESCE($1, descricao),
@@ -433,6 +455,95 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
     `);
 
     res.json(rows);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── POST /api/:schema/financeiro/parcelas-pedido ─────────────────────────────
+// Cria registros em A_RECEBER a partir das parcelas de um pedido.
+// Acessível a qualquer usuário autenticado (sem restrição de role).
+
+router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (req, res) => {
+  const s = req.params.schema;
+  const { id_pedido, parcelas } = req.body;
+  if (!id_pedido || !Array.isArray(parcelas) || parcelas.length === 0)
+    return res.status(400).json({ erro: 'id_pedido e parcelas são obrigatórios' });
+  try {
+    const { rows: pedRows } = await pool.query(
+      `SELECT id_cliente, nome_cliente, id_loja FROM ${s}.pedidos WHERE id_pedido = $1 LIMIT 1`,
+      [id_pedido]
+    );
+    const ped = pedRows[0] || {};
+
+    let id_cliente_srv = null;
+    if (ped.id_cliente) {
+      const { rows: c } = await pool.query(
+        `SELECT srv_id FROM ${s}.clientes WHERE id_cliente = $1 LIMIT 1`,
+        [ped.id_cliente]
+      );
+      id_cliente_srv = c[0]?.srv_id ?? null;
+    }
+
+    await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
+    await pool.query(`
+      SELECT setval('${s}.seq_srv_id_a_receber',
+        GREATEST(
+          (SELECT last_value FROM ${s}.seq_srv_id_a_receber),
+          (SELECT COALESCE(MAX(srv_id), 0) FROM ${s}.a_receber)
+        )
+      )
+    `);
+
+    const criados = [];
+    for (const p of parcelas) {
+      const obs = `pedido:${id_pedido}:${p.parcela}`;
+      const existing = await pool.query(
+        `SELECT srv_id FROM ${s}.a_receber WHERE observacao = $1 LIMIT 1`, [obs]
+      );
+      if (existing.rows.length > 0) continue;
+
+      const { rows: [{ next_id }] } = await pool.query(
+        `SELECT nextval('${s}.seq_srv_id_a_receber') AS next_id`
+      );
+      await pool.query(
+        `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
+         VALUES ('A_RECEBER', $1, $2) ON CONFLICT (tabela, id_local) DO NOTHING`,
+        [`web:${next_id}`, next_id]
+      );
+      const desc = `Pedido #${id_pedido} - Parcela ${p.parcela}`;
+      const { rows: [r] } = await pool.query(
+        `INSERT INTO ${s}.a_receber
+           (srv_id, descricao, id_cliente, valor, vencimento, status,
+            id_forma_de_pagamento, parcela, observacao, id_loja)
+         VALUES ($1,$2,$3,$4,$5,'pendente',$6,$7,$8,$9)
+         RETURNING srv_id AS id, descricao, valor, vencimento AS data_vencimento, status, parcela`,
+        [next_id, desc, id_cliente_srv, p.valor, p.data_vencimento,
+         p.id_forma_de_pagamento ? Number(p.id_forma_de_pagamento) : null,
+         p.parcela, obs, ped.id_loja || null]
+      );
+      if (r) criados.push(r);
+    }
+    res.status(201).json({ criados });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── DELETE /api/:schema/financeiro/parcelas-pedido/:id_pedido/:parcela ────────
+// Remove o A_RECEBER correspondente a uma parcela de pedido (se ainda pendente).
+
+router.delete('/:schema/financeiro/parcelas-pedido/:id_pedido/:parcela', authJwt, checkSchema, async (req, res) => {
+  const s   = req.params.schema;
+  const obs = `pedido:${req.params.id_pedido}:${req.params.parcela}`;
+  try {
+    const { rowCount } = await pool.query(
+      `DELETE FROM ${s}.a_receber
+       WHERE observacao = $1
+         AND LOWER(status::text) NOT IN ('recebido','recebida','realizado','realizada')`,
+      [obs]
+    );
+    res.json({ deletados: rowCount });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

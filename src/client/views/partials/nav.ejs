@@ -1,4 +1,5 @@
 <nav aria-label="Navegação principal">
+  <% if (abasPermitidas.has('conflitos')) { %>
   <a href="/" id="nav-conflitos" <%- currentPage === 'conflitos' ? 'aria-current="page"' : '' %>>
     Conflitos
     <span id="conflitos-badge"
@@ -8,9 +9,17 @@
           aria-label="conflitos pendentes"
           style="display:none;font-size:11px;padding:1px 6px"></span>
   </a>
+  <% } %>
+  <% if (abasPermitidas.has('status')) { %>
   <a href="/status" <%- currentPage === 'status' ? 'aria-current="page"' : '' %>>Status</a>
+  <% } %>
+  <% if (abasPermitidas.has('auditoria')) { %>
   <a href="/auditoria" <%- currentPage === 'auditoria' ? 'aria-current="page"' : '' %>>Auditoria</a>
+  <% } %>
+  <% if (abasPermitidas.has('configuracoes')) { %>
   <a href="/configuracoes" <%- currentPage === 'configuracoes' ? 'aria-current="page"' : '' %>>Configurações</a>
+  <% } %>
+  <% if (abasPermitidas.has('erros')) { %>
   <a href="/erros" id="nav-erros" <%- currentPage === 'erros' ? 'aria-current="page"' : '' %>>
     Erros
     <span id="erros-badge"
@@ -20,4 +29,17 @@
           aria-label="erros de sincronização"
           style="display:none;font-size:11px;padding:1px 6px"></span>
   </a>
+  <% } %>
+  <% if (abasPermitidas.has('parametros')) { %>
+  <a href="/parametros" <%- currentPage === 'parametros' ? 'aria-current="page"' : '' %>>Parâmetros</a>
+  <% } %>
+  <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+    <span style="font-size:12px;color:var(--color-text-muted)"><%= usuarioLogado %></span>
+    <form method="post" action="/logout" style="margin:0">
+      <button type="submit"
+        style="padding:3px 12px;font-size:12px;border:1px solid #d1d5db;border-radius:var(--radius-sm);background:white;color:var(--color-text-secondary);cursor:pointer;font-family:var(--font-sans)">
+        Sair
+      </button>
+    </form>
+  </div>
 </nav>

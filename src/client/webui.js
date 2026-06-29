@@ -2,6 +2,7 @@ const express = require('express');
 const path = require('path');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos, clearConflitos, emitter: conflitosEmitter } = require('./conflitos');
 const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./erros');
 const { enviarRegistro } = require('./http');
@@ -12,6 +13,43 @@ const { lerConfig, salvarConfig, defaultAtivo } = require('./tabelasConfig');
 const { gerarNovoPK: utilGerarPK } = require('./db-utils');
 
 const TOKEN = process.env.SYNC_TOKEN;
+
+// ── AUTENTICAÇÃO ─────────────────────────────────────────────────────────────
+// Para alterar a senha do admin, modifique SENHA_ADMIN abaixo e reinicie.
+const SENHA_ADMIN = 'admin';
+
+const USUARIOS = [
+  { usuario: 'admin', senhaHash: crypto.createHash('sha256').update(SENHA_ADMIN).digest('hex'), role: 'admin' },
+];
+
+// Abas visíveis por role — extensível para novos perfis futuros
+const ABAS_POR_ROLE = {
+  admin: new Set(['conflitos', 'status', 'auditoria', 'configuracoes', 'erros', 'parametros']),
+};
+
+const _sessions = new Map(); // sid → { usuario, role, expira }
+const SESSION_TTL = 8 * 60 * 60 * 1000; // 8 horas
+
+function _gerarSid() { return crypto.randomBytes(32).toString('hex'); }
+
+function _parseCookies(h) {
+  const r = {};
+  if (!h) return r;
+  h.split(';').forEach(c => {
+    const [k, ...v] = c.trim().split('=');
+    if (k) r[k.trim()] = v.join('=').trim();
+  });
+  return r;
+}
+
+function _getSession(req) {
+  const sid = _parseCookies(req.headers.cookie).sid;
+  if (!sid) return null;
+  const s = _sessions.get(sid);
+  if (!s) return null;
+  if (Date.now() > s.expira) { _sessions.delete(sid); return null; }
+  return s;
+}
 
 // Cache de colunas computadas (read-only) por tabela
 const cacheColunasComputadas = {};
@@ -263,10 +301,51 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   app.set('views', path.join(__dirname, 'views'));
   app.use(express.static(path.join(__dirname, 'public')));
   app.use(express.json());
+  app.use(express.urlencoded({ extended: false }));
+
+  // ── Rotas públicas: login / logout ────────────────────────────────────────
+  app.get('/login', (req, res) => {
+    if (_getSession(req)) return res.redirect('/');
+    res.render('login', { erro: null });
+  });
+
+  app.post('/login', (req, res) => {
+    const { usuario, senha } = req.body || {};
+    const hash = crypto.createHash('sha256').update(senha || '').digest('hex');
+    const user = USUARIOS.find(u => u.usuario === usuario && u.senhaHash === hash);
+    if (!user) return res.render('login', { erro: 'Usuário ou senha incorretos.' });
+    const sid = _gerarSid();
+    _sessions.set(sid, { usuario: user.usuario, role: user.role, expira: Date.now() + SESSION_TTL });
+    res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; Max-Age=28800`);
+    res.redirect('/');
+  });
+
+  app.post('/logout', (req, res) => {
+    const { sid } = _parseCookies(req.headers.cookie);
+    if (sid) _sessions.delete(sid);
+    res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; Max-Age=0');
+    res.redirect('/login');
+  });
+
+  // ── Middleware de autenticação ────────────────────────────────────────────
+  app.use((req, res, next) => {
+    if (['/login', '/logout'].includes(req.path)) return next();
+    const sess = _getSession(req);
+    if (!sess) {
+      // Chamadas de API/SSE retornam 401 em vez de redirect (evita loop no JS)
+      if (req.path.startsWith('/api/') || req.path === '/eventos') {
+        return res.status(401).json({ error: 'não autenticado' });
+      }
+      return res.redirect('/login');
+    }
+    res.locals.usuarioLogado  = sess.usuario;
+    res.locals.abasPermitidas = ABAS_POR_ROLE[sess.role] || new Set();
+    next();
+  });
 
   // Middleware: injeta currentPage em todas as views para aria-current="page" no nav
   app.use((req, res, next) => {
-    const pathMap = { '/': 'conflitos', '/status': 'status', '/auditoria': 'auditoria', '/configuracoes': 'configuracoes', '/erros': 'erros' };
+    const pathMap = { '/': 'conflitos', '/status': 'status', '/auditoria': 'auditoria', '/configuracoes': 'configuracoes', '/erros': 'erros', '/parametros': 'parametros' };
     res.locals.currentPage = pathMap[req.path] || '';
     next();
   });
@@ -1141,6 +1220,48 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, error: e.message });
+    }
+  });
+
+  // ── PARÂMETROS ───────────────────────────────────────────────────────────
+  app.get('/parametros', async (_req, res) => {
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.render('parametros', { rows: [], error: `Firebird indisponível: ${e.message}` });
+    }
+    try {
+      const rows = await dbQuery(db,
+        `SELECT ID_PARAMETRO, NOME_DA_TABELA, DESCRICAO, PARAMETRO, OBSERVACOES
+         FROM PARAMETROS ORDER BY ID_PARAMETRO`
+      );
+      // Normaliza BLOBs (campos function → null)
+      const normalizado = rows.map(r => normalizarBlobs(r));
+      res.render('parametros', { rows: normalizado, error: null });
+    } catch (e) {
+      res.render('parametros', { rows: [], error: `Erro ao ler parâmetros: ${e.message}` });
+    } finally {
+      await closeConnection(db);
+    }
+  });
+
+  app.post('/parametros/:id', async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    if (!id) return res.status(400).json({ ok: false, message: 'ID inválido' });
+    const { PARAMETRO, OBSERVACOES } = req.body || {};
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
+    try {
+      await dbExecute(db,
+        `UPDATE PARAMETROS SET PARAMETRO = ?, OBSERVACOES = ? WHERE ID_PARAMETRO = ?`,
+        [PARAMETRO ?? null, OBSERVACOES ?? null, id]
+      );
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
+    } finally {
+      await closeConnection(db);
     }
   });
 

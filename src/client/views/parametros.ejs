@@ -1,0 +1,233 @@
+<%- include('partials/head', { title: 'Parâmetros' }) %>
+<%- include('partials/nav') %>
+
+<style>
+  #tbl-param { width:100%; border-collapse:collapse; background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.1); font-size:13px; table-layout:fixed; }
+  #tbl-param thead { background:#f0f0f0; font-size:11px; text-transform:uppercase; color:#555; }
+  #tbl-param th { padding:10px 12px; text-align:left; white-space:nowrap; user-select:none; }
+  #tbl-param th.sortable { cursor:pointer; }
+  #tbl-param th.sortable:hover { background:#e4e4e4; }
+  #tbl-param .sort-icon { margin-left:4px; color:#aaa; font-size:10px; }
+  #tbl-param th.asc  .sort-icon { color:var(--color-primary); }
+  #tbl-param th.desc .sort-icon { color:var(--color-primary); }
+  #tbl-param td { padding:9px 12px; border-top:1px solid #eee; vertical-align:top; word-break:break-word; white-space:normal; }
+  #tbl-param tbody tr:nth-child(even) { background:#fafafa; }
+  #tbl-param tbody tr:hover { background:#f0f5ff; }
+  #tbl-param .col-id   { width:52px; }
+  #tbl-param .col-tab  { width:130px; }
+  #tbl-param .col-desc { width:22%; }
+  #tbl-param .col-par  { width:160px; }
+  #tbl-param .col-obs  { }
+  #tbl-param .col-acao { width:88px; text-align:center; }
+  .btn-editar { padding:5px 14px; font-size:12px; border:1px solid var(--color-primary); border-radius:var(--radius-sm); background:white; color:var(--color-primary); cursor:pointer; font-family:var(--font-sans); white-space:nowrap; }
+  .btn-editar:hover { background:var(--color-primary); color:white; }
+</style>
+
+<h1>Parâmetros do Sistema</h1>
+
+<% if (error) { %>
+  <div style="background:var(--color-error-bg);color:var(--color-danger);border:1px solid #fecaca;border-radius:var(--radius-sm);padding:12px 16px;margin-bottom:16px;font-size:13px"><%= error %></div>
+<% } %>
+
+<div style="margin-bottom:14px;display:flex;gap:10px;align-items:center">
+  <input type="search" id="busca-param"
+    placeholder="Filtrar por ID, tabela, descrição…"
+    style="padding:8px 12px;border:1px solid #d1d5db;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);width:320px">
+  <span id="contador" style="font-size:12px;color:var(--color-text-muted)"></span>
+</div>
+
+<% if (rows.length === 0 && !error) { %>
+  <div class="empty"><p>Nenhum parâmetro encontrado.</p></div>
+<% } else { %>
+
+<div style="overflow-x:auto">
+  <table id="tbl-param">
+    <thead>
+      <tr>
+        <th class="sortable col-id"   data-col="0" data-type="num">ID <span class="sort-icon">↕</span></th>
+        <th class="sortable col-tab"  data-col="1" data-type="str">Tabela <span class="sort-icon">↕</span></th>
+        <th class="sortable col-desc" data-col="2" data-type="str">Descrição <span class="sort-icon">↕</span></th>
+        <th class="sortable col-par"  data-col="3" data-type="str">Parâmetro <span class="sort-icon">↕</span></th>
+        <th class="col-obs">Observações</th>
+        <th class="col-acao">Ação</th>
+      </tr>
+    </thead>
+    <tbody id="tbl-body">
+      <% rows.forEach(function(r) { %>
+      <tr data-id="<%= r.ID_PARAMETRO %>"
+          data-search="<%= [r.ID_PARAMETRO, r.NOME_DA_TABELA, r.DESCRICAO, r.PARAMETRO, r.OBSERVACOES].join(' ').toLowerCase() %>">
+        <td class="col-id" style="font-weight:600;color:var(--color-text-secondary)"><%= r.ID_PARAMETRO %></td>
+        <td class="col-tab" style="color:var(--color-primary);font-size:12px"><%= r.NOME_DA_TABELA ?? '—' %></td>
+        <td class="col-desc"><%= r.DESCRICAO ?? '—' %></td>
+        <td class="col-par" style="font-family:monospace;font-size:12px"><%= r.PARAMETRO ?? '' %></td>
+        <td class="col-obs" style="color:var(--color-text-muted);font-size:12px"><%= r.OBSERVACOES ?? '' %></td>
+        <td class="col-acao">
+          <button class="btn-editar"
+            data-id="<%= r.ID_PARAMETRO %>"
+            data-descricao="<%= (r.DESCRICAO ?? '').replace(/"/g, '&quot;') %>"
+            data-parametro="<%= (r.PARAMETRO ?? '').replace(/"/g, '&quot;') %>"
+            data-observacoes="<%= (r.OBSERVACOES ?? '').replace(/"/g, '&quot;') %>">
+            Editar
+          </button>
+        </td>
+      </tr>
+      <% }); %>
+    </tbody>
+  </table>
+</div>
+
+<% } %>
+
+<!-- Modal de edição -->
+<div id="modal-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:1000;align-items:center;justify-content:center">
+  <div style="background:white;border-radius:10px;padding:28px;width:480px;max-width:94vw;box-shadow:0 8px 32px rgba(0,0,0,.18)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px">
+      <h2 style="margin:0;font-size:16px;font-weight:700">Editar Parâmetro <span id="modal-id" style="color:var(--color-text-muted);font-weight:400"></span></h2>
+      <button id="modal-fechar" style="background:none;border:none;font-size:20px;cursor:pointer;color:var(--color-text-muted);line-height:1">&times;</button>
+    </div>
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:12px;font-weight:500;color:var(--color-text-muted);margin-bottom:4px">DESCRIÇÃO</label>
+      <div id="modal-descricao" style="font-size:13px;color:var(--color-text-primary);padding:8px 12px;background:#f9fafb;border-radius:var(--radius-sm);border:1px solid #e5e7eb"></div>
+    </div>
+    <div style="margin-bottom:14px">
+      <label for="edit-parametro" style="display:block;font-size:12px;font-weight:600;color:var(--color-text-primary);margin-bottom:4px">PARÂMETRO</label>
+      <textarea id="edit-parametro" rows="3"
+        style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #d1d5db;border-radius:var(--radius-sm);font-size:13px;font-family:monospace;resize:vertical"></textarea>
+    </div>
+    <div style="margin-bottom:20px">
+      <label for="edit-observacoes" style="display:block;font-size:12px;font-weight:600;color:var(--color-text-primary);margin-bottom:4px">OBSERVAÇÕES</label>
+      <textarea id="edit-observacoes" rows="2"
+        style="width:100%;box-sizing:border-box;padding:9px 12px;border:1px solid #d1d5db;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);resize:vertical"></textarea>
+    </div>
+    <div id="modal-erro" style="display:none;background:var(--color-error-bg);color:var(--color-danger);border:1px solid #fecaca;border-radius:var(--radius-sm);padding:8px 12px;font-size:12px;margin-bottom:12px"></div>
+    <div style="display:flex;justify-content:flex-end;gap:10px">
+      <button id="btn-cancelar" style="padding:8px 18px;border:1px solid #d1d5db;border-radius:var(--radius-sm);background:white;font-size:13px;cursor:pointer;font-family:var(--font-sans)">Cancelar</button>
+      <button id="btn-salvar" style="padding:8px 18px;background:var(--color-primary);color:white;border:none;border-radius:var(--radius-sm);font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-sans)">Salvar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  var idAtual  = null;
+  var overlay  = document.getElementById('modal-overlay');
+  var tbody    = document.getElementById('tbl-body');
+  var allRows  = tbody ? Array.from(tbody.querySelectorAll('tr')) : [];
+  var contador = document.getElementById('contador');
+  var sortCol  = -1, sortDir = 1; // dir: 1=asc, -1=desc
+
+  function atualizarContador(n) {
+    if (contador) contador.textContent = n + ' / ' + allRows.length + ' parâmetro(s)';
+  }
+  atualizarContador(allRows.length);
+
+  // ── Ordenação ─────────────────────────────────────────────────────────────
+  document.querySelectorAll('#tbl-param th.sortable').forEach(function (th) {
+    th.addEventListener('click', function () {
+      var col  = parseInt(th.dataset.col, 10);
+      var tipo = th.dataset.type; // 'num' ou 'str'
+
+      // Alterna direção se mesma coluna
+      if (sortCol === col) { sortDir *= -1; } else { sortDir = 1; }
+      sortCol = col;
+
+      // Reseta ícones de todos os th
+      document.querySelectorAll('#tbl-param th.sortable').forEach(function (h) {
+        h.classList.remove('asc', 'desc');
+        h.querySelector('.sort-icon').textContent = '↕';
+      });
+      th.classList.add(sortDir === 1 ? 'asc' : 'desc');
+      th.querySelector('.sort-icon').textContent = sortDir === 1 ? '↑' : '↓';
+
+      // Ordena linhas visíveis e ocultas juntas
+      var sorted = allRows.slice().sort(function (a, b) {
+        var vA = (a.querySelectorAll('td')[col] || {}).textContent || '';
+        var vB = (b.querySelectorAll('td')[col] || {}).textContent || '';
+        if (tipo === 'num') {
+          vA = parseFloat(vA) || 0;
+          vB = parseFloat(vB) || 0;
+          return (vA - vB) * sortDir;
+        }
+        return vA.localeCompare(vB, 'pt-BR', { sensitivity: 'base' }) * sortDir;
+      });
+
+      sorted.forEach(function (tr) { tbody.appendChild(tr); });
+    });
+  });
+
+  // ── Filtro de busca ───────────────────────────────────────────────────────
+  document.getElementById('busca-param').addEventListener('input', function () {
+    var q = this.value.toLowerCase();
+    var n = 0;
+    allRows.forEach(function (tr) {
+      var match = !q || tr.dataset.search.includes(q);
+      tr.style.display = match ? '' : 'none';
+      if (match) n++;
+    });
+    atualizarContador(n);
+  });
+
+  // ── Modal ─────────────────────────────────────────────────────────────────
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest('.btn-editar');
+    if (!btn) return;
+    idAtual = btn.dataset.id;
+    document.getElementById('modal-id').textContent = '#' + idAtual;
+    document.getElementById('modal-descricao').textContent = btn.dataset.descricao || '—';
+    document.getElementById('edit-parametro').value  = btn.dataset.parametro   || '';
+    document.getElementById('edit-observacoes').value = btn.dataset.observacoes || '';
+    document.getElementById('modal-erro').style.display = 'none';
+    overlay.style.display = 'flex';
+    document.getElementById('edit-parametro').focus();
+  });
+
+  function fechar() { overlay.style.display = 'none'; idAtual = null; }
+  document.getElementById('modal-fechar').addEventListener('click', fechar);
+  document.getElementById('btn-cancelar').addEventListener('click', fechar);
+  overlay.addEventListener('click', function (e) { if (e.target === overlay) fechar(); });
+
+  document.getElementById('btn-salvar').addEventListener('click', async function () {
+    if (!idAtual) return;
+    var btn = this;
+    btn.disabled = true; btn.textContent = 'Salvando…';
+    document.getElementById('modal-erro').style.display = 'none';
+    try {
+      var r = await fetch('/parametros/' + idAtual, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          PARAMETRO:   document.getElementById('edit-parametro').value,
+          OBSERVACOES: document.getElementById('edit-observacoes').value,
+        })
+      });
+      var d = await r.json();
+      if (d.ok) {
+        var tr = tbody.querySelector('tr[data-id="' + idAtual + '"]');
+        if (tr) {
+          var tds = tr.querySelectorAll('td');
+          var novoParam = document.getElementById('edit-parametro').value;
+          var novaObs   = document.getElementById('edit-observacoes').value;
+          tds[3].textContent = novoParam;
+          tds[4].textContent = novaObs;
+          var btnEditar = tr.querySelector('.btn-editar');
+          if (btnEditar) { btnEditar.dataset.parametro = novoParam; btnEditar.dataset.observacoes = novaObs; }
+          tr.dataset.search = [tds[0].textContent, tds[1].textContent, tds[2].textContent, novoParam, novaObs].join(' ').toLowerCase();
+        }
+        fechar();
+      } else {
+        var erroEl = document.getElementById('modal-erro');
+        erroEl.textContent = d.message || 'Erro desconhecido';
+        erroEl.style.display = 'block';
+      }
+    } catch (ex) {
+      var erroEl = document.getElementById('modal-erro');
+      erroEl.textContent = 'Erro de rede: ' + ex.message;
+      erroEl.style.display = 'block';
+    } finally {
+      btn.disabled = false; btn.textContent = 'Salvar';
+    }
+  });
+})();
+</script>
+
+<%- include('partials/scripts') %>
