@@ -472,11 +472,14 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         const srvIdFilial = registro.SRV_ID != null ? Number(registro.SRV_ID) : null;
 
         if (srvIdFilial != null) {
-          // Registra o mapeamento id_local → srv_id existente (sem alocar novo valor)
+          // Registra o mapeamento id_local → srv_id existente (sem alocar novo valor).
+          // Cada filial tem seu próprio generator Firebird, então (filial_id, tabela, id_local)
+          // é a chave real — o mesmo id_local em filiais diferentes são registros distintos.
           await execute(db,
             `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
              VALUES ($1, $2, $3, $4)
-             ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = EXCLUDED.filial_id, srv_id = EXCLUDED.srv_id`,
+             ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
+             DO UPDATE SET srv_id = EXCLUDED.srv_id`,
             [idLoja, nomeTabela, pkValorStr, srvIdFilial]
           ).catch(() => {});
           srvId = srvIdFilial;
@@ -496,24 +499,11 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           const [mapa] = await query(db,
             `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
              VALUES ($1, $2, $3, nextval('${seqNome}'))
-             ON CONFLICT (tabela, id_local) DO UPDATE SET filial_id = srv_id_map.filial_id
-             RETURNING srv_id, filial_id`,
+             ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
+             DO UPDATE SET srv_id = srv_id_map.srv_id
+             RETURNING srv_id`,
             [idLoja, nomeTabela, pkValorStr]
           );
-
-          // Se o mapeamento existente pertence a uma FILIAL DIFERENTE, o ID local colidiu
-          // com um registro de outra loja. Bloqueia o push para evitar sobrescrever o
-          // produto errado silenciosamente. O operador deve corrigir o generator do Firebird.
-          if (mapa?.FILIAL_ID != null && mapa.FILIAL_ID !== idLoja) {
-            throw Object.assign(
-              new Error(
-                `COLISÃO DE ID: ${nomeTabela} id_local=${pkValorStr} já pertence à filial ${mapa.FILIAL_ID} ` +
-                `(SRV_ID=${mapa.SRV_ID}). Avance o generator do Firebird da filial ${idLoja} ` +
-                `para um valor acima de ${mapa.SRV_ID} e recrie o registro com um novo ID.`
-              ),
-              { isValidation: true }
-            );
-          }
 
           srvId = mapa?.SRV_ID ?? null;
         }
@@ -523,16 +513,16 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         if (temSrvId) {
           const pkValorStr = pks.map(p => registro[p]).join('|');
           const [mapa] = await query(db,
-            `SELECT srv_id FROM srv_id_map WHERE tabela = $1 AND id_local = $2`,
-            [nomeTabela, pkValorStr]
+            `SELECT srv_id FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
+            [nomeTabela, pkValorStr, idLoja]
           ).catch(() => [null]);
           const srvIdDel = mapa?.SRV_ID;
           try {
             if (srvIdDel) {
               await execute(db, `DELETE FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvIdDel]);
               await execute(db,
-                `DELETE FROM srv_id_map WHERE tabela = $1 AND id_local = $2`,
-                [nomeTabela, pkValorStr]
+                `DELETE FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
+                [nomeTabela, pkValorStr, idLoja]
               );
             }
             await execute(db,
@@ -650,8 +640,8 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         if (existente?.SRV_ID != null) {
           const pkValorStrLocal = pks.map(p => String(registro[p])).join('|');
           await execute(db,
-            `UPDATE srv_id_map SET srv_id = $1 WHERE tabela = $2 AND id_local = $3`,
-            [existente.SRV_ID, nomeTabela, pkValorStrLocal]
+            `UPDATE srv_id_map SET srv_id = $1 WHERE tabela = $2 AND id_local = $3 AND filial_id = $4`,
+            [existente.SRV_ID, nomeTabela, pkValorStrLocal, idLoja]
           ).catch(() => {});
           srvId = existente.SRV_ID;
           atual = await query(db,

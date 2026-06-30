@@ -75,6 +75,12 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
            END                                               AS status,
            ar.id_forma_de_pagamento::text                    AS forma_pagamento,
            ar.parcela,
+           CASE
+             WHEN ar.observacao ~ '^pedido:[0-9]+:[0-9]+$' THEN
+               (SELECT COUNT(*)::INTEGER FROM ${s}.a_receber ar2
+                WHERE ar2.observacao LIKE 'pedido:' || split_part(ar.observacao,':',2) || ':%')
+             ELSE 1
+           END                                               AS total_parcelas,
            ar.observacao,
            ar.id_loja
          ${joinClientes}
@@ -137,7 +143,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     await pool.query(
       `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
        VALUES ('A_RECEBER', $1, $2)
-       ON CONFLICT (tabela, id_local) DO NOTHING`,
+       ON CONFLICT (tabela, id_local) WHERE filial_id IS NULL DO NOTHING`,
       [`web:${next_srv_id}`, next_srv_id]
     );
 
@@ -199,7 +205,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          status               = COALESCE($6, status),
          id_forma_de_pagamento = $7,
          parcela              = COALESCE($8, parcela),
-         observacao           = $9,
+         observacao           = COALESCE($9, observacao),
          id_loja              = $10
        WHERE srv_id = $11
        RETURNING
@@ -211,6 +217,36 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
        parcela || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+
+    // Quando uma CR de pedido é marcada como recebida, sincroniza com PEDIDOS_PARCELAS_PAGAMENTOS
+    if (r && r.status === 'recebido' && r.observacao) {
+      const match = r.observacao.match(/^pedido:(\d+):(\d+)$/);
+      if (match) {
+        const idPedido = parseInt(match[1]);
+        const parcela  = parseInt(match[2]);
+        try {
+          await pool.query(
+            `ALTER TABLE ${s}.pedidos_parcelas_pagamentos ADD COLUMN IF NOT EXISTS status TEXT`
+          );
+          await pool.query(
+            `UPDATE ${s}.pedidos_parcelas_pagamentos SET status = 'R' WHERE id_pedido = $1 AND parcela = $2`,
+            [idPedido, parcela]
+          );
+          const { rows: parcs } = await pool.query(
+            `SELECT status FROM ${s}.pedidos_parcelas_pagamentos WHERE id_pedido = $1`,
+            [idPedido]
+          );
+          if (parcs.length > 0 && parcs.every(p => p.status === 'R')) {
+            await pool.query(
+              `UPDATE ${s}.pedidos SET status = 'R' WHERE id_pedido = $1`, [idPedido]
+            );
+          }
+        } catch (syncErr) {
+          console.error('[FIN-sync-parcela]', syncErr.message);
+        }
+      }
+    }
+
     res.json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -508,7 +544,7 @@ router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (
       );
       await pool.query(
         `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
-         VALUES ('A_RECEBER', $1, $2) ON CONFLICT (tabela, id_local) DO NOTHING`,
+         VALUES ('A_RECEBER', $1, $2) ON CONFLICT (tabela, id_local) WHERE filial_id IS NULL DO NOTHING`,
         [`web:${next_id}`, next_id]
       );
       const desc = `Pedido #${id_pedido} - Parcela ${p.parcela}`;

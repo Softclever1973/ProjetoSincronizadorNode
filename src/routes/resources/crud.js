@@ -300,6 +300,21 @@ async function handleSave(req, res, forceUpdate) {
       const allowed  = new Set(serverCols.map(r => r.COL));
       const pksUpper = pks.map(p => p.toUpperCase());
 
+      // Garante colunas da web que podem não existir no schema Firebird sincronizado
+      if (tabela.toUpperCase() === 'PEDIDOS') {
+        for (const [col, type] of [['OUTRAS_DESPESAS', 'NUMERIC(15,2)'], ['MODALIDADE_FRETE', 'VARCHAR(1)']]) {
+          if (!allowed.has(col)) {
+            await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
+            allowed.add(col);
+          }
+        }
+      } else if (tabela.toUpperCase() === 'PEDIDOS_PARCELAS_PAGAMENTOS') {
+        if (!allowed.has('STATUS')) {
+          await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS STATUS TEXT`).catch(() => {});
+          allowed.add('STATUS');
+        }
+      }
+
       // Detecta se é INSERT ou UPDATE antes do upsert.
       // Se todos os PKs estão ausentes do payload (registro novo sem ID atribuído),
       // vai direto para INSERT — evita SELECT com NULL que nunca encontra linhas.

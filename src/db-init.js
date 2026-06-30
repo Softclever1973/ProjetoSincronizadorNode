@@ -141,13 +141,18 @@ function ddlTenant(schema) {
       filial_id INTEGER,
       tabela    TEXT    NOT NULL,
       id_local  TEXT    NOT NULL,
-      srv_id    INTEGER NOT NULL DEFAULT nextval('${schema}.seq_srv_id'),
-      UNIQUE (tabela, id_local)
+      srv_id    INTEGER NOT NULL DEFAULT nextval('${schema}.seq_srv_id')
     )`,
     // Migrações para instalações existentes com schema antigo (filial_id NOT NULL, chave composta)
     `ALTER TABLE IF EXISTS ${schema}.srv_id_map ALTER COLUMN filial_id DROP NOT NULL`,
     `ALTER TABLE IF EXISTS ${schema}.srv_id_map DROP CONSTRAINT IF EXISTS srv_id_map_filial_id_tabela_id_local_key`,
-    `CREATE UNIQUE INDEX IF NOT EXISTS srv_id_map_tabela_id_local_key ON ${schema}.srv_id_map (tabela, id_local)`,
+    // Remove constraint antiga (tabela, id_local) que bloqueava filiais com mesmo id_local.
+    // DROP CONSTRAINT remove a constraint e o índice de backing automaticamente.
+    `ALTER TABLE IF EXISTS ${schema}.srv_id_map DROP CONSTRAINT IF EXISTS srv_id_map_tabela_id_local_key`,
+    // Índice para registros vindos de filiais (filial_id sempre preenchido)
+    `CREATE UNIQUE INDEX IF NOT EXISTS srv_id_map_filial_tabela_id_local_key ON ${schema}.srv_id_map (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL`,
+    // Índice para registros criados pela web (filial_id NULL — financeiro, etc.)
+    `CREATE UNIQUE INDEX IF NOT EXISTS srv_id_map_web_tabela_id_local_key ON ${schema}.srv_id_map (tabela, id_local) WHERE filial_id IS NULL`,
     `CREATE TABLE IF NOT EXISTS ${schema}.financeiro_contas_receber (
       id               SERIAL PRIMARY KEY,
       descricao        TEXT NOT NULL,
