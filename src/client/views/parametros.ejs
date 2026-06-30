@@ -200,6 +200,7 @@
           OBSERVACOES: document.getElementById('edit-observacoes').value,
         })
       });
+      if (r.status === 401) { window.location.href = '/login'; return; }
       var d = await r.json();
       if (d.ok) {
         var tr = tbody.querySelector('tr[data-id="' + idAtual + '"]');

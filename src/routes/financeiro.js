@@ -3,6 +3,7 @@ const router       = express.Router();
 const { pool, withTenantConnection, query } = require('../db');
 const authJwt      = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
+const { registrarAuditLog } = require('./resources/helpers');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))
@@ -160,6 +161,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
        status || 'pendente', parseInt(forma_pagamento) || null, parcela || 1,
        observacao || null, id_loja || null]
     );
+    registrarAuditLog(req, s, 'A_RECEBER', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -177,7 +179,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
   try {
     // Impede reativação de registro cancelado
     const { rows: [atual] } = await pool.query(
-      `SELECT status FROM ${s}.a_receber WHERE srv_id = $1`, [id]
+      `SELECT * FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
     if (atual.status === 'cancelado' && status && status !== 'cancelado') {
@@ -217,6 +219,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
        parcela || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    registrarAuditLog(req, s, 'A_RECEBER', 'UPDATE', String(id), req.body, atual);
 
     // Quando uma CR de pedido é marcada como recebida, sincroniza com PEDIDOS_PARCELAS_PAGAMENTOS
     if (r && r.status === 'recebido' && r.observacao) {
@@ -259,10 +262,12 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guard, async (req, re
   const s  = req.params.schema;
   const id = parseInt(req.params.id);
   try {
-    const { rowCount } = await pool.query(
-      `DELETE FROM ${s}.a_receber WHERE srv_id = $1`, [id]
+    const { rows: [antes] } = await pool.query(
+      `SELECT * FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
-    if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (!antes) return res.status(404).json({ erro: 'Registro não encontrado' });
+    await pool.query(`DELETE FROM ${s}.a_receber WHERE srv_id = $1`, [id]);
+    registrarAuditLog(req, s, 'A_RECEBER', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -349,6 +354,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
        data_pagamento || null, status || 'pendente', forma_pagamento || null,
        parcela || 1, total_parcelas || 1, observacao || null, id_loja || null]
     );
+    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -366,7 +372,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
   try {
     // Impede reativação de registro cancelado
     const { rows: [atual] } = await pool.query(
-      `SELECT status FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
+      `SELECT * FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
     if (atual.status === 'cancelado' && status && status !== 'cancelado') {
@@ -394,6 +400,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
        observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'UPDATE', String(id), req.body, atual);
     res.json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -406,10 +413,12 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res)
   const s  = req.params.schema;
   const id = parseInt(req.params.id);
   try {
-    const { rowCount } = await pool.query(
-      `DELETE FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
+    const { rows: [antes] } = await pool.query(
+      `SELECT * FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
     );
-    if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (!antes) return res.status(404).json({ erro: 'Registro não encontrado' });
+    await pool.query(`DELETE FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]);
+    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -439,7 +448,7 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
         SUM(CASE WHEN TIPO IN ('E','ENTRADA') THEN COALESCE(VALOR,0) ELSE 0 END) AS entradas,
         SUM(CASE WHEN TIPO IN ('S','SAIDA','SAÍDA') THEN COALESCE(VALOR,0) ELSE 0 END) AS saidas
       FROM ${s}.MOV_CAIXA
-      WHERE DATA_MOV >= '${mes}-01' AND DATA_MOV < ('${mes}-01'::DATE + INTERVAL '1 month')
+      WHERE DATA_MOV::DATE >= '${mes}-01'::DATE AND DATA_MOV::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
         ${filtroLoja !== null && !isNaN(filtroLoja) ? `AND ID_LOJA = ${filtroLoja}` : ''}
       GROUP BY DATA_MOV::DATE
     ` : '';
@@ -447,15 +456,15 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
     const { rows } = await pool.query(`
       WITH base AS (
         SELECT
-          data_recebimento AS data,
+          data_realizado::DATE AS data,
           SUM(valor) AS entradas,
           0::NUMERIC AS saidas
-        FROM ${s}.financeiro_contas_receber
-        WHERE status = 'recebido'
-          AND data_recebimento >= '${mes}-01'
-          AND data_recebimento < ('${mes}-01'::DATE + INTERVAL '1 month')
+        FROM ${s}.a_receber
+        WHERE LOWER(COALESCE(status::text,'')) IN ('recebido','recebida','realizada','realizado')
+          AND data_realizado::DATE >= '${mes}-01'::DATE
+          AND data_realizado::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
           ${lojaWhereCR}
-        GROUP BY data_recebimento
+        GROUP BY data_realizado::DATE
 
         UNION ALL
 

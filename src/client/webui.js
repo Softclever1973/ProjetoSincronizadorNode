@@ -363,8 +363,8 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     if (['/login', '/logout'].includes(req.path)) return next();
     const sess = _getSession(req);
     if (!sess) {
-      // Chamadas de API/SSE retornam 401 em vez de redirect (evita loop no JS)
-      if (req.path.startsWith('/api/') || req.path === '/eventos') {
+      // POST/PATCH/DELETE são endpoints JSON — retorna 401 em vez de redirect HTML
+      if (req.path.startsWith('/api/') || req.path === '/eventos' || req.method !== 'GET') {
         return res.status(401).json({ error: 'não autenticado' });
       }
       return res.redirect('/login');

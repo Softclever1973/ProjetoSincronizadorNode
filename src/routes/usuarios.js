@@ -4,6 +4,7 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query, execute } = require('../db');
 const authJwt  = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
+const { registrarAuditLog } = require('./resources/helpers');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 const PODE_CRIAR    = { dono: ['gerente', 'vendedor'], gerente: ['vendedor'] };
@@ -177,6 +178,7 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
         'INSERT INTO public.usuarios_empresas (id_usuario, schema_name, role, id_loja, id_vendedor) VALUES ($1,$2,$3,$4,$5)',
         [id, schema, role, id_loja ?? null, idVendedorFinal]
       );
+      registrarAuditLog(req, schema, 'USUARIOS', 'INSERT', String(id), { email, role, id_loja: id_loja ?? null, vinculo: 'existente' }, null);
       return res.status(201).json({ ok: true, id, vinculo: 'existente', id_vendedor: idVendedorFinal });
     }
 
@@ -192,6 +194,7 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
       'INSERT INTO public.usuarios_empresas (id_usuario, schema_name, role, id_loja, id_vendedor) VALUES ($1,$2,$3,$4,$5)',
       [id, schema, role, id_loja ?? null, idVendedorFinal]
     );
+    registrarAuditLog(req, schema, 'USUARIOS', 'INSERT', String(id), { nome: nome?.trim(), email, role, id_loja: id_loja ?? null, vinculo: 'novo' }, null);
 
     res.status(201).json({ ok: true, id, vinculo: 'novo', id_vendedor: idVendedorFinal });
   } catch (e) {
@@ -227,6 +230,7 @@ router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireRole('g
       return res.status(403).json({ erro: `você não pode alterar o status de um ${targetRole}` });
 
     await pool.query('UPDATE public.usuarios SET ativo = $1 WHERE id = $2', [ativo, id]);
+    registrarAuditLog(req, schema, 'USUARIOS', 'UPDATE', String(id), { ativo }, { role: targetRole });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -300,6 +304,8 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
       `UPDATE public.usuarios SET ${sets.join(', ')} WHERE id = $${i}`,
       vals
     );
+    const dadosAntes = (nome !== undefined || email !== undefined) ? atual?.rows[0] ?? null : null;
+    registrarAuditLog(req, schema, 'USUARIOS', 'UPDATE', String(id), { nome, email, senhaAlterada: !!senha }, dadosAntes);
     res.json({ ok: true });
   } catch (e) {
     if (e.constraint === 'usuarios_email_key' || e.code === '23505')
@@ -340,6 +346,7 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('do
     );
     if (result.rowCount === 0)
       return res.status(404).json({ erro: 'usuário não encontrado neste schema' });
+    registrarAuditLog(req, schema, 'USUARIOS', 'UPDATE', String(id), { role, id_loja: id_loja ?? null }, alvo.rows[0]);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
