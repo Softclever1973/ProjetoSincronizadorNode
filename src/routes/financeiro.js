@@ -3,7 +3,7 @@ const router       = express.Router();
 const { pool, withTenantConnection, query } = require('../db');
 const authJwt      = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
-const { registrarAuditLog } = require('./resources/helpers');
+const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))
@@ -205,10 +205,10 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          vencimento      = COALESCE($4, vencimento),
          data_realizado       = $5,
          status               = COALESCE($6, status),
-         id_forma_de_pagamento = $7,
+         id_forma_de_pagamento = COALESCE($7, id_forma_de_pagamento),
          parcela              = COALESCE($8, parcela),
          observacao           = COALESCE($9, observacao),
-         id_loja              = $10
+         id_loja              = COALESCE($10, id_loja)
        WHERE srv_id = $11
        RETURNING
          srv_id AS id, descricao, valor,
@@ -506,70 +506,21 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
 });
 
 // ── POST /api/:schema/financeiro/parcelas-pedido ─────────────────────────────
-// Cria registros em A_RECEBER a partir das parcelas de um pedido.
+// Gera as A_RECEBER pendentes de um pedido a partir de PEDIDOS_PARCELAS_PAGAMENTOS.
+// Só cria algo se o pedido já estiver STATUS = 'R' (Realizado) — ver
+// gerarContasReceberDoPedido() em resources/helpers.js. Chamado após gerar as
+// parcelas no modal de Pagamento; se o pedido ainda não foi realizado, é um no-op
+// seguro (o gate real acontece na transição de STATUS para 'R').
 // Acessível a qualquer usuário autenticado (sem restrição de role).
 
 router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (req, res) => {
   const s = req.params.schema;
-  const { id_pedido, parcelas } = req.body;
-  if (!id_pedido || !Array.isArray(parcelas) || parcelas.length === 0)
-    return res.status(400).json({ erro: 'id_pedido e parcelas são obrigatórios' });
+  const { id_pedido } = req.body;
+  if (!id_pedido)
+    return res.status(400).json({ erro: 'id_pedido é obrigatório' });
   try {
-    const { rows: pedRows } = await pool.query(
-      `SELECT id_cliente, nome_cliente, id_loja FROM ${s}.pedidos WHERE id_pedido = $1 LIMIT 1`,
-      [id_pedido]
-    );
-    const ped = pedRows[0] || {};
-
-    let id_cliente_srv = null;
-    if (ped.id_cliente) {
-      const { rows: c } = await pool.query(
-        `SELECT srv_id FROM ${s}.clientes WHERE id_cliente = $1 LIMIT 1`,
-        [ped.id_cliente]
-      );
-      id_cliente_srv = c[0]?.srv_id ?? null;
-    }
-
-    await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
-    await pool.query(`
-      SELECT setval('${s}.seq_srv_id_a_receber',
-        GREATEST(
-          (SELECT last_value FROM ${s}.seq_srv_id_a_receber),
-          (SELECT COALESCE(MAX(srv_id), 0) FROM ${s}.a_receber)
-        )
-      )
-    `);
-
-    const criados = [];
-    for (const p of parcelas) {
-      const obs = `pedido:${id_pedido}:${p.parcela}`;
-      const existing = await pool.query(
-        `SELECT srv_id FROM ${s}.a_receber WHERE observacao = $1 LIMIT 1`, [obs]
-      );
-      if (existing.rows.length > 0) continue;
-
-      const { rows: [{ next_id }] } = await pool.query(
-        `SELECT nextval('${s}.seq_srv_id_a_receber') AS next_id`
-      );
-      await pool.query(
-        `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
-         VALUES ('A_RECEBER', $1, $2) ON CONFLICT (tabela, id_local) WHERE filial_id IS NULL DO NOTHING`,
-        [`web:${next_id}`, next_id]
-      );
-      const desc = `Pedido #${id_pedido} - Parcela ${p.parcela}`;
-      const { rows: [r] } = await pool.query(
-        `INSERT INTO ${s}.a_receber
-           (srv_id, descricao, id_cliente, valor, vencimento, status,
-            id_forma_de_pagamento, parcela, observacao, id_loja)
-         VALUES ($1,$2,$3,$4,$5,'pendente',$6,$7,$8,$9)
-         RETURNING srv_id AS id, descricao, valor, vencimento AS data_vencimento, status, parcela`,
-        [next_id, desc, id_cliente_srv, p.valor, p.data_vencimento,
-         p.id_forma_de_pagamento ? Number(p.id_forma_de_pagamento) : null,
-         p.parcela, obs, ped.id_loja || null]
-      );
-      if (r) criados.push(r);
-    }
-    res.status(201).json({ criados });
+    const resultado = await gerarContasReceberDoPedido(s, id_pedido);
+    res.status(201).json(resultado);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

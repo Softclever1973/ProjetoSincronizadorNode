@@ -3,7 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
-const { registrarAuditLog } = require('./resources/helpers');
+const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
 
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
@@ -273,6 +273,16 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
                    LIMIT 50`;
 
       const registros = await query(db, sql, params);
+
+      // A_RECEBER: o Sirius/Firebird espera STATUS com a primeira letra maiúscula
+      // (ex.: "Pendente"), mas é gravado em minúsculo no Postgres (ver helpers.js).
+      if (nomeTabela === 'A_RECEBER') {
+        for (const r of registros) {
+          if (typeof r.STATUS === 'string' && r.STATUS.length > 0) {
+            r.STATUS = r.STATUS.charAt(0).toUpperCase() + r.STATUS.slice(1);
+          }
+        }
+      }
 
       return registros;
     });
@@ -770,6 +780,20 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
               registro['VALOR'] ?? null, vencimento, dataRealizado,
               status, formaPagamento, parcela, totalParcelas, observacao, idLoja,
             ]).catch(e => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e.message}`));
+          }
+        }
+
+        if (nomeTabela === 'PEDIDOS') {
+          const statusAntes = atual[0]?.STATUS ?? null;
+          const statusNovo  = registro['STATUS'] ?? null;
+          const idPedido    = registro['ID_PEDIDO'];
+          // Pedido virou Realizado no Sirius/Firebird — gera as A_RECEBER das parcelas
+          // já cadastradas (fire-and-forget). Pagamento não é pré-requisito para
+          // "Realizado": ver gerarContasReceberDoPedido() em resources/helpers.js.
+          if (statusNovo === 'R' && statusAntes !== 'R' && idPedido != null) {
+            gerarContasReceberDoPedido(req.schemaName, idPedido).catch(e =>
+              console.warn(`[PEDIDOS] WARN geração de A_RECEBER ao realizar: ${e.message}`)
+            );
           }
         }
 

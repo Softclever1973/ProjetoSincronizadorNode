@@ -11,7 +11,7 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
-const { colunasTabela, resolveIdLoja, registrarAuditLog }   = require('./helpers');
+const { colunasTabela, resolveIdLoja, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
 const { getCurrentTime } = require('../../services/timeService');
 
 /**
@@ -484,6 +484,14 @@ async function handleSave(req, res, forceUpdate) {
     // Audit log universal (fire-and-forget)
     const pkStr = pks.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p.toUpperCase())]).join('|');
     registrarAuditLog(req, schema, tabela, isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, dadosAntes);
+
+    // Pedido virou Realizado — gera as A_RECEBER das parcelas já cadastradas (fire-and-forget).
+    // Pagamento não é pré-requisito para "Realizado": ver gerarContasReceberDoPedido().
+    if (tabela.toUpperCase() === 'PEDIDOS' && registro.STATUS === 'R' && dadosAntes?.STATUS !== 'R') {
+      gerarContasReceberDoPedido(schema, registro.ID_PEDIDO).catch(e =>
+        console.error('[CRUD-pedidoRealizado] Falha ao gerar A_RECEBER:', e.message)
+      );
+    }
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
