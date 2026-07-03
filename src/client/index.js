@@ -132,6 +132,7 @@ async function main() {
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
   const { atualizarRegime, atualizarParametros } = require('./http');
+  const { paramsSyncMap } = require('./paramsSyncMap');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./tabelas');
@@ -147,7 +148,7 @@ async function main() {
   const PORTA_WEBUI = 3001;
 
   let rodando = false;
-  const contextoSync = { baseURI: null, idLoja: null, idPDV: null };
+  const contextoSync = { baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {} };
 
   function log(msg) {
     const hora = new Date().toLocaleTimeString('pt-BR');
@@ -187,19 +188,31 @@ async function main() {
       }
       if (baseURI) {
         try {
-          const paramsSyncMap = [
-            { fbId: 67,    chave: 'utilizar_codigo_interno' },
-            { fbId: 122,   chave: 'codigo_interno_unico'     },
-            { fbId: 71,    chave: 'venda_saldo_negativo'     },
-            { fbId: 45051, chave: 'modalidade_frete'         },
-          ];
           const parametros = {};
           for (const { fbId, chave } of paramsSyncMap) {
             const fbVal = (await getParam(db, fbId).catch(() => '')) || null;
             if (fbVal) parametros[chave] = fbVal;
           }
           if (Object.keys(parametros).length) {
-            atualizarParametros(baseURI, parametros).catch(() => {});
+            try {
+              await atualizarParametros(baseURI, parametros);
+              const agora = new Date();
+              for (const [chave, valor] of Object.entries(parametros)) {
+                const anterior = contextoSync.parametrosSincronizados[chave];
+                if (anterior?.valor !== valor) {
+                  log(`[Parametros] '${chave}' sincronizado com o servidor: ${valor}`);
+                }
+                contextoSync.parametrosSincronizados[chave] = { valor, sincronizadoEm: agora, status: 'ok' };
+              }
+            } catch (e) {
+              for (const chave of Object.keys(parametros)) {
+                contextoSync.parametrosSincronizados[chave] = {
+                  ...contextoSync.parametrosSincronizados[chave],
+                  status: 'erro', erro: e.message, tentadoEm: new Date(),
+                };
+              }
+              log(`[Parametros] falha ao enviar parametros ao servidor: ${e.message}`);
+            }
           }
         } catch (e) {
           log(`[Parametros] erro ao sincronizar parametros: ${e.message}`);

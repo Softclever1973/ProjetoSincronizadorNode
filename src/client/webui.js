@@ -11,6 +11,7 @@ const { getUltimaAtualizacao } = require('./cursor');
 const TABELAS = require('./tabelas');
 const { lerConfig, salvarConfig, defaultAtivo } = require('./tabelasConfig');
 const { gerarNovoPK: utilGerarPK } = require('./db-utils');
+const { paramsSyncMap } = require('./paramsSyncMap');
 
 const TOKEN = process.env.SYNC_TOKEN;
 
@@ -1258,7 +1259,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   app.get('/parametros', async (_req, res) => {
     let db;
     try { db = await getConnection(); } catch (e) {
-      return res.render('parametros', { rows: [], error: `Firebird indisponível: ${e.message}` });
+      return res.render('parametros', { rows: [], error: `Firebird indisponível: ${e.message}`, sincronizados: {} });
     }
     try {
       // OBSERVACOES é BLOB SUB_TYPE 1; db.query() comita a tx antes de retornar,
@@ -1270,9 +1271,14 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
          FROM PARAMETROS ORDER BY ID_PARAMETRO`
       );
       const normalizado = rows.map(r => normalizarBlobs(r));
-      res.render('parametros', { rows: normalizado, error: null });
+      // fbId → status de sincronização com o servidor (populado pelo ciclo em index.js)
+      const sincronizados = {};
+      for (const { fbId, chave } of paramsSyncMap) {
+        sincronizados[fbId] = { chave, ...(contexto.parametrosSincronizados?.[chave] || {}) };
+      }
+      res.render('parametros', { rows: normalizado, error: null, sincronizados });
     } catch (e) {
-      res.render('parametros', { rows: [], error: `Erro ao ler parâmetros: ${e.message}` });
+      res.render('parametros', { rows: [], error: `Erro ao ler parâmetros: ${e.message}`, sincronizados: {} });
     } finally {
       await closeConnection(db);
     }

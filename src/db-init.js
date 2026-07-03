@@ -135,6 +135,9 @@ function ddlTenant(schema) {
     `INSERT INTO ${schema}.sync_config (chave, valor)
  VALUES ('modalidade_frete', NULL)
  ON CONFLICT (chave) DO NOTHING`,
+    `INSERT INTO ${schema}.sync_config (chave, valor)
+ VALUES ('forma_preenchimento_pedido', 'Pela rotina específica')
+ ON CONFLICT (chave) DO NOTHING`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (
       id        SERIAL  PRIMARY KEY,

@@ -19,8 +19,13 @@
   #tbl-param .col-par  { width:160px; }
   #tbl-param .col-obs  { }
   #tbl-param .col-acao { width:88px; text-align:center; }
+  #tbl-param .col-sinc { width:170px; }
   .btn-editar { padding:5px 14px; font-size:12px; border:1px solid var(--color-primary); border-radius:var(--radius-sm); background:white; color:var(--color-primary); cursor:pointer; font-family:var(--font-sans); white-space:nowrap; }
   .btn-editar:hover { background:var(--color-primary); color:white; }
+  .badge-sinc { display:inline-block; padding:2px 8px; border-radius:10px; font-size:11px; font-weight:600; white-space:nowrap; }
+  .badge-sinc.ok       { background:#dcfce7; color:#166534; }
+  .badge-sinc.erro     { background:#fee2e2; color:#991b1b; }
+  .badge-sinc.aguardando { background:#f3f4f6; color:#6b7280; }
 </style>
 
 <h1>Parâmetros do Sistema</h1>
@@ -49,11 +54,14 @@
         <th class="sortable col-desc" data-col="2" data-type="str">Descrição <span class="sort-icon">↕</span></th>
         <th class="sortable col-par"  data-col="3" data-type="str">Parâmetro <span class="sort-icon">↕</span></th>
         <th class="col-obs">Observações</th>
+        <th class="col-sinc">Sincronização Web</th>
         <th class="col-acao">Ação</th>
       </tr>
     </thead>
     <tbody id="tbl-body">
-      <% rows.forEach(function(r) { %>
+      <% rows.forEach(function(r) {
+        var sinc = sincronizados[r.ID_PARAMETRO];
+      %>
       <tr data-id="<%= r.ID_PARAMETRO %>"
           data-search="<%= [r.ID_PARAMETRO, r.NOME_DA_TABELA, r.DESCRICAO, r.PARAMETRO, r.OBSERVACOES].join(' ').toLowerCase() %>">
         <td class="col-id" style="font-weight:600;color:var(--color-text-secondary)"><%= r.ID_PARAMETRO %></td>
@@ -61,6 +69,17 @@
         <td class="col-desc"><%= r.DESCRICAO ?? '—' %></td>
         <td class="col-par" style="font-family:monospace;font-size:12px"><%= r.PARAMETRO ?? '' %></td>
         <td class="col-obs" style="color:var(--color-text-muted);font-size:12px"><%= r.OBSERVACOES ?? '' %></td>
+        <td class="col-sinc">
+          <% if (!sinc) { %>
+            <span style="color:var(--color-text-muted)">—</span>
+          <% } else if (sinc.status === 'ok') { %>
+            <span class="badge-sinc ok" title="Valor enviado: <%= sinc.valor ?? '' %>">✓ Sincronizado (<%= sinc.sincronizadoEm ? sinc.sincronizadoEm.toLocaleTimeString('pt-BR') : '' %>)</span>
+          <% } else if (sinc.status === 'erro') { %>
+            <span class="badge-sinc erro" title="<%= sinc.erro ?? '' %>">✗ Falha ao sincronizar</span>
+          <% } else { %>
+            <span class="badge-sinc aguardando">Aguardando 1ª sincronização</span>
+          <% } %>
+        </td>
         <td class="col-acao">
           <button class="btn-editar"
             data-id="<%= r.ID_PARAMETRO %>"
