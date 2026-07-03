@@ -221,8 +221,8 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     registrarAuditLog(req, s, 'A_RECEBER', 'UPDATE', String(id), req.body, atual);
 
-    // Quando uma CR de pedido é marcada como recebida, sincroniza com PEDIDOS_PARCELAS_PAGAMENTOS
-    if (r && r.status === 'recebido' && r.observacao) {
+    // Sincroniza status de CR de pedido com PEDIDOS_PARCELAS_PAGAMENTOS (em ambas as direções)
+    if (r && r.observacao) {
       const match = r.observacao.match(/^pedido:(\d+):(\d+)$/);
       if (match) {
         const idPedido = parseInt(match[1]);
@@ -231,17 +231,25 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
           await pool.query(
             `ALTER TABLE ${s}.pedidos_parcelas_pagamentos ADD COLUMN IF NOT EXISTS status TEXT`
           );
-          await pool.query(
-            `UPDATE ${s}.pedidos_parcelas_pagamentos SET status = 'R' WHERE id_pedido = $1 AND parcela = $2`,
-            [idPedido, parcela]
-          );
-          const { rows: parcs } = await pool.query(
-            `SELECT status FROM ${s}.pedidos_parcelas_pagamentos WHERE id_pedido = $1`,
-            [idPedido]
-          );
-          if (parcs.length > 0 && parcs.every(p => p.status === 'R')) {
+          if (r.status === 'recebido') {
             await pool.query(
-              `UPDATE ${s}.pedidos SET status = 'R' WHERE id_pedido = $1`, [idPedido]
+              `UPDATE ${s}.pedidos_parcelas_pagamentos SET status = 'R' WHERE id_pedido = $1 AND parcela = $2`,
+              [idPedido, parcela]
+            );
+            const { rows: parcs } = await pool.query(
+              `SELECT status FROM ${s}.pedidos_parcelas_pagamentos WHERE id_pedido = $1`,
+              [idPedido]
+            );
+            if (parcs.length > 0 && parcs.every(p => p.status === 'R')) {
+              await pool.query(
+                `UPDATE ${s}.pedidos SET status = 'R' WHERE id_pedido = $1`, [idPedido]
+              );
+            }
+          } else {
+            // Voltou para pendente (ou foi cancelada) — desfaz a marca de "parcela paga" no pedido
+            await pool.query(
+              `UPDATE ${s}.pedidos_parcelas_pagamentos SET status = NULL WHERE id_pedido = $1 AND parcela = $2`,
+              [idPedido, parcela]
             );
           }
         } catch (syncErr) {
