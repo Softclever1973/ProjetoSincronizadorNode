@@ -138,6 +138,8 @@ async function main() {
   const TABELAS = require('./tabelas');
   const { tabelaAtiva } = require('./tabelasConfig');
   const { salvarErro } = require('./erros');
+  const { verificarAtualizacao, aplicarAtualizacao, limparExeAntigo } = require('./updater');
+  const { version: VERSAO_ATUAL } = require('../../package.json');
 
   if (!process.env.SYNC_TOKEN) {
     encerrarComErro(new Error('SYNC_TOKEN não configurado no .env'));
@@ -146,9 +148,13 @@ async function main() {
 
   const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
   const PORTA_WEBUI = 3001;
+  const INTERVALO_ATUALIZACAO_MS = 12 * 60 * 60 * 1000; // 12h
 
   let rodando = false;
-  const contextoSync = { baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {} };
+  const contextoSync = {
+    baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
+    versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null,
+  };
 
   function log(msg) {
     const hora = new Date().toLocaleTimeString('pt-BR');
@@ -160,6 +166,38 @@ async function main() {
   if (isPackaged) {
     const { iniciarTray } = require('./tray');
     iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
+  }
+
+  // ── Auto-atualização (só faz sentido no .exe empacotado) ────────────────────
+  // Verifica a última release no GitHub; se houver versão mais nova, apenas avisa
+  // (tray + tela local /status) — a aplicação real só ocorre quando o usuário
+  // clicar em "Atualizar agora", via POST /atualizacao/aplicar (webui.js).
+  if (isPackaged) {
+    limparExeAntigo(process.execPath); // remove client.old.exe de uma atualização anterior
+
+    async function verificarAtualizacaoPeriodica() {
+      try {
+        const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
+        if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
+          log(`[Atualização] Nova versão disponível: v${disponivel.versao} (atual: v${VERSAO_ATUAL})`);
+        }
+        contextoSync.atualizacaoDisponivel = disponivel;
+      } catch (e) {
+        log(`[Atualização] falha ao verificar nova versão: ${e.message}`);
+      }
+    }
+
+    // Aplicado sob demanda pelo botão "Atualizar agora" na tela local — mantém o
+    // usuário no controle antes de substituir o executável em produção.
+    contextoSync._aplicarAtualizacao = async () => {
+      const info = contextoSync.atualizacaoDisponivel;
+      if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
+      const args = process.argv.slice(2).filter(a => a !== '--background');
+      await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath, args });
+    };
+
+    setTimeout(verificarAtualizacaoPeriodica, 15_000);
+    setInterval(verificarAtualizacaoPeriodica, INTERVALO_ATUALIZACAO_MS);
   }
 
   async function executarCiclo() {

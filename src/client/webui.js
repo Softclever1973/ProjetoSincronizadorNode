@@ -370,8 +370,9 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       }
       return res.redirect('/login');
     }
-    res.locals.usuarioLogado  = sess.usuario;
-    res.locals.abasPermitidas = ABAS_POR_ROLE[sess.role] || new Set();
+    res.locals.usuarioLogado        = sess.usuario;
+    res.locals.abasPermitidas       = ABAS_POR_ROLE[sess.role] || new Set();
+    res.locals.atualizacaoDisponivel = contexto.atualizacaoDisponivel || null;
     next();
   });
 
@@ -1302,6 +1303,19 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       res.status(500).json({ ok: false, message: e.message });
     } finally {
       await closeConnection(db);
+    }
+  });
+
+  // ── ATUALIZAÇÃO ──────────────────────────────────────────────────────────
+  app.post('/atualizacao/aplicar', async (_req, res) => {
+    if (typeof contexto._aplicarAtualizacao !== 'function') {
+      return res.status(400).json({ ok: false, message: 'Atualização automática não disponível neste modo de execução.' });
+    }
+    try {
+      await contexto._aplicarAtualizacao(); // baixa, substitui o .exe e relança — este processo se encerra em seguida
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
     }
   });
 

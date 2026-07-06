@@ -20,6 +20,13 @@ jobs:
       - name: Instalar dependências
         run: npm install
 
+      - name: Sincronizar version do package.json com a tag
+        shell: pwsh
+        run: |
+          $versao = "${{ github.ref_name }}" -replace '^v', ''
+          npm version $versao --no-git-tag-version --allow-same-version
+          Write-Host "package.json version definido para $versao"
+
       - name: Build server.exe
         run: npm run build:server
 

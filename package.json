@@ -1,6 +1,6 @@
 {
   "name": "projeto-sincronizador-node",
-  "version": "1.0.0",
+  "version": "4.4.5",
   "description": "Servidor de sincronização Firebird matriz/filiais",
   "type": "commonjs",
   "main": "src/server.js",
@@ -30,6 +30,7 @@
   "pkg": {
     "scripts": "src/**/*.js",
     "assets": [
+      "package.json",
       "src/client/views/**/*",
       "src/client/public/**/*",
       "src/client/assets/**/*",
