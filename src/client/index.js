@@ -149,7 +149,7 @@ async function main() {
 
   const INTERVALO_MS = parseInt((process.env.INTERVALO_MS || '30000').replace(/_/g, ''), 10);
   const PORTA_WEBUI = 3001;
-  const INTERVALO_ATUALIZACAO_MS = 60 * 60 * 1000; // 1h — bem abaixo do rate-limit da API do GitHub (60 req/hora)
+  const INTERVALO_ATUALIZACAO_MS = 10 * 60 * 1000; // 10min — 6 checagens/hora por cliente, bem abaixo do rate-limit (60/hora)
 
   let rodando = false;
   const contextoSync = {
