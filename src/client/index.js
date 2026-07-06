@@ -161,19 +161,15 @@ async function main() {
     console.log(`[${hora}] ${msg}`);
   }
 
-  // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
-  // (mostra quando empacotado — em modo background ou normal)
-  if (isPackaged) {
-    const { iniciarTray } = require('./tray');
-    iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
-  }
-
   // ── Auto-atualização (só faz sentido no .exe empacotado) ────────────────────
+  // Primeira coisa a rodar ao carregar — antes da tray e do ciclo de sincronização.
   // Verifica a última release no GitHub; se houver versão mais nova, apenas avisa
-  // (tray + tela local /status) — a aplicação real só ocorre quando o usuário
-  // clicar em "Atualizar agora", via POST /atualizacao/aplicar (webui.js).
+  // (banner na tela local) — a aplicação real só ocorre quando o usuário clicar
+  // em "Atualizar agora", via POST /atualizacao/aplicar (webui.js). Não bloqueia
+  // o restante da inicialização: roda em paralelo, então uma rede lenta/travada
+  // não atrasa a conexão com o Firebird nem a tray.
   if (isPackaged) {
-    limparExeAntigo(process.execPath); // remove client.old.exe de uma atualização anterior
+    limparExeAntigo(process.execPath); // remove client.old/.new.exe de uma atualização anterior
 
     async function verificarAtualizacaoPeriodica() {
       try {
@@ -196,8 +192,15 @@ async function main() {
       await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath, args });
     };
 
-    setTimeout(verificarAtualizacaoPeriodica, 15_000);
+    verificarAtualizacaoPeriodica(); // dispara imediatamente, sem esperar — não é aguardado (await) de propósito
     setInterval(verificarAtualizacaoPeriodica, INTERVALO_ATUALIZACAO_MS);
+  }
+
+  // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
+  // (mostra quando empacotado — em modo background ou normal)
+  if (isPackaged) {
+    const { iniciarTray } = require('./tray');
+    iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 
   async function executarCiclo() {
