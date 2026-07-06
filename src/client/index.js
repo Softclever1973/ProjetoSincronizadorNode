@@ -139,6 +139,7 @@ async function main() {
   const { tabelaAtiva } = require('./tabelasConfig');
   const { salvarErro } = require('./erros');
   const { verificarAtualizacao, aplicarAtualizacao, limparExeAntigo } = require('./updater');
+  const { notificarToast } = require('./notificar');
   const { version: VERSAO_ATUAL } = require('../../package.json');
 
   if (!process.env.SYNC_TOKEN) {
@@ -162,26 +163,31 @@ async function main() {
   }
 
   // ── Auto-atualização (só faz sentido no .exe empacotado) ────────────────────
-  // Primeira coisa a rodar ao carregar — antes da tray e do ciclo de sincronização.
-  // Verifica a última release no GitHub; se houver versão mais nova, apenas avisa
-  // (banner na tela local) — a aplicação real só ocorre quando o usuário clicar
-  // em "Atualizar agora", via POST /atualizacao/aplicar (webui.js). Não bloqueia
-  // o restante da inicialização: roda em paralelo, então uma rede lenta/travada
-  // não atrasa a conexão com o Firebird nem a tray.
+  // Verificada a cada ciclo de sincronização, como primeiro passo — mas só faz a
+  // chamada de rede de fato a cada INTERVALO_ATUALIZACAO_MS (12h); nos demais
+  // ciclos é um no-op instantâneo, para não estourar o rate-limit da API do
+  // GitHub. Se houver versão mais nova, avisa (log + notificação nativa do
+  // Windows + banner na tela local) — a aplicação real só ocorre quando o
+  // usuário clicar em "Atualizar agora", via POST /atualizacao/aplicar (webui.js).
+  let ultimaVerificacaoAtualizacao = 0;
+  async function verificarAtualizacaoSeNecessario() {
+    if (!isPackaged) return;
+    if (Date.now() - ultimaVerificacaoAtualizacao < INTERVALO_ATUALIZACAO_MS) return;
+    ultimaVerificacaoAtualizacao = Date.now();
+    try {
+      const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
+      if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
+        log(`[Atualização] Nova versão disponível: v${disponivel.versao} (atual: v${VERSAO_ATUAL})`);
+        notificarToast('Sincronizador', `Nova versão disponível: v${disponivel.versao}. Abra a tela local para atualizar.`);
+      }
+      contextoSync.atualizacaoDisponivel = disponivel;
+    } catch (e) {
+      log(`[Atualização] falha ao verificar nova versão: ${e.message}`);
+    }
+  }
+
   if (isPackaged) {
     limparExeAntigo(process.execPath); // remove client.old/.new.exe de uma atualização anterior
-
-    async function verificarAtualizacaoPeriodica() {
-      try {
-        const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
-        if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
-          log(`[Atualização] Nova versão disponível: v${disponivel.versao} (atual: v${VERSAO_ATUAL})`);
-        }
-        contextoSync.atualizacaoDisponivel = disponivel;
-      } catch (e) {
-        log(`[Atualização] falha ao verificar nova versão: ${e.message}`);
-      }
-    }
 
     // Aplicado sob demanda pelo botão "Atualizar agora" na tela local — mantém o
     // usuário no controle antes de substituir o executável em produção. Só troca
@@ -192,9 +198,6 @@ async function main() {
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
       await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath });
     };
-
-    verificarAtualizacaoPeriodica(); // dispara imediatamente, sem esperar — não é aguardado (await) de propósito
-    setInterval(verificarAtualizacaoPeriodica, INTERVALO_ATUALIZACAO_MS);
   }
 
   // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
@@ -207,6 +210,7 @@ async function main() {
   async function executarCiclo() {
     if (rodando) return;
     rodando = true;
+    await verificarAtualizacaoSeNecessario(); // primeiro passo do ciclo — ver comentário acima
     let db;
     try {
       db = await getConnection();
