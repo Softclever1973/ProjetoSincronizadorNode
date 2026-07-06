@@ -57,7 +57,7 @@
   var btn = document.getElementById('btn-atualizar-agora');
   if (!btn) return;
   btn.addEventListener('click', async function () {
-    if (!confirm('O cliente vai baixar a nova versão, se reiniciar e ficar indisponível por alguns segundos. Continuar?')) return;
+    if (!confirm('O cliente vai baixar a nova versão e se fechar em seguida. Você (ou a inicialização automática com o Windows, se configurada) precisará abri-lo de novo manualmente. Continuar?')) return;
     btn.disabled = true;
     btn.textContent = 'Atualizando…';
     try {
@@ -69,11 +69,11 @@
         btn.textContent = 'Atualizar agora';
         return;
       }
-      btn.textContent = 'Reiniciando…';
+      btn.textContent = 'Atualizado — fechando…';
       document.getElementById('banner-atualizacao').style.background = '#dcfce7';
     } catch (ex) {
-      // A conexão cai assim que o processo reinicia — é o comportamento esperado.
-      btn.textContent = 'Reiniciando…';
+      // A conexão cai assim que o processo se encerra — é o comportamento esperado.
+      btn.textContent = 'Atualizado — fechando…';
     }
   });
 })();

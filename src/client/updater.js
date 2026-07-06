@@ -2,7 +2,6 @@ const https = require('https');
 const fs = require('fs');
 const fsp = require('fs/promises');
 const path = require('path');
-const { spawn } = require('child_process');
 
 const REPO = 'Softclever1973/ProjetoSincronizadorNode';
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
@@ -111,16 +110,17 @@ async function renomearComRetry(origem, destino, tentativas = 6, atrasoMs = 400)
 let atualizando = false;
 
 /**
- * Baixa o novo client.exe e substitui o executável em execução.
- * O Windows não permite sobrescrever um .exe em execução, mas permite
- * renomeá-lo — por isso o atual é movido para um nome "old" antes de o
- * novo assumir o lugar. Nomes "old"/"new" incluem um sufixo único por
- * tentativa para nunca colidir com um arquivo de uma tentativa anterior
- * que ainda não pôde ser removido (ex.: ainda bloqueado pelo processo antigo).
- * O processo novo é lançado e o atual se encerra; os arquivos temporários
- * ficam para trás e são varridos por `limparExeAntigo` na próxima execução.
+ * Baixa o novo client.exe e substitui o executável em execução, depois encerra
+ * o processo sem relançá-lo — quem reabre é o usuário (ou a tray/"Iniciar com
+ * o Windows", se configurado). O Windows não permite sobrescrever um .exe em
+ * execução, mas permite renomeá-lo — por isso o atual é movido para um nome
+ * "old" antes de o novo assumir o lugar. Nomes "old"/"new" incluem um sufixo
+ * único por tentativa para nunca colidir com um arquivo de uma tentativa
+ * anterior que ainda não pôde ser removido (ex.: ainda bloqueado pelo processo
+ * antigo). Os arquivos temporários ficam para trás e são varridos por
+ * `limparExeAntigo` na próxima execução.
  */
-async function aplicarAtualizacao({ urlDownload, exePath, args }) {
+async function aplicarAtualizacao({ urlDownload, exePath }) {
   if (!urlDownload) throw new Error('Release não possui client.exe para download.');
   if (atualizando) throw new Error('Uma atualização já está em andamento.');
   atualizando = true;
@@ -142,7 +142,6 @@ async function aplicarAtualizacao({ urlDownload, exePath, args }) {
     await renomearComRetry(exePath, antigoPath);
     await renomearComRetry(novoPath, exePath);
 
-    spawn(exePath, args, { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
     setTimeout(() => process.exit(0), 500);
   } finally {
     atualizando = false;

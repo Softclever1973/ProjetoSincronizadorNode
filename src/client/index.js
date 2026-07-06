@@ -184,12 +184,13 @@ async function main() {
     }
 
     // Aplicado sob demanda pelo botão "Atualizar agora" na tela local — mantém o
-    // usuário no controle antes de substituir o executável em produção.
+    // usuário no controle antes de substituir o executável em produção. Só troca
+    // o arquivo e encerra; não relança sozinho — o usuário (ou a tray/"Iniciar
+    // com o Windows") é quem inicia o cliente atualizado novamente.
     contextoSync._aplicarAtualizacao = async () => {
       const info = contextoSync.atualizacaoDisponivel;
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
-      const args = process.argv.slice(2).filter(a => a !== '--background');
-      await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath, args });
+      await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath });
     };
 
     verificarAtualizacaoPeriodica(); // dispara imediatamente, sem esperar — não é aguardado (await) de propósito
