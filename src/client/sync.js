@@ -147,6 +147,11 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
   // deixar o registro inteiro falhar com "string right truncation".
   const valores = colunas.map(c => {
     let v = registro[c];
+    // Colunas CHAR(n) no PostgreSQL sempre vêm preenchidas com espaços à direita até
+    // completar o tamanho da coluna — remove esse preenchimento antes de comparar com
+    // o tamanho real da coluna no Firebird, senão o aviso de truncamento dispara (e o
+    // valor é cortado) mesmo quando o conteúdo de fato cabe perfeitamente.
+    if (typeof v === 'string') v = v.trimEnd();
     if (v === undefined || v === '') return null;
     const maxLen = tamanhos[c];
     if (typeof v === 'string' && maxLen != null && v.length > maxLen) {

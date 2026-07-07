@@ -269,8 +269,9 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
       return res.status(403).json({ erro: `Você não pode editar um usuário com papel "${targetRole}".` });
 
     // Valida nome ≠ email usando os valores finais (pode vir só um dos dois)
+    let atual = null;
     if (nome !== undefined || email !== undefined) {
-      const atual = await pool.query('SELECT nome, email FROM public.usuarios WHERE id = $1', [id]);
+      atual = await pool.query('SELECT nome, email FROM public.usuarios WHERE id = $1', [id]);
       const nomeAtual  = atual.rows[0]?.nome  || '';
       const emailAtual = atual.rows[0]?.email || '';
       const nomeFinal  = nome  !== undefined ? String(nome).trim()  : nomeAtual;

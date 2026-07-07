@@ -302,7 +302,10 @@ async function handleSave(req, res, forceUpdate) {
 
       // Garante colunas da web que podem não existir no schema Firebird sincronizado
       if (tabela.toUpperCase() === 'PEDIDOS') {
-        for (const [col, type] of [['OUTRAS_DESPESAS', 'NUMERIC(15,2)'], ['MODALIDADE_FRETE', 'VARCHAR(1)']]) {
+        // ENDERECO_ENTREGA_JSON é web-only (sem equivalente no Firebird): guarda o endereço
+        // de entrega completo. ENDERECO_ESCOLHIDO (sincronizado) é VARCHAR(8) na filial —
+        // só cabe o CEP, então não pode receber o JSON inteiro (ver _assemblarEndereco no frontend).
+        for (const [col, type] of [['OUTRAS_DESPESAS', 'NUMERIC(15,2)'], ['MODALIDADE_FRETE', 'VARCHAR(1)'], ['ENDERECO_ENTREGA_JSON', 'TEXT']]) {
           if (!allowed.has(col)) {
             await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
             allowed.add(col);
@@ -313,6 +316,47 @@ async function handleSave(req, res, forceUpdate) {
           await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS STATUS TEXT`).catch(() => {});
           allowed.add('STATUS');
         }
+      }
+
+      // Denormaliza NOME_VENDEDOR/DESCRICAO_PRODUTO/FRETE_EMITENTE_DESTINATARIO nas tabelas
+      // de pedido — colunas que existem no schema Firebird sincronizado mas o formulário
+      // web nunca preenchia (ou preenchia com outro nome), deixando-as NULL na filial
+      // mesmo com o dado de origem presente.
+      if (tabela.toUpperCase() === 'PEDIDOS') {
+        // O select do frontend chama-se MODALIDADE_FRETE, mas o campo real sincronizado
+        // com o Firebird é FRETE_EMITENTE_DESTINATARIO (VARCHAR(1), mesmos códigos S/E/D/T/R/P).
+        if (registro.MODALIDADE_FRETE && allowed.has('FRETE_EMITENTE_DESTINATARIO'))
+          registro.FRETE_EMITENTE_DESTINATARIO = registro.MODALIDADE_FRETE;
+
+        if (registro.ID_VENDEDOR && !registro.NOME_VENDEDOR && allowed.has('NOME_VENDEDOR')) {
+          const colsVend = await colunasTabela(db, schema, 'VENDEDORES').catch(() => []);
+          const nomeColVend = ['NOME_VENDEDOR', 'NOME', 'RAZAO_SOCIAL', 'DESCRICAO']
+            .find(c => colsVend.some(cc => cc.COLUMN_NAME === c));
+          if (nomeColVend) {
+            const [vend] = await query(db,
+              `SELECT ${nomeColVend} AS NOME FROM VENDEDORES WHERE ID_VENDEDOR = $1 LIMIT 1`,
+              [registro.ID_VENDEDOR]
+            ).catch(() => []);
+            if (vend?.NOME) registro.NOME_VENDEDOR = vend.NOME;
+          }
+        }
+      } else if (tabela.toUpperCase() === 'PEDIDOS_ITENS') {
+        if (registro.ID_PRODUTO && !registro.DESCRICAO_PRODUTO && allowed.has('DESCRICAO_PRODUTO')) {
+          const colsProd = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
+          const descCol = ['DESCRICAO_PRODUTO', 'DESCRICAO', 'NOME']
+            .find(c => colsProd.some(cc => cc.COLUMN_NAME === c));
+          if (descCol) {
+            const [prod] = await query(db,
+              `SELECT ${descCol} AS DESCRICAO FROM PRODUTOS WHERE ID_PRODUTO = $1 LIMIT 1`,
+              [registro.ID_PRODUTO]
+            ).catch(() => []);
+            if (prod?.DESCRICAO) registro.DESCRICAO_PRODUTO = prod.DESCRICAO;
+          }
+        }
+        // A web só trabalha com QUANTIDADE (não vende por metragem/peça fracionada) —
+        // QUANTIDADE_DE_PECAS espelha o mesmo valor para o ERP, que exibe os dois campos.
+        if (registro.QUANTIDADE != null && registro.QUANTIDADE_DE_PECAS == null && allowed.has('QUANTIDADE_DE_PECAS'))
+          registro.QUANTIDADE_DE_PECAS = registro.QUANTIDADE;
       }
 
       // Detecta se é INSERT ou UPDATE antes do upsert.
@@ -335,6 +379,31 @@ async function handleSave(req, res, forceUpdate) {
       if (update) {
         const before = await query(db, `SELECT * FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
         dadosAntes = before[0] ?? null;
+      }
+
+      // Transições de status de PEDIDOS: Realizado não pode ir direto para Cancelado
+      // (precisa voltar para Pendente antes) e nenhuma das duas transições (Realizado→Pendente
+      // ou Pendente→Cancelado) é permitida se alguma parcela já tiver pagamento registrado.
+      if (tabela.toUpperCase() === 'PEDIDOS' && update && dadosAntes &&
+          registro.STATUS && registro.STATUS !== dadosAntes.STATUS) {
+        const statusAntigo = dadosAntes.STATUS;
+        const statusNovo   = registro.STATUS;
+        if (statusAntigo === 'R' && statusNovo === 'C') {
+          throw Object.assign(
+            new Error('Pedido realizado não pode ser cancelado diretamente — volte para pendente primeiro.'),
+            { isValidation: true }
+          );
+        }
+        if ((statusAntigo === 'R' && statusNovo === 'P') || (statusAntigo === 'P' && statusNovo === 'C')) {
+          const pago = await query(db,
+            `SELECT 1 FROM PEDIDOS_PARCELAS_PAGAMENTOS WHERE ID_PEDIDO = $1 AND STATUS = 'R' LIMIT 1`,
+            [registro.ID_PEDIDO]
+          ).catch(() => []);
+          if (pago.length > 0) throw Object.assign(
+            new Error('Não é possível alterar o status: já existe pagamento registrado para este pedido.'),
+            { isValidation: true }
+          );
+        }
       }
 
       // Unicidade de CODIGO em PRODUTOS quando parâmetro 122 = 'S' no Firebird da filial
