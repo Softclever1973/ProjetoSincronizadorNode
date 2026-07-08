@@ -860,11 +860,33 @@ router.post('/AtualizarRegime', auth, async (req, res) => {
   }
 });
 
+// Chaves aceitas em POST /AtualizarParametros (push client -> servidor).
+// Mantenha em sincronia manual com src/client/paramsSyncMap.js (deploys separados).
+const CHAVES_ACEITAS = new Set([
+  'codigo_interno_unico', 'utilizar_codigo_interno', 'venda_saldo_negativo',
+  'modalidade_frete', 'forma_preenchimento_pedido',
+]);
+
+// Subconjunto de CHAVES_ACEITAS que deve reconciliar pro MESMO valor em todos
+// os PDVs/filiais de um schema (ver GET /BuscarParametros, consumido por
+// index.js do cliente): o servidor passa a mandar esse valor de volta pro
+// Firebird de cada PDV via setParam. 'modalidade_frete' fica de fora de
+// propósito — continua só leitura, cada PDV pode ter seu próprio valor.
+// Mantenha em sincronia manual com `global: true` em paramsSyncMap.js.
+const CHAVES_GLOBAIS = new Set([
+  'forma_preenchimento_pedido', 'venda_saldo_negativo',
+  'codigo_interno_unico', 'utilizar_codigo_interno',
+]);
+
 router.get('/BuscarParametros', auth, async (req, res) => {
   try {
+    const chaves = [...CHAVES_GLOBAIS];
+    const placeholders = chaves.map((_, i) => `$${i + 1}`).join(', ');
     const parametros = await withTenantConnection(req.schemaName, async (db) => {
-      const rows = await query(db, `SELECT chave, valor FROM sync_config WHERE chave IN ('codigo_interno_unico', 'utilizar_codigo_interno')`);
-      return Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR]));
+      const rows = await query(db, `SELECT chave, valor FROM sync_config WHERE chave IN (${placeholders})`, chaves);
+      // valor IS NULL vira chave ausente no JSON (não `null`) — o cliente usa
+      // "servidor === undefined" pra saber que o servidor ainda não tem valor.
+      return Object.fromEntries(rows.filter(r => r.VALOR !== null).map(r => [r.CHAVE, r.VALOR]));
     });
     res.json({ parametros });
   } catch (e) {
@@ -875,7 +897,6 @@ router.get('/BuscarParametros', auth, async (req, res) => {
 router.post('/AtualizarParametros', auth, async (req, res) => {
   const { parametros } = req.body || {};
   if (!parametros || typeof parametros !== 'object') return res.json({ ok: true });
-  const CHAVES_ACEITAS = new Set(['codigo_interno_unico', 'utilizar_codigo_interno', 'venda_saldo_negativo', 'modalidade_frete', 'forma_preenchimento_pedido']);
   const schema = req.schemaName;
   try {
     await withTenantConnection(schema, async (db) => {
