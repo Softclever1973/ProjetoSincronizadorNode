@@ -4,6 +4,10 @@ const { pool } = require('../db');
 const { initializeTenantSchema } = require('../db-init');
 const authJwt  = require('../middleware/authJwt');
 
+// O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
+// não aqui — a tabela VENDEDORES do schema recém-criado só existe depois do primeiro
+// sync do Firebird, que nunca já aconteceu no momento em que uma empresa é criada.
+
 router.get('/', authJwt, async (req, res) => {
   if (req.userSchemas.length === 0) return res.json([]);
 

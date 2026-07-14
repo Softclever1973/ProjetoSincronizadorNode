@@ -3,7 +3,7 @@
  * Extraídos de tabelas.js (monolítico) para facilitar reutilização e testes.
  */
 
-const { pool, query } = require('../../db');
+const { pool, query, execute, withTenantConnection } = require('../../db');
 const { COLS_DATA_PEDIDO } = require('./constants');
 
 /**
@@ -50,6 +50,44 @@ function resolveIdLoja(req, schema, { donoPodemFiltrar = false } = {}) {
     return Number.isInteger(parsed) ? parsed : null;
   }
   return null;
+}
+
+/**
+ * Resolve o nome de um vendedor (tabela VENDEDORES, sincronizada do Firebird) a partir
+ * do ID — tenta as colunas de nome mais comuns entre os schemas dos clientes, na ordem
+ * de preferência abaixo (nem todo schema tem exatamente as mesmas colunas).
+ *
+ * @param {import('pg').PoolClient} db
+ * @param {string} schema
+ * @param {number|string} idVendedor
+ * @returns {Promise<string|null>}
+ */
+async function resolverNomeVendedor(db, schema, idVendedor) {
+  if (idVendedor == null) return null;
+  const colsVend = await colunasTabela(db, schema, 'VENDEDORES').catch(() => []);
+  const nomeCol = ['NOME_VENDEDOR', 'NOME', 'RAZAO_SOCIAL', 'DESCRICAO']
+    .find(c => colsVend.some(cc => cc.COLUMN_NAME === c));
+  if (!nomeCol) return null;
+  const [vend] = await query(db,
+    `SELECT ${nomeCol} AS NOME FROM VENDEDORES WHERE ID_VENDEDOR = $1 LIMIT 1`,
+    [idVendedor]
+  ).catch(() => []);
+  return vend?.NOME ?? null;
+}
+
+/**
+ * Retorna true se o pedido informado está com STATUS = 'C' (Cancelado).
+ * Usado para bloquear qualquer edição de PEDIDOS_ITENS/PEDIDOS_PARCELAS_PAGAMENTOS
+ * depois do cancelamento — não só a transição de status do próprio PEDIDOS.
+ *
+ * @param {import('pg').PoolClient} db
+ * @param {number|string|null|undefined} idPedido
+ * @returns {Promise<boolean>}
+ */
+async function pedidoEstaCancelado(db, idPedido) {
+  if (idPedido == null) return false;
+  const [row] = await query(db, `SELECT STATUS FROM PEDIDOS WHERE ID_PEDIDO = $1 LIMIT 1`, [idPedido]).catch(() => []);
+  return row?.STATUS === 'C';
 }
 
 /**
@@ -261,9 +299,54 @@ async function gerarContasReceberDoPedido(schema, idPedido) {
   return { criados };
 }
 
+/**
+ * Cria um VENDEDORES "DONO" e vincula o usuário a ele (usuarios_empresas.id_vendedor),
+ * retornando o id_vendedor criado — para telas que exibem nome do vendedor (ex.:
+ * movimentações de estoque) mostrarem um nome consistente em vez do fallback
+ * "Web - <nome da conta>" quando quem lançou é o dono.
+ *
+ * Best-effort: só roda se a tabela VENDEDORES já existir no schema — um schema
+ * recém-criado só ganha essa tabela no primeiro sync do Firebird; criar uma
+ * versão mínima aqui faria pushes futuros do Firebird perderem colunas, já que
+ * sincronizacao.js filtra o registro pelas colunas já existentes no servidor.
+ * Nunca lança — retorna null se não for possível vincular agora.
+ *
+ * @param {string} schema
+ * @param {number} idUsuario
+ * @returns {Promise<number|null>}
+ */
+async function vincularVendedorDono(schema, idUsuario) {
+  try {
+    return await withTenantConnection(schema, async db => {
+      const cols = await colunasTabela(db, schema, 'VENDEDORES').catch(() => []);
+      if (cols.length === 0) return null; // tabela ainda não existe — nada a fazer
+
+      const [ins] = await query(db, `
+        INSERT INTO VENDEDORES (id_vendedor, nome, status, id_ultima_atualizacao_matriz)
+        VALUES ((SELECT COALESCE(MAX(id_vendedor::numeric), 0) + 1 FROM VENDEDORES), 'DONO', 'A',
+                nextval('${schema}.seq_atualizacao_matriz'))
+        RETURNING id_vendedor
+      `);
+      if (ins?.ID_VENDEDOR == null) return null;
+
+      await execute(db,
+        `UPDATE public.usuarios_empresas SET id_vendedor = $1 WHERE id_usuario = $2 AND schema_name = $3`,
+        [ins.ID_VENDEDOR, idUsuario, schema]
+      );
+      return Number(ins.ID_VENDEDOR);
+    });
+  } catch (e) {
+    console.error(`[vincularVendedorDono] falhou para ${schema}:`, e.message);
+    return null;
+  }
+}
+
 module.exports = {
   colunasTabela,
   resolveIdLoja,
+  resolverNomeVendedor,
+  vincularVendedorDono,
+  pedidoEstaCancelado,
   registrarAuditLog,
   buildNomeLojaExpr,
   dateExprFromCols,

@@ -104,7 +104,7 @@ const REGRAS_TABELA = Object.freeze({
     ],
   },
   CLIENTES: {
-    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'E_MAIL_DANFE'],
+    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'CONSUMIDOR_FINAL'],
     validacoes: [
       r => {
         const razao = String(campo(r, 'RAZAO_SOCIAL') ?? '').trim();

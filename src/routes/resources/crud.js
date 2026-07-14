@@ -11,7 +11,7 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
-const { colunasTabela, resolveIdLoja, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
+const { colunasTabela, resolveIdLoja, resolverNomeVendedor, pedidoEstaCancelado, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
 const { getCurrentTime } = require('../../services/timeService');
 
 /**
@@ -293,6 +293,16 @@ async function handleSave(req, res, forceUpdate) {
 
   try {
     const { isUpdate, dadosAntes, srvId } = await withTenantConnection(schema, async db => {
+      // Pedido cancelado trava itens e parcelas — insert ou update, não só transição
+      // de status do próprio PEDIDOS (checado mais abaixo, depois que dadosAntes existe).
+      if ((tabela.toUpperCase() === 'PEDIDOS_ITENS' || tabela.toUpperCase() === 'PEDIDOS_PARCELAS_PAGAMENTOS')
+          && await pedidoEstaCancelado(db, registro.ID_PEDIDO)) {
+        throw Object.assign(
+          new Error('Pedido cancelado — não é possível alterar itens ou parcelas de pagamento.'),
+          { isValidation: true }
+        );
+      }
+
       const serverCols = await query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
@@ -329,16 +339,19 @@ async function handleSave(req, res, forceUpdate) {
           registro.FRETE_EMITENTE_DESTINATARIO = registro.MODALIDADE_FRETE;
 
         if (registro.ID_VENDEDOR && !registro.NOME_VENDEDOR && allowed.has('NOME_VENDEDOR')) {
-          const colsVend = await colunasTabela(db, schema, 'VENDEDORES').catch(() => []);
-          const nomeColVend = ['NOME_VENDEDOR', 'NOME', 'RAZAO_SOCIAL', 'DESCRICAO']
-            .find(c => colsVend.some(cc => cc.COLUMN_NAME === c));
-          if (nomeColVend) {
-            const [vend] = await query(db,
-              `SELECT ${nomeColVend} AS NOME FROM VENDEDORES WHERE ID_VENDEDOR = $1 LIMIT 1`,
-              [registro.ID_VENDEDOR]
-            ).catch(() => []);
-            if (vend?.NOME) registro.NOME_VENDEDOR = vend.NOME;
-          }
+          const nomeVendedor = await resolverNomeVendedor(db, schema, registro.ID_VENDEDOR);
+          if (nomeVendedor) registro.NOME_VENDEDOR = nomeVendedor;
+        }
+      } else if (tabela.toUpperCase() === 'MOVIMENTACOES') {
+        // O frontend sempre manda "Web - <nome da conta>" em USUARIO (produtos-movimentacoes.js
+        // / produtos.js) — quando a conta tem um vendedor vinculado (usuarios_empresas.id_vendedor),
+        // prioriza o nome do vendedor sincronizado do Firebird, seguindo a mesma convenção dos
+        // registros criados pelo aplicativo desktop (nome puro, sem prefixo "Web -"). Contas sem
+        // vendedor vinculado (ex.: dono) mantêm o valor que o frontend já enviou.
+        const idVendedor = req.userVendedores?.[schema] ?? null;
+        if (idVendedor != null && allowed.has('USUARIO')) {
+          const nomeVendedor = await resolverNomeVendedor(db, schema, idVendedor);
+          if (nomeVendedor) registro.USUARIO = nomeVendedor;
         }
       } else if (tabela.toUpperCase() === 'PEDIDOS_ITENS') {
         if (registro.ID_PRODUTO && !registro.DESCRICAO_PRODUTO && allowed.has('DESCRICAO_PRODUTO')) {
@@ -379,6 +392,15 @@ async function handleSave(req, res, forceUpdate) {
       if (update) {
         const before = await query(db, `SELECT * FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
         dadosAntes = before[0] ?? null;
+      }
+
+      // Pedido cancelado trava qualquer edição, não só uma tentativa de mudar o status —
+      // não existe caminho de volta a partir de Cancelado.
+      if (tabela.toUpperCase() === 'PEDIDOS' && update && dadosAntes?.STATUS === 'C') {
+        throw Object.assign(
+          new Error('Pedido cancelado não pode ser editado.'),
+          { isValidation: true }
+        );
       }
 
       // Transições de status de PEDIDOS: Realizado não pode ir direto para Cancelado
@@ -590,7 +612,22 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('ger
       const whereStr = pks.map((p, i) => `${p.toUpperCase()} = $${i + 1}`).join(' AND ');
       const before   = await query(db, `SELECT * FROM ${tabela} WHERE ${whereStr} LIMIT 1`, pkValores);
       const snap     = before[0] ?? null;
-      const where    = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+
+      // Pedido cancelado trava exclusão do próprio pedido e de seus itens/parcelas —
+      // mesma regra de "não pode ser editado de jeito nenhum" aplicada no handleSave.
+      const tabelaUpper = tabela.toUpperCase();
+      if (tabelaUpper === 'PEDIDOS' && snap?.STATUS === 'C') {
+        throw Object.assign(new Error('Pedido cancelado não pode ser editado.'), { isValidation: true });
+      }
+      if ((tabelaUpper === 'PEDIDOS_ITENS' || tabelaUpper === 'PEDIDOS_PARCELAS_PAGAMENTOS')
+          && await pedidoEstaCancelado(db, snap?.ID_PEDIDO)) {
+        throw Object.assign(
+          new Error('Pedido cancelado — não é possível alterar itens ou parcelas de pagamento.'),
+          { isValidation: true }
+        );
+      }
+
+      const where = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
       await execute(db, `DELETE FROM ${tabela} WHERE ${where}`, pkValores);
       return snap;
     });
@@ -601,6 +638,7 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('ger
 
     res.json({ ok: true });
   } catch (e) {
+    if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `DELETE ${tabela}`);
   }
 });
