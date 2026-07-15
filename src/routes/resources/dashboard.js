@@ -97,7 +97,7 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requ
       const hasSF     = colsSF.length > 0;
       const hasAuxGen = colsAG.length > 0;
 
-      const idLojaF = resolveIdLoja(req, schema);
+      const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
 
       /* reutiliza buildWhere para aplicar o mesmo filtro de data/loja dos demais gráficos */
       const params = [];
@@ -171,7 +171,10 @@ router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRo
 router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
-  const idLojaF = null; // dono only — want all stores
+  // Só faz sentido comparar lojas quando não há filtro ativo — o frontend já para de
+  // chamar este endpoint quando o dono filtra por uma loja específica (ver faturamento.js),
+  // mas respeita a flag aqui também por consistência com os demais gráficos.
+  const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
 
   try {
     const result = await withTenantConnection(schema, async db => {

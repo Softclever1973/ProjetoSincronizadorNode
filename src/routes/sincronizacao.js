@@ -35,6 +35,19 @@ function inferirTipoPg(valor) {
 }
 
 /**
+ * Colunas que compõem a chave de negócio usada na constraint UNIQUE (uq_<tabela>_bk).
+ * Inclui ID_LOJA quando a tabela tem essa coluna — o ID local do Firebird (generator)
+ * só é único DENTRO de uma filial; cada filial tem seu próprio generator, então duas
+ * filiais podem gerar o mesmo id_local para registros diferentes. Sem ID_LOJA na chave,
+ * essa constraint rejeitaria como duplicata um push legítimo vindo de outra filial.
+ */
+function chaveNegocioTabela(pks, colunasDisponiveis) {
+  const chave = [...(Array.isArray(pks) ? pks : [pks])];
+  if (colunasDisponiveis.has('ID_LOJA') && !chave.includes('ID_LOJA')) chave.push('ID_LOJA');
+  return chave;
+}
+
+/**
  * Cria a tabela no schema do tenant usando os tipos inferidos do primeiro registro recebido.
  * Chamado quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente).
  */
@@ -56,9 +69,10 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
     );
     // Garante que as chaves de negócio do Firebird sejam únicas no servidor,
     // impedindo duplicatas caso o srv_id_map perca a entrada e o registro seja re-inserido.
-    if (pkSet.size > 0) {
+    const chaveNegocio = chaveNegocioTabela(pks, new Set(Object.keys(registro)));
+    if (chaveNegocio.length > 0) {
       await execute(db,
-        `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${[...pkSet].join(', ')})`
+        `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${chaveNegocio.join(', ')})`
       ).catch(e => { if (e.code !== '42710' && e.code !== '42P07') throw e; }); // 42710 = duplicate_object, 42P07 = índice de mesmo nome já existe
     }
   } else {
@@ -582,23 +596,57 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       }
 
-      // Migração one-time: adiciona UNIQUE nas chaves de negócio de tabelas já existentes
-      // que foram criadas antes desta versão do código (sem a constraint).
-      // Marcado em constraintsUqAdicionadas para não emitir DDL em cada push subsequente.
+      // Migração one-time: garante que a UNIQUE das chaves de negócio existe e está
+      // atualizada (com ID_LOJA, se a tabela tiver essa coluna) para tabelas já existentes.
+      // Tabelas criadas antes da correção do multi-filial têm a constraint só em (pks),
+      // sem ID_LOJA — isso rejeita como duplicata pushes legítimos de outra filial que
+      // gerou o mesmo id_local. Detecta essa constraint desatualizada e recria.
+      // Marcado em constraintsUqAdicionadas para não repetir a checagem a cada push.
       if (tabelaJaExistia && temSrvId && pks.length > 0) {
         const cqKey = `${req.schemaName}:${nomeTabela}`;
         if (!constraintsUqAdicionadas.has(cqKey)) {
           constraintsUqAdicionadas.add(cqKey);
-          await execute(db,
-            `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${pks.join(', ')})`
-          ).catch(e => {
-            if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
-            if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
-              console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${pks.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
-              return;
-            }
-            throw e;
-          });
+          const constraintName = `uq_${nomeTabela.toLowerCase()}_bk`;
+          const chaveNegocio = chaveNegocioTabela(pks, colunasServidor);
+
+          const colunasAtuais = await query(db, `
+            SELECT kcu.column_name AS "COLUNA"
+            FROM information_schema.table_constraints tc
+            JOIN information_schema.key_column_usage kcu
+              ON tc.constraint_name = kcu.constraint_name
+             AND tc.table_schema    = kcu.table_schema
+             AND tc.table_name      = kcu.table_name
+            WHERE tc.table_schema = lower($1) AND tc.table_name = lower($2) AND tc.constraint_name = $3
+          `, [req.schemaName, nomeTabela, constraintName]).catch(() => []);
+
+          const setAtual = new Set(colunasAtuais.map(r => (r.COLUNA || '').toUpperCase()));
+          const setEsperado = new Set(chaveNegocio.map(c => c.toUpperCase()));
+          const constraintDesatualizada = setAtual.size > 0 &&
+            (setAtual.size !== setEsperado.size || [...setEsperado].some(c => !setAtual.has(c)));
+
+          if (constraintDesatualizada) {
+            console.log(`[${req.schemaName}] ${nomeTabela}: atualizando ${constraintName} de (${[...setAtual].join(', ')}) para (${chaveNegocio.join(', ')})`);
+            await execute(db, `ALTER TABLE ${nomeTabela} DROP CONSTRAINT ${constraintName}`).catch(e => {
+              // 42704 = constraint não existe (corrida com outra instância) — inofensivo.
+              // Qualquer outro erro impede a correção e precisa aparecer no log.
+              if (e.code !== '42704') {
+                console.warn(`[${req.schemaName}] ${nomeTabela}: falha ao remover ${constraintName} antigo: ${e.message}`);
+              }
+            });
+          }
+
+          if (setAtual.size === 0 || constraintDesatualizada) {
+            await execute(db,
+              `ALTER TABLE ${nomeTabela} ADD CONSTRAINT ${constraintName} UNIQUE (${chaveNegocio.join(', ')})`
+            ).catch(e => {
+              if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
+              if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
+                console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${chaveNegocio.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
+                return;
+              }
+              throw e;
+            });
+          }
         }
       }
 
