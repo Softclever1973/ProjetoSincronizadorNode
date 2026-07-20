@@ -68,16 +68,16 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
     const registro = registros[0];
 
-    // Se o registro tem ID_LOJA mas está nulo, preenche com o ID da filial.
-    // Garante que registros criados localmente pelo Delphi (sem ID_LOJA explícito)
-    // sejam identificados corretamente no servidor.
+    // ID_LOJA nulo é preenchido com o ID da filial — garante que registros criados
+    // localmente pelo Delphi (sem ID_LOJA explícito) sejam identificados corretamente
+    // no servidor.
     if ((registro.ID_LOJA == null || registro.ID_LOJA === '') && idLoja) {
       registro.ID_LOJA = idLoja;
     }
 
-    // Traduz FKs: PK local → SRV_ID antes de enviar ao servidor.
-    // O servidor usa SRV_ID como referência global entre tenants; o Firebird local
-    // armazena o ID nativo (ex: MOVIMENTACOES.ID_PRODUTO = ID local de PRODUTOS).
+    // Traduz FKs de PK local pra SRV_ID antes de enviar — o servidor usa SRV_ID como
+    // referência global entre tenants, enquanto o Firebird local guarda o ID nativo
+    // (ex: MOVIMENTACOES.ID_PRODUTO = ID local de PRODUTOS).
     let registroParaEnviar = registro;
     let fkNaoResolvida = false;
     for (const fkRef of (configTabela.fks || [])) {
@@ -111,9 +111,8 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     }
     if (fkNaoResolvida) continue;
 
-    // Normaliza colunas declaradas como absolutas: o Firebird filial pode armazenar
-    // quantidades com sinal negativo (ex: Saídas em MOVIMENTACOES.QTDE = -5), mas o
-    // servidor usa apenas valores positivos — a direção é indicada por TP.MOV.
+    // colunasAbsolutas: Firebird filial pode guardar quantidade negativa (ex: Saídas
+    // em MOVIMENTACOES.QTDE = -5), mas o servidor só aceita positivo — direção vem de TP.MOV.
     for (const col of (configTabela.colunasAbsolutas || [])) {
       const val = registroParaEnviar[col];
       if (typeof val === 'number' && Number.isFinite(val) && val < 0) {
@@ -163,9 +162,9 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
           [nome, pkValor]
         );
         if (resultado.novoId) registrarEcho(nome, pkValor, resultado.novoId);
-        // Atualiza SYNC_VERSOES_SERVIDOR imediatamente após push bem-sucedido.
-        // Sem isso, um carga-parcial que re-enfileira este registro antes do próximo pull
-        // causaria um falso conflito (versaoConhecida < novoId do servidor).
+        // Atualiza SYNC_VERSOES_SERVIDOR logo após o push — sem isso, uma carga parcial
+        // que re-enfileira o registro antes do próximo pull causaria falso conflito
+        // (versaoConhecida < novoId).
         if (resultado.novoId) {
           await execute(db,
             `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
@@ -185,9 +184,9 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
             srvIdGravado = true;
           } catch (e) {
             log(`[${nome}] ERRO ao gravar SRV_ID local (${pkValor}): ${e.message} — re-enfileirando para retry`);
-            // Re-enfileira o registro para que o próximo ciclo tente novamente.
-            // Sem isso, o registro sai de SYNC_ALTERACOES_PENDENTES com SRV_ID=NULL
-            // no Firebird, e qualquer FK que dependa dele fica bloqueada indefinidamente.
+            // Re-enfileira para o próximo ciclo tentar de novo — sem isso o registro sai
+            // de SYNC_ALTERACOES_PENDENTES com SRV_ID=NULL no Firebird, travando qualquer
+            // FK dependente indefinidamente.
             await execute(db,
               `UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
                VALUES (?, ?, CURRENT_TIMESTAMP) MATCHING (NOME_TABELA, PK_VALOR)`,

@@ -102,9 +102,8 @@ async function getColunasExistentes(db, nomeTabela) {
   return existentes;
 }
 
-// Colunas que nunca devem ser gravadas na filial.
-// Inclui colunas de controle da matriz e colunas populadas por triggers locais
-// que usam generators independentes (sobrescrever causaria divergências de GEN).
+// Colunas que nunca devem ser gravadas na filial: controle da matriz + colunas geradas
+// por triggers locais com generator próprio (sobrescrever causaria divergência de GEN).
 const COLUNAS_SEMPRE_IGNORADAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ',
   'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -142,15 +141,14 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
   if (colunas.length === 0) return;
 
   const placeholders = colunas.map(() => '?').join(', ');
-  // Firebird rejeita string vazia em colunas numéricas/data — converte para null.
-  // Strings maiores que o CHAR/VARCHAR da coluna são truncadas (com aviso) em vez de
-  // deixar o registro inteiro falhar com "string right truncation".
+  // Firebird rejeita string vazia em colunas numéricas/data — converte para null. Strings
+  // maiores que o CHAR/VARCHAR são truncadas (com aviso) em vez de falhar o registro
+  // inteiro com "string right truncation".
   const valores = colunas.map(c => {
     let v = registro[c];
-    // Colunas CHAR(n) no PostgreSQL sempre vêm preenchidas com espaços à direita até
-    // completar o tamanho da coluna — remove esse preenchimento antes de comparar com
-    // o tamanho real da coluna no Firebird, senão o aviso de truncamento dispara (e o
-    // valor é cortado) mesmo quando o conteúdo de fato cabe perfeitamente.
+    // CHAR(n) no PostgreSQL vem preenchido com espaços até completar o tamanho — sem
+    // remover isso, o aviso de truncamento dispara (e corta o valor) mesmo quando o
+    // conteúdo cabe.
     if (typeof v === 'string') v = v.trimEnd();
     if (v === undefined || v === '') return null;
     const maxLen = tamanhos[c];
@@ -161,9 +159,8 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     return v;
   });
 
-  // MATCHING só pode referenciar colunas presentes no INSERT.
-  // Quando o PK é null (registro criado via web sem ID Firebird), ele é filtrado
-  // das colunas NOT NULL — nesse caso usa INSERT puro e deixa o trigger gerar o PK.
+  // MATCHING só referencia colunas presentes no INSERT. PK null (registro criado via web
+  // sem ID Firebird) é filtrado das NOT NULL — nesse caso é INSERT puro e o trigger gera o PK.
   const colsUpper    = new Set(colunas.map(c => c.toUpperCase()));
   const matchingPks  = pks.filter(p => colsUpper.has(p.toUpperCase()));
   const sql = matchingPks.length > 0
@@ -179,9 +176,7 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
 async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
-  // Se pkValor for um objeto/registro completo, extrai os valores das PKs.
-  // Se for uma string concatenada (comum em logs de delete), separa pelo delimitador.
-  // Se for um valor único, assume que a PK é simples.
+  // Aceita pkValor como objeto, string concatenada por '|' (logs de delete) ou valor único.
   let valores;
   if (pks.length > 1 && typeof pkValor === 'string' && pkValor.includes('|')) {
     valores = pkValor.split('|');
@@ -364,10 +359,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           continue;
         }
 
-        // Proteção contra overwrite de dado pré-existente no cliente:
-        // se nunca recebemos este registro do servidor (versaoConhecida vazia)
-        // e ele já existe localmente, é um dado local que não passou pelo push.
-        // Salva conflito para revisão manual em vez de sobrescrever silenciosamente.
+        // Proteção contra overwrite: registro nunca visto do servidor (versaoConhecida
+        // vazia) mas já existe localmente é dado que não passou pelo push — salva
+        // conflito em vez de sobrescrever.
         if (versaoConhecida !== null && versaoConhecida.length === 0) {
           const whereLocal = pks.map(p => `${p} = ?`).join(' AND ');
           const localRows = await query(db,
@@ -390,9 +384,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
-        // Quando o PK é nulo (registro criado via web sem ID Firebird), pré-gera o PK
-        // diretamente do generator para não depender do trigger BEFORE INSERT, que é
-        // suprimido pelo SYNC_SKIP ativo durante o pull em lote.
+        // PK nulo (registro criado via web sem ID Firebird): pré-gera do generator direto,
+        // pois o trigger BEFORE INSERT fica suprimido pelo SYNC_SKIP durante o pull em lote.
         const allPKsNull = pks.every(p => registro[p] == null);
         let registroParaUpsert = registro;
         let pkPreGerado = null;
@@ -411,9 +404,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
-        // Traduz FKs que armazenam SRV_ID para o PK local correspondente.
-        // Necessário para registros criados via web que referenciam PRODUTOS pelo SRV_ID
-        // em vez do ID_PRODUTO nativo do Firebird (ex: MOVIMENTACOES.ID_PRODUTO).
+        // Traduz FKs que armazenam SRV_ID pro PK local — registros criados via web
+        // referenciam PRODUTOS pelo SRV_ID, não pelo ID_PRODUTO nativo do Firebird
+        // (ex: MOVIMENTACOES.ID_PRODUTO).
         for (const fkRef of (configTabela.fks || [])) {
           if (!fkRef.traduzirSrvId || !fkRef.pkRef) continue;
           const valFk = registroParaUpsert[fkRef.coluna];
@@ -427,10 +420,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           }
         }
 
-        // Normaliza sinal de colunas de quantidade: o servidor armazena QTDE como positivo
-        // para todos os tipos de movimento, usando TP.MOV para indicar direção.
-        // O Firebird local (Sirius Delphi) espera QTDE negativo para Saídas — sem isso,
-        // o ERP soma a quantidade ao saldo em vez de subtrair.
+        // Servidor guarda QTDE sempre positivo (direção via TP.MOV); o Firebird local
+        // (Sirius Delphi) espera negativo em Saídas — sem isso o ERP soma ao saldo em
+        // vez de subtrair.
         if (configTabela.normalizarSinal) {
           const { coluna, colunaRef, negativoQuando } = configTabela.normalizarSinal;
           const tipoMov = registroParaUpsert[colunaRef];
@@ -469,9 +461,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
                VALUES (?, ?, CURRENT_TIMESTAMP) MATCHING (NOME_TABELA, PK_VALOR)`,
               [nome, pkGerado]
             ).catch(() => {});
-            // Marca a versão atual do servidor para este PK gerado.
-            // Sem isso, no próximo pull o Firebird vê pendente=true + versaoConhecida=0
-            // e trata o registro como colisão de PK, gerando outro id — loop infinito.
+            // Marca a versão do servidor para este PK gerado — sem isso o próximo pull vê
+            // pendente=true + versaoConhecida=0 e trata como colisão de PK, gerando outro
+            // id em loop.
             const versaoAtual = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
             if (versaoAtual) {
               await execute(db,
@@ -523,9 +515,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     log(`[${nome}] ${totalAtualizados} registro(s) atualizado(s)`);
   }
 
-  // Verificação final do generator: garante que está à frente do maior ID
-  // presente na tabela local, cobrindo registros que passaram pelo caminho
-  // de echo, conflito ou erro de FK sem acionar o sincronizarGenerator por-registro.
+  // Verificação final: garante que o generator está à frente do maior ID local, cobrindo
+  // registros que passaram por echo/conflito/erro FK sem passar pelo sincronizarGenerator
+  // por-registro.
   if (generator && !Array.isArray(pk)) {
     try {
       const rows = await query(db, `SELECT MAX(${pk}) AS MAXIMO FROM ${nome}`);

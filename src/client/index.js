@@ -163,13 +163,10 @@ async function main() {
     console.log(`[${hora}] ${msg}`);
   }
 
-  // ── Auto-atualização (só faz sentido no .exe empacotado) ────────────────────
-  // Verificada a cada ciclo de sincronização, como primeiro passo — mas só faz a
-  // chamada de rede de fato a cada INTERVALO_ATUALIZACAO_MS (12h); nos demais
-  // ciclos é um no-op instantâneo, para não estourar o rate-limit da API do
-  // GitHub. Se houver versão mais nova, avisa (log + notificação nativa do
-  // Windows + banner na tela local) — a aplicação real só ocorre quando o
-  // usuário clicar em "Atualizar agora", via POST /atualizacao/aplicar (webui.js).
+  // ── Auto-atualização (só no .exe empacotado) ──
+  // Roda a cada ciclo mas só bate a rede a cada INTERVALO_ATUALIZACAO_MS (12h) — evita
+  // estourar o rate-limit do GitHub. Nova versão só avisa (log/notificação/banner);
+  // aplicar de fato exige clique em "Atualizar agora" (POST /atualizacao/aplicar em webui.js).
   let ultimaVerificacaoAtualizacao = 0;
   async function verificarAtualizacaoSeNecessario() {
     if (!isPackaged) return;
@@ -190,10 +187,8 @@ async function main() {
   if (isPackaged) {
     limparExeAntigo(process.execPath); // remove client.old/.new.exe de uma atualização anterior
 
-    // Aplicado sob demanda pelo botão "Atualizar agora" na tela local — mantém o
-    // usuário no controle antes de substituir o executável em produção. Só troca
-    // o arquivo e encerra; não relança sozinho — o usuário (ou a tray/"Iniciar
-    // com o Windows") é quem inicia o cliente atualizado novamente.
+    // Sob demanda via "Atualizar agora" — só troca o executável e encerra; não relança
+    // sozinho, o usuário (ou a tray) inicia o cliente atualizado de novo.
     contextoSync._aplicarAtualizacao = async () => {
       const info = contextoSync.atualizacaoDisponivel;
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
@@ -235,10 +230,9 @@ async function main() {
       }
       if (baseURI) {
         try {
-          // Parâmetros "globais" (paramsSyncMap[].global === true) reconciliam
-          // pro mesmo valor em todos os PDVs: o servidor é a fonte de verdade
-          // quando ninguém mudou nada localmente, e este PDV grava de volta no
-          // Firebird via setParam quando outro PDV/admin mudou primeiro.
+          // Parâmetros globais (paramsSyncMap[].global) reconciliam pro mesmo valor em
+          // todos os PDVs — servidor é fonte de verdade quando ninguém mudou local, e
+          // este PDV grava de volta via setParam quando outro mudou primeiro.
           let parametrosServidor = {};
           try {
             const [{ parametros: resp } = {}] = await buscarParametros(baseURI);

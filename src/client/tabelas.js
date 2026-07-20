@@ -146,9 +146,9 @@ const TABELAS = [
     defaultAtivo: true,
     srvId: true,
     fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS', traduzirSrvId: true, pkRef: 'ID_PRODUTO' }],
-    // Pull: o servidor (pré-fix) enviava QUANTIDADE positivo para Saídas. Nega antes de gravar
-    // no Firebird para que o Sirius Delphi subtraia corretamente (usa QUANTIDADE negativo).
-    // Novos registros criados pelo web já chegam negativos — guard qtde>0 evita dupla negação.
+    // Pull: servidor (pré-fix) mandava QUANTIDADE positivo em Saídas — nega antes de gravar
+    // pro Sirius Delphi subtrair certo. Registros criados pelo web já chegam negativos;
+    // guard qtde>0 evita dupla negação.
     normalizarSinal: { coluna: 'QUANTIDADE', colunaRef: 'TIPO_MOVIMENTACAO', negativoQuando: ['Saída'] },
   }),
 

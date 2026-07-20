@@ -5,10 +5,9 @@ const { spawn } = require('child_process');
 
 const SCRIPT_PATH = path.join(os.tmpdir(), 'sincronizador-notif.ps1');
 
-// Mostra um balão/toast nativo do Windows via PowerShell (NotifyIcon) — o próprio
-// Windows 10/11 traduz isso para uma notificação moderna da Central de Ações.
-// Escrito num arquivo .ps1 temporário e invocado com argumentos separados (spawn,
-// não exec) para evitar problemas de escaping de aspas dentro de um -Command inline.
+// Toast nativo do Windows via PowerShell (NotifyIcon) — Windows 10/11 traduz pra
+// notificação da Central de Ações. Script .ps1 temporário invocado via spawn (não
+// exec) pra evitar escaping de aspas num -Command inline.
 const SCRIPT = `
 param([string]$Titulo, [string]$Mensagem)
 Add-Type -AssemblyName System.Windows.Forms

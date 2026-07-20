@@ -131,9 +131,9 @@ async function setup(db, log = console.log, token = null) {
     log('[SETUP] Tabela SYNC_VERSOES_SERVIDOR criada');
   }
 
-  // 6. Detecta troca de empresa — ao mudar o token, limpa tudo para que nenhum
-  //    dado da empresa anterior chegue ao novo servidor. O envio inicial fica
-  //    a cargo do operador via botão "Forçar Carga Inicial".
+  // 6. Detecta troca de empresa: mudou o token, limpa tudo pra não vazar dado da
+  //    empresa anterior pro novo servidor — envio inicial fica a cargo do operador
+  //    via "Forçar Carga Inicial".
   if (token) {
     const configRows = await query(db,
       `SELECT VALOR FROM SYNC_CONFIG WHERE CHAVE = 'SYNC_TOKEN'`
@@ -287,16 +287,9 @@ async function enfileirarRegistrosParcial(db, limite, log, tabelasFiltro = null)
     }
   }
 
-  // Quando o filtro de tabelas está ativo, enfileira também os registros de FK
-  // referenciados pelos registros acima — independente de estarem nos últimos `limite`.
-  //
-  // Atenção: mesmo que a tabela referenciada (ex: PRODUTOS) já esteja em
-  // tabelasFiltro, a carga parcial acima só enfileirou os últimos `limite`
-  // registros dela. Se o registro pai (ex: PRODUTOS 414) ficou fora dos últimos
-  // `limite`, ele não estará em SYNC_ALTERACOES_PENDENTES. Por isso, precisamos
-  // enfileirar os pais específicos referenciados pelas FKs com traduzirSrvId=true
-  // (aquelas que bloqueiam o push do filho quando SRV_ID=NULL), independente de
-  // a tabela pai já ter sido processada no loop acima.
+  // Com filtro de tabelas ativo, garante os pais referenciados por FK traduzirSrvId=true
+  // (bloqueiam o push do filho com SRV_ID=NULL) mesmo que o pai já esteja em tabelasFiltro —
+  // a carga parcial só enfileirou seus últimos `limite` registros, podendo faltar o pai exato.
   if (tabelasFiltro) {
     // Controle para não processar a mesma tabela-pai duas vezes neste segundo loop
     const tabelasPaiJaProcessadas = new Set();

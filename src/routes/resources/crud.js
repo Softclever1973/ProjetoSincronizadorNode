@@ -249,10 +249,9 @@ async function handleSave(req, res, forceUpdate) {
   if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
     const userRole   = req.userRoles?.[schema];
     const idLojaJwt  = req.userLojas?.[schema] ?? null;
-    /* SEC-03 (revisão): donos são excluídos intencionalmente desta validação.
-     * O JWT de dono não carrega idLoja — eles têm acesso global a todas as lojas
-     * do schema (design multi-PDV). A proteção para não-donos é completa:
-     * idLojaJwt vem do JWT assinado, não do corpo da requisição. */
+    /* SEC-03: donos ficam de fora de propósito — JWT de dono não carrega idLoja (acesso
+     * global multi-PDV). Não-donos são protegidos porque idLojaJwt vem do JWT assinado,
+     * nunca do corpo da requisição. */
     if (userRole !== 'dono' && idLojaJwt !== null) {
       const idLojaRegistro = registro.ID_LOJA ?? registro.id_loja ?? null;
       if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaJwt)
@@ -312,9 +311,9 @@ async function handleSave(req, res, forceUpdate) {
 
       // Garante colunas da web que podem não existir no schema Firebird sincronizado
       if (tabela.toUpperCase() === 'PEDIDOS') {
-        // ENDERECO_ENTREGA_JSON é web-only (sem equivalente no Firebird): guarda o endereço
-        // de entrega completo. ENDERECO_ESCOLHIDO (sincronizado) é VARCHAR(8) na filial —
-        // só cabe o CEP, então não pode receber o JSON inteiro (ver _assemblarEndereco no frontend).
+        // ENDERECO_ENTREGA_JSON é web-only: ENDERECO_ESCOLHIDO (sincronizado) é VARCHAR(8)
+        // na filial, só cabe o CEP — não comporta o JSON completo (ver _assemblarEndereco
+        // no frontend).
         for (const [col, type] of [['OUTRAS_DESPESAS', 'NUMERIC(15,2)'], ['MODALIDADE_FRETE', 'VARCHAR(1)'], ['ENDERECO_ENTREGA_JSON', 'TEXT']]) {
           if (!allowed.has(col)) {
             await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
@@ -328,10 +327,9 @@ async function handleSave(req, res, forceUpdate) {
         }
       }
 
-      // Denormaliza NOME_VENDEDOR/DESCRICAO_PRODUTO/FRETE_EMITENTE_DESTINATARIO nas tabelas
-      // de pedido — colunas que existem no schema Firebird sincronizado mas o formulário
-      // web nunca preenchia (ou preenchia com outro nome), deixando-as NULL na filial
-      // mesmo com o dado de origem presente.
+      // Denormaliza NOME_VENDEDOR/DESCRICAO_PRODUTO/FRETE_EMITENTE_DESTINATARIO: colunas
+      // sincronizadas que o formulário web nunca preenchia (ou usava outro nome), ficando
+      // NULL na filial apesar do dado de origem existir.
       if (tabela.toUpperCase() === 'PEDIDOS') {
         // O select do frontend chama-se MODALIDADE_FRETE, mas o campo real sincronizado
         // com o Firebird é FRETE_EMITENTE_DESTINATARIO (VARCHAR(1), mesmos códigos S/E/D/T/R/P).
@@ -343,11 +341,9 @@ async function handleSave(req, res, forceUpdate) {
           if (nomeVendedor) registro.NOME_VENDEDOR = nomeVendedor;
         }
       } else if (tabela.toUpperCase() === 'MOVIMENTACOES') {
-        // O frontend sempre manda "Web - <nome da conta>" em USUARIO (produtos-movimentacoes.js
-        // / produtos.js) — quando a conta tem um vendedor vinculado (usuarios_empresas.id_vendedor),
-        // prioriza o nome do vendedor sincronizado do Firebird, seguindo a mesma convenção dos
-        // registros criados pelo aplicativo desktop (nome puro, sem prefixo "Web -"). Contas sem
-        // vendedor vinculado (ex.: dono) mantêm o valor que o frontend já enviou.
+        // Frontend manda "Web - <conta>" em USUARIO; se a conta tem vendedor vinculado, usa
+        // o nome do vendedor (mesma convenção do desktop, sem prefixo "Web -"). Contas sem
+        // vendedor (ex.: dono) mantêm o valor já enviado.
         const idVendedor = req.userVendedores?.[schema] ?? null;
         if (idVendedor != null && allowed.has('USUARIO')) {
           const nomeVendedor = await resolverNomeVendedor(db, schema, idVendedor);
@@ -372,9 +368,8 @@ async function handleSave(req, res, forceUpdate) {
           registro.QUANTIDADE_DE_PECAS = registro.QUANTIDADE;
       }
 
-      // Detecta se é INSERT ou UPDATE antes do upsert.
-      // Se todos os PKs estão ausentes do payload (registro novo sem ID atribuído),
-      // vai direto para INSERT — evita SELECT com NULL que nunca encontra linhas.
+      // Se todos os PKs estão ausentes (registro novo sem ID), vai direto pra INSERT —
+      // evita SELECT com NULL que nunca encontra linhas.
       const pkWhere = pksUpper.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
       const pkVals  = pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)]);
       let update;
@@ -403,9 +398,9 @@ async function handleSave(req, res, forceUpdate) {
         );
       }
 
-      // Transições de status de PEDIDOS: Realizado não pode ir direto para Cancelado
-      // (precisa voltar para Pendente antes) e nenhuma das duas transições (Realizado→Pendente
-      // ou Pendente→Cancelado) é permitida se alguma parcela já tiver pagamento registrado.
+      // PEDIDOS: Realizado não pode ir direto pra Cancelado (precisa voltar a Pendente
+      // antes); nenhuma das duas transições é permitida se alguma parcela já tiver
+      // pagamento registrado.
       if (tabela.toUpperCase() === 'PEDIDOS' && update && dadosAntes &&
           registro.STATUS && registro.STATUS !== dadosAntes.STATUS) {
         const statusAntigo = dadosAntes.STATUS;
@@ -454,9 +449,8 @@ async function handleSave(req, res, forceUpdate) {
         }
       }
 
-      // Unicidade de CPF/CNPJ em CLIENTES
-      // O frontend declara pk: 'SRV_ID', então pkVals[0] é sempre o SRV_ID do servidor —
-      // nunca nulo em edição, independente do ID_CLIENTE do ERP local.
+      // Unicidade de CPF/CNPJ em CLIENTES — pk é 'SRV_ID' no frontend, então pkVals[0] é
+      // sempre o SRV_ID do servidor (nunca nulo em edição), independente do ID_CLIENTE do ERP local.
       if (tabela.toUpperCase() === 'CLIENTES') {
         const srvIdAtual = pkVals[0] != null ? pkVals[0] : null;
         for (const campo of ['CPF', 'CNPJ']) {
@@ -498,9 +492,8 @@ async function handleSave(req, res, forceUpdate) {
 
       const vals = cols.map(c => registro[c]);
 
-      // Usa INSERT/UPDATE explícitos em vez de ON CONFLICT para compatibilidade com
-      // tabelas cujo PK no servidor é SRV_ID (não ID_PRODUTO, ID_PEDIDO, etc.).
-      // ON CONFLICT exige constraint única na coluna alvo — que não existe nesses casos.
+      // INSERT/UPDATE explícitos em vez de ON CONFLICT: tabelas com PK=SRV_ID não têm
+      // constraint única na coluna alvo, que ON CONFLICT exige.
       if (update) {
         const setCols = cols.filter(c => !pksUpper.includes(c.toUpperCase()));
         if (setCols.length > 0) {
@@ -520,10 +513,9 @@ async function handleSave(req, res, forceUpdate) {
         if (allowed.has('SRV_ID') && !insertCols.some(c => c.toUpperCase() === 'SRV_ID')) {
           const seqNome = `seq_srv_id_${tabela.toLowerCase()}`;
           await execute(db, `CREATE SEQUENCE IF NOT EXISTS "${schema}"."${seqNome}"`).catch(() => {});
-          // Avança a sequência além do maior SRV_ID existente na tabela.
-          // Necessário quando o Firebird re-envia registros com SRV_IDs já atribuídos
-          // (ramo srvIdFilial != null em sincronizacao.js), que não avança a sequência.
-          // Sem isso, a sequência pode começar em 1 enquanto a tabela já tem SRV_ID=1.
+          // Avança a sequência além do maior SRV_ID existente: Firebird pode reenviar
+          // registros com SRV_ID já atribuído (ramo srvIdFilial em sincronizacao.js) sem
+          // nunca avançar a sequência, o que colidiria com SRV_ID=1 já existente.
           const [seqInfo] = await query(db, `
             SELECT
               COALESCE((SELECT MAX(SRV_ID) FROM ${tabela}), 0) AS max_srv,

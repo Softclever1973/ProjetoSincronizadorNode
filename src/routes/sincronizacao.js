@@ -4,6 +4,7 @@ const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
+const { initializeTenantSchema } = require('../db-init');
 
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
@@ -22,10 +23,8 @@ const seqsSrvIdInicializadas = new Set();
 // Evita DDL repetido em cada push após a constraint já existir.
 const constraintsUqAdicionadas = new Set();
 
-// Mapeia tipo JavaScript (inferido do valor) para tipo PostgreSQL.
 // Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
-// inteiro 100 via node-firebird, então Number.isInteger() não distingue se é ID ou preço.
-// NUMERIC é superset seguro — comporta inteiros e decimais sem perda.
+// inteiro 100 via node-firebird, e NUMERIC comporta ambos sem perda.
 function inferirTipoPg(valor) {
   if (Buffer.isBuffer(valor)) return 'BYTEA';
   if (valor instanceof Date) return 'TIMESTAMP';
@@ -481,24 +480,22 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
       const pks = Array.isArray(pk) ? pk : [pk];
 
-      // Para tabelas srvId, SRV_ID é a PK real no PostgreSQL — obtém antes de qualquer operação.
-      // Cada tabela tem sua própria sequence (seq_srv_id_<tabela>) criada na primeira vez,
-      // garantindo que o contador recomece do 1 por tabela em vez de usar um global.
+      // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
+      // Sequence por-tabela (seq_srv_id_<tabela>) evita contador global compartilhado.
       let srvId = null;
       if (temSrvId && !deletar) {
         const pkValorStr = pks.map(p => String(registro[p])).join('|');
         const seqNome = `seq_srv_id_${nomeTabela.toLowerCase()}`;
         const seqKey  = `${req.schemaName}:${seqNome}`;
 
-        // Se a filial enviou um SRV_ID no payload, significa que este registro já existe
-        // no servidor com esse ID (ex: foi criado via web UI com PK null e recebido no
-        // pull). Reutiliza o ID existente em vez de alocar um novo — evita duplicatas.
+        // SRV_ID já no payload = registro criado via web (PK null) e ecoado no pull —
+        // reusa o ID existente em vez de alocar um novo, evitando duplicatas.
         const srvIdFilial = registro.SRV_ID != null ? Number(registro.SRV_ID) : null;
 
         if (srvIdFilial != null) {
-          // Registra o mapeamento id_local → srv_id existente (sem alocar novo valor).
-          // Cada filial tem seu próprio generator Firebird, então (filial_id, tabela, id_local)
-          // é a chave real — o mesmo id_local em filiais diferentes são registros distintos.
+          // Registra id_local → srv_id existente (sem alocar novo valor). Cada filial tem
+          // seu próprio generator Firebird, então (filial_id, tabela, id_local) é a chave
+          // real — o mesmo id_local em filiais diferentes são registros distintos.
           await execute(db,
             `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
              VALUES ($1, $2, $3, $4)
@@ -508,7 +505,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           ).catch(() => {});
           srvId = srvIdFilial;
         } else {
-          if (!seqsSrvIdInicializadas.has(seqKey)) {
+          const criarSequence = async () => {
             // Começa a sequence após o maior SRV_ID já atribuído à tabela,
             // para não colidir com valores de instalações existentes.
             const [maxRow] = await query(db,
@@ -518,9 +515,11 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
             const inicio = maxRow?.INICIO ?? 1;
             await execute(db, `CREATE SEQUENCE IF NOT EXISTS ${seqNome} START WITH ${inicio}`).catch(() => {});
             seqsSrvIdInicializadas.add(seqKey);
-          }
+          };
 
-          const [mapa] = await query(db,
+          if (!seqsSrvIdInicializadas.has(seqKey)) await criarSequence();
+
+          const inserirMapa = () => query(db,
             `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
              VALUES ($1, $2, $3, nextval('${seqNome}'))
              ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
@@ -528,6 +527,18 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
              RETURNING srv_id`,
             [idLoja, nomeTabela, pkValorStr]
           );
+
+          // Retry único: reset-empresa.js pode ter apagado esta sequence com o servidor
+          // no ar, deixando o cache em memória desatualizado (42P01). Recria e tenta de novo.
+          let mapa;
+          try {
+            [mapa] = await inserirMapa();
+          } catch (eSeq) {
+            if (!isMissingTableError(eSeq)) throw eSeq;
+            seqsSrvIdInicializadas.delete(seqKey);
+            await criarSequence();
+            [mapa] = await inserirMapa();
+          }
 
           srvId = mapa?.SRV_ID ?? null;
         }
@@ -596,12 +607,9 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       }
 
-      // Migração one-time: garante que a UNIQUE das chaves de negócio existe e está
-      // atualizada (com ID_LOJA, se a tabela tiver essa coluna) para tabelas já existentes.
-      // Tabelas criadas antes da correção do multi-filial têm a constraint só em (pks),
-      // sem ID_LOJA — isso rejeita como duplicata pushes legítimos de outra filial que
-      // gerou o mesmo id_local. Detecta essa constraint desatualizada e recria.
-      // Marcado em constraintsUqAdicionadas para não repetir a checagem a cada push.
+      // Migração one-time: tabelas criadas antes do multi-filial têm a UNIQUE só em (pks),
+      // sem ID_LOJA — rejeita como duplicata pushes legítimos de outra filial com o mesmo
+      // id_local. Detecta e recria; constraintsUqAdicionadas evita repetir a cada push.
       if (tabelaJaExistia && temSrvId && pks.length > 0) {
         const cqKey = `${req.schemaName}:${nomeTabela}`;
         if (!constraintsUqAdicionadas.has(cqKey)) {
@@ -640,6 +648,9 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
               `ALTER TABLE ${nomeTabela} ADD CONSTRAINT ${constraintName} UNIQUE (${chaveNegocio.join(', ')})`
             ).catch(e => {
               if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
+              // Falso positivo: tabelaJaExistia veio de cache desatualizado (reset-empresa.js
+              // apagou a tabela com o servidor no ar). _selecionarAtual detecta e recria depois.
+              if (isMissingTableError(e)) return;
               if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
                 console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${chaveNegocio.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
                 return;
@@ -650,10 +661,9 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         }
       }
 
-      // srvIdEhPk: true quando SRV_ID é a PK real da tabela no PostgreSQL.
-      // Detectado consultando information_schema (cacheado) em vez de depender de
-      // tabelaJaExistia — que era falso apenas no primeiro push e causava ON CONFLICT
-      // com ID_PRODUTO (sem constraint única) em todas as chamadas subsequentes.
+      // srvIdEhPk: SRV_ID é a PK real, detectado via information_schema (cacheado) — não
+      // via tabelaJaExistia, que dava falso no 1º push e causava ON CONFLICT inválido em
+      // ID_PRODUTO nas chamadas seguintes.
       const pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
       const srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
 
@@ -683,10 +693,9 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         atual = [];
       }
 
-      // Recuperação de mapeamento perdido: quando um SRV_ID recém-alocado não encontra
-      // linha na tabela (atual=[]), mas um registro com as mesmas chaves de negócio
-      // já existe com SRV_ID diferente (srv_id_map foi limpo/resetado), reutiliza o
-      // SRV_ID da linha existente e corrige o mapeamento — evita criar linha duplicada.
+      // Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha (srv_id_map foi
+      // limpo/resetado), mas já existe registro com a mesma chave de negócio — reusa o
+      // SRV_ID existente em vez de duplicar.
       if (srvIdEhPk && atual.length === 0 && tabelaJaExistia) {
         const pkWhere = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
         const pkVals  = pks.map(p => registro[p]);
@@ -723,28 +732,22 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasServidor.has(k)
       );
 
-      // Para tabelas migradas (SRV_ID como coluna comum, não como PK real):
-      // inclui srv_id no próprio UPSERT em vez de um UPDATE separado — evita que
-      // fn_seq_atualizacao dispare duas vezes, o que geraria duas versões distintas
-      // e causaria falsos conflitos no pull seguinte.
-      // Condição: srvId disponível, SRV_ID existe na tabela, mas NÃO é a PK real.
+      // Tabelas migradas (SRV_ID como coluna comum): inclui srv_id no UPSERT em vez de
+      // UPDATE separado — evita disparar fn_seq_atualizacao duas vezes, o que geraria
+      // falsos conflitos no próximo pull.
       const temSrvIdMigrado = temSrvId && srvId != null && !srvIdEhPk && colunasServidor.has('SRV_ID');
 
       let novoId = null;
       if (colunas.length > 0 || srvIdEhPk || temSrvIdMigrado) {
-        // Monta listas de colunas/valores:
-        // - tabela nova: SRV_ID no início (é a PK real)
-        // - tabela migrada: srv_id no final (coluna comum)
-        // - demais: só as colunas do registro
+        // SRV_ID: primeiro se PK real, último se coluna migrada; senão só as colunas do registro.
         const colunasFinais = srvIdEhPk
           ? ['SRV_ID', ...colunas]
           : temSrvIdMigrado
             ? [...colunas, 'srv_id']
             : colunas;
-        // PostgreSQL TEXT rejeita \x00 — Firebird CHAR/VARCHAR pode conter null bytes.
-        // Firebird TIME columns são retornados pelo node-firebird como Date com epoch 1970-01-01.
-        // Se passados direto ao pg, viram "1970-01-01T12:47:13.000Z" numa coluna TEXT — inútil
-        // para display. Normaliza para 'HH:MM:SS' antes de persistir.
+        // PostgreSQL TEXT rejeita \x00 (Firebird CHAR/VARCHAR pode ter null bytes). Firebird
+        // TIME vem como Date epoch 1970-01-01 — sem normalizar viraria string ISO inútil;
+        // convertemos para 'HH:MM:SS'.
         const valoresFinais = colunasFinais.map(c => {
           if (c === 'SRV_ID' || c === 'srv_id') return srvId;
           const v = registro[c] === undefined ? null : registro[c];
@@ -763,10 +766,9 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         });
         const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
         const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
-        // Quando srvIdEhPk, o conflito é resolvido por SRV_ID (não pelos pks da filial como
-        // ID_CLIENTE). Portanto ID_CLIENTE e similares devem aparecer no UPDATE SET — sem isso
-        // o servidor nunca grava o PK local recebido da filial e continua enviando o registro
-        // com ID_CLIENTE=null a cada ciclo, gerando um loop infinito de inserções.
+        // srvIdEhPk resolve conflito por SRV_ID, não pelos pks da filial (ID_CLIENTE) — por
+        // isso eles precisam entrar no UPDATE SET, senão o servidor nunca grava o PK local e
+        // reenviaria ID_CLIENTE=null em loop infinito.
         const nonConflictCols = colunasFinais.filter(c =>
           c !== 'SRV_ID' && (srvIdEhPk || !pks.includes(c))
         );
@@ -805,7 +807,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
                                         : 'pendente';
             const observacao      = registro['OBSERVACAO'] ?? registro['OBS'] ?? null;
 
-            await execute(db, `
+            const espelharAR = () => execute(db, `
               INSERT INTO financeiro_contas_receber (
                 id_a_receber, descricao, nome_cliente, valor, data_vencimento,
                 data_recebimento, status, forma_pagamento, parcela, total_parcelas,
@@ -827,7 +829,21 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
               idAR, registro['DESCRICAO'] ?? null, nomeCliente,
               registro['VALOR'] ?? null, vencimento, dataRealizado,
               status, formaPagamento, parcela, totalParcelas, observacao, idLoja,
-            ]).catch(e => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e.message}`));
+            ]);
+
+            try {
+              await espelharAR();
+            } catch (eEspelho) {
+              // financeiro_contas_receber não vem do fluxo genérico de sync — só é criada por
+              // initializeTenantSchema (na criação da empresa). reset-empresa.js a apaga sem
+              // recriar; se sumiu, reprovisiona o schema do tenant e tenta espelhar de novo.
+              if (!isMissingTableError(eEspelho)) {
+                console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${eEspelho.message}`);
+              } else {
+                await initializeTenantSchema(req.schemaName).catch(() => {});
+                await espelharAR().catch(e2 => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e2.message}`));
+              }
+            }
           }
         }
 
@@ -835,9 +851,8 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           const statusAntes = atual[0]?.STATUS ?? null;
           const statusNovo  = registro['STATUS'] ?? null;
           const idPedido    = registro['ID_PEDIDO'];
-          // Pedido virou Realizado no Sirius/Firebird — gera as A_RECEBER das parcelas
-          // já cadastradas (fire-and-forget). Pagamento não é pré-requisito para
-          // "Realizado": ver gerarContasReceberDoPedido() em resources/helpers.js.
+          // Pedido virou Realizado — gera as A_RECEBER das parcelas já cadastradas
+          // (fire-and-forget). Pagamento não é pré-requisito: ver gerarContasReceberDoPedido().
           if (statusNovo === 'R' && statusAntes !== 'R' && idPedido != null) {
             gerarContasReceberDoPedido(req.schemaName, idPedido).catch(e =>
               console.warn(`[PEDIDOS] WARN geração de A_RECEBER ao realizar: ${e.message}`)
@@ -915,12 +930,10 @@ const CHAVES_ACEITAS = new Set([
   'modalidade_frete', 'forma_preenchimento_pedido',
 ]);
 
-// Subconjunto de CHAVES_ACEITAS que deve reconciliar pro MESMO valor em todos
-// os PDVs/filiais de um schema (ver GET /BuscarParametros, consumido por
-// index.js do cliente): o servidor passa a mandar esse valor de volta pro
-// Firebird de cada PDV via setParam. 'modalidade_frete' fica de fora de
-// propósito — continua só leitura, cada PDV pode ter seu próprio valor.
-// Mantenha em sincronia manual com `global: true` em paramsSyncMap.js.
+// Subconjunto de CHAVES_ACEITAS que reconcilia pro mesmo valor em todos os PDVs de um
+// schema — GET /BuscarParametros devolve isso pro Firebird de cada PDV via setParam.
+// 'modalidade_frete' fica de fora de propósito (cada PDV mantém o seu). Mantenha em
+// sincronia manual com `global: true` em paramsSyncMap.js.
 const CHAVES_GLOBAIS = new Set([
   'forma_preenchimento_pedido', 'venda_saldo_negativo',
   'codigo_interno_unico', 'utilizar_codigo_interno',

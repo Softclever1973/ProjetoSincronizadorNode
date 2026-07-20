@@ -1,11 +1,8 @@
-// Rastreia registros recém-enviados ao servidor para evitar que o pull seguinte
-// os reaplique desnecessariamente. O servidor atribui um novo ID_ULTIMA_ATUALIZACAO_MATRIZ
-// ao receber um push; sem este módulo, o próximo ciclo de pull buscaria esse registro
-// de volta e faria um upsert redundante.
-//
-// A chave é "TABELA|pkValor" e o valor é o novoId retornado pelo servidor.
-// Cada eco é consumido uma única vez (delete após match) para não bloquear
-// re-pulls legítimos caso o servidor atualize o registro externamente depois.
+// Rastreia registros recém-enviados ao servidor pra evitar que o pull seguinte os
+// reaplique — sem isso, o próximo pull buscaria de volta o registro com o novo
+// ID_ULTIMA_ATUALIZACAO_MATRIZ atribuído pelo push e faria um upsert redundante.
+// Chave "TABELA|pkValor" → novoId do servidor. Cada eco é consumido uma única vez
+// (delete após match) pra não bloquear re-pulls legítimos de uma atualização externa posterior.
 
 const _echos = new Map();
 

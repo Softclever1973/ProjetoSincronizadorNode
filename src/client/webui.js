@@ -84,9 +84,9 @@ async function getColunasFirebird(db, nomeTabela) {
   return cacheColunasFirebird[nomeTabela];
 }
 
-// Colunas excluídas da comparação de auditoria e das escritas locais.
-// São campos de controle de sincronização ou metadados populados por triggers locais
-// que usam generators independentes (sobrescrever causaria divergências de GEN).
+// Colunas excluídas da comparação de auditoria e das escritas locais — controle de
+// sincronização ou metadados de triggers locais com generator próprio (sobrescrever
+// causaria divergência de GEN).
 const COLUNAS_IGNORADAS_AUDITORIA = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ',
   'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -120,10 +120,9 @@ function normalizarBlobs(row) {
   );
 }
 
-// Lê um campo BLOB do node-firebird (retornado como função) e resolve como string.
-// ATENÇÃO: só funciona se chamado DENTRO do callback de db.query/db.sequentially —
-// db.query() comita a transação quando o callback retorna, invalidando os BLOBs.
-// Para queries com BLOBs, prefira CAST(col AS VARCHAR(N)) no SQL.
+// Lê BLOB do node-firebird (vem como função) e resolve como string. Só funciona DENTRO
+// do callback de db.query/sequentially — comita a transação ao retornar, invalidando o
+// BLOB depois. Prefira CAST(col AS VARCHAR(N)) no SQL quando possível.
 function lerBlobTexto(blobFn) {
   return new Promise(resolve => {
     try {
