@@ -11,7 +11,8 @@
     "client:dev": "nodemon src/client/index.js",
     "generate-secret": "node -e \"process.stdout.write(require('crypto').randomBytes(64).toString('hex') + '\\n')\"",
     "build:server": "pkg --config package.json src/server.js --target node22-win-x64 --output dist/server.exe",
-    "build:client": "pkg --config package.json src/client/index.js --target node22-win-x64 --output dist/client.exe"
+    "build:client": "pkg --config package.json src/client/index.js --target node22-win-x64 --output dist/client.exe",
+    "test": "jest"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -25,7 +26,9 @@
   },
   "devDependencies": {
     "@yao-pkg/pkg": "6.20.0",
-    "nodemon": "^3.0.1"
+    "jest": "^30.4.2",
+    "nodemon": "^3.0.1",
+    "supertest": "^7.2.2"
   },
   "pkg": {
     "scripts": "src/**/*.js",

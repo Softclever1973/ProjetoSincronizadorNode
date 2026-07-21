@@ -574,4 +574,15 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
   }
 }
 
-module.exports = { sincronizarTabela };
+// Uso exclusivo dos testes: limpa os caches module-level de colunas (computadas,
+// existentes, NOT NULL, tamanhos) entre testes que reutilizam o mesmo nome de tabela,
+// evitando que uma tabela "aqueça" o cache num teste e mascare as queries de metadado
+// esperadas pelo teste seguinte.
+function _resetCachesParaTeste() {
+  for (const key of Object.keys(cacheColunasComputadas)) delete cacheColunasComputadas[key];
+  for (const key of Object.keys(cacheColunasExistentes)) delete cacheColunasExistentes[key];
+  for (const key of Object.keys(cacheColunasNaoNulas)) delete cacheColunasNaoNulas[key];
+  for (const key of Object.keys(cacheTamanhosPorTabela)) delete cacheTamanhosPorTabela[key];
+}
+
+module.exports = { sincronizarTabela, _resetCachesParaTeste };
