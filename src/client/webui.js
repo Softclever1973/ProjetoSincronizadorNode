@@ -5,6 +5,7 @@ const https = require('https');
 const crypto = require('crypto');
 const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos, clearConflitos, emitter: conflitosEmitter } = require('./conflitos');
 const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./erros');
+const { emitter: atualizacaoEmitter } = require('./updater');
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
 const { getUltimaAtualizacao } = require('./cursor');
@@ -372,6 +373,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.locals.usuarioLogado        = sess.usuario;
     res.locals.abasPermitidas       = ABAS_POR_ROLE[sess.role] || new Set();
     res.locals.atualizacaoDisponivel = contexto.atualizacaoDisponivel || null;
+    res.locals.atualizacaoStatus = contexto.atualizacaoStatus || null;
     next();
   });
 
@@ -1212,13 +1214,19 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       res.write(`event: novo-conflito\ndata: ${JSON.stringify(conflito)}\n\n`);
     };
 
+    const onAtualizacaoStatus = (status) => {
+      res.write(`event: atualizacao-status\ndata: ${JSON.stringify(status)}\n\n`);
+    };
+
     errosEmitter.on('novo-erro', onErro);
     conflitosEmitter.on('novo-conflito', onConflito);
+    atualizacaoEmitter.on('status', onAtualizacaoStatus);
 
     req.on('close', () => {
       clearInterval(keepAlive);
       errosEmitter.off('novo-erro', onErro);
       conflitosEmitter.off('novo-conflito', onConflito);
+      atualizacaoEmitter.off('status', onAtualizacaoStatus);
     });
   });
 
@@ -1311,7 +1319,11 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       return res.status(400).json({ ok: false, message: 'Atualização automática não disponível neste modo de execução.' });
     }
     try {
-      await contexto._aplicarAtualizacao(); // baixa, substitui o .exe e relança — este processo se encerra em seguida
+      // Baixa, substitui o .exe, relança e espera ~10s pra confirmar que a nova versão
+      // ficou de pé antes de resolver — por isso esta chamada demora mais que as outras.
+      // Se a nova versão não sobreviver à janela, isso lança e a versão anterior nunca
+      // chega a sair (rollback automático já aconteceu antes do throw).
+      await contexto._aplicarAtualizacao();
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, message: e.message });

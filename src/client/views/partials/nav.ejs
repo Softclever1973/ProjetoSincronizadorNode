@@ -44,38 +44,10 @@
   </div>
 </nav>
 
-<% if (typeof atualizacaoDisponivel !== 'undefined' && atualizacaoDisponivel) { %>
-<div id="banner-atualizacao" style="background:#fef3c7;border-bottom:1px solid #fcd34d;color:#92400e;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-  <span>🆕 Nova versão disponível: <strong>v<%= atualizacaoDisponivel.versao %></strong></span>
-  <% if (atualizacaoDisponivel.urlRelease) { %>
-    <a href="<%= atualizacaoDisponivel.urlRelease %>" target="_blank" rel="noopener" style="color:#92400e;text-decoration:underline">Ver notas da versão</a>
-  <% } %>
-  <button id="btn-atualizar-agora" style="margin-left:auto;padding:4px 14px;font-size:12px;border:1px solid #92400e;border-radius:var(--radius-sm);background:white;color:#92400e;cursor:pointer;font-family:var(--font-sans)">Atualizar agora</button>
-</div>
+<!-- Preenchido no load e mantido em tempo real via SSE 'atualizacao-status' — ver
+     renderBannerAtualizacao() em scripts.ejs. Server-side só fornece o estado inicial. -->
+<div id="banner-atualizacao-wrap"></div>
 <script>
-(function () {
-  var btn = document.getElementById('btn-atualizar-agora');
-  if (!btn) return;
-  btn.addEventListener('click', async function () {
-    if (!confirm('O cliente vai baixar a nova versão e se fechar em seguida. Você (ou a inicialização automática com o Windows, se configurada) precisará abri-lo de novo manualmente. Continuar?')) return;
-    btn.disabled = true;
-    btn.textContent = 'Atualizando…';
-    try {
-      var r = await fetch('/atualizacao/aplicar', { method: 'POST' });
-      var d = await r.json();
-      if (!d.ok) {
-        alert('Erro ao atualizar: ' + (d.message || 'erro desconhecido'));
-        btn.disabled = false;
-        btn.textContent = 'Atualizar agora';
-        return;
-      }
-      btn.textContent = 'Atualizado — fechando…';
-      document.getElementById('banner-atualizacao').style.background = '#dcfce7';
-    } catch (ex) {
-      // A conexão cai assim que o processo se encerra — é o comportamento esperado.
-      btn.textContent = 'Atualizado — fechando…';
-    }
-  });
-})();
+  window.__atualizacaoDisponivelInicial = <%- JSON.stringify(typeof atualizacaoDisponivel !== 'undefined' ? atualizacaoDisponivel : null) %>;
+  window.__atualizacaoStatusInicial = <%- JSON.stringify(typeof atualizacaoStatus !== 'undefined' ? atualizacaoStatus : null) %>;
 </script>
-<% } %>

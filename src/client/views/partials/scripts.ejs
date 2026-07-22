@@ -123,6 +123,72 @@
     }
   }
 
+  // ── Banner de atualização automática (renderizado no load e ao vivo via SSE) ─────
+  var ESTADOS_TRANSITORIOS_ATUALIZACAO = ['aplicando', 'respawned', 'sucesso', 'revertida'];
+  var CORES_STATUS_ATUALIZACAO = {
+    aplicando: { bg: '#dbeafe', border: '#93c5fd', text: '#1e40af', icone: '⏳' },
+    respawned: { bg: '#dbeafe', border: '#93c5fd', text: '#1e40af', icone: '⏳' },
+    sucesso:   { bg: '#dcfce7', border: '#86efac', text: '#166534', icone: '✅' },
+    revertida: { bg: '#fee2e2', border: '#fca5a5', text: '#991b1b', icone: '⚠️' },
+  };
+  var TEXTOS_STATUS_ATUALIZACAO = {
+    aplicando: function(v) { return 'Atualizando para v' + v + '…'; },
+    respawned: function(v) { return 'Atualizando para v' + v + '…'; },
+    sucesso:   function(v) { return 'Atualizado com sucesso para v' + v + '.'; },
+    revertida: function(v) { return 'Falha ao atualizar para v' + v + ' — revertido automaticamente para a versão anterior.'; },
+  };
+
+  function renderBannerAtualizacao(disponivel, status) {
+    var wrap = document.getElementById('banner-atualizacao-wrap');
+    if (!wrap) return;
+
+    if (status && ESTADOS_TRANSITORIOS_ATUALIZACAO.indexOf(status.status) !== -1) {
+      var cor = CORES_STATUS_ATUALIZACAO[status.status];
+      var texto = TEXTOS_STATUS_ATUALIZACAO[status.status](status.versao);
+      wrap.innerHTML =
+        '<div id="banner-atualizacao" style="background:' + cor.bg + ';border-bottom:1px solid ' + cor.border +
+        ';color:' + cor.text + ';padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+        '<span>' + cor.icone + ' ' + texto + '</span></div>';
+      return;
+    }
+
+    if (disponivel) {
+      wrap.innerHTML =
+        '<div id="banner-atualizacao" style="background:#fef3c7;border-bottom:1px solid #fcd34d;color:#92400e;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+        '<span>🆕 Nova versão disponível: <strong>v' + disponivel.versao + '</strong></span>' +
+        (disponivel.urlRelease ? '<a href="' + disponivel.urlRelease + '" target="_blank" rel="noopener" style="color:#92400e;text-decoration:underline">Ver notas da versão</a>' : '') +
+        '<button id="btn-atualizar-agora" style="margin-left:auto;padding:4px 14px;font-size:12px;border:1px solid #92400e;border-radius:var(--radius-sm);background:white;color:#92400e;cursor:pointer;font-family:var(--font-sans)">Atualizar agora</button>' +
+        '</div>';
+      return;
+    }
+
+    wrap.innerHTML = '';
+  }
+
+  async function _iniciarAtualizacaoManual(btn) {
+    if (!confirm('O cliente vai baixar a nova versão, substituir o executável e reiniciar sozinho — isso pode levar até ~10 segundos. Se algo der errado, ele reverte automaticamente para a versão atual. Continuar?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Atualizando…';
+    try {
+      var r = await fetch('/atualizacao/aplicar', { method: 'POST' });
+      var d = await r.json();
+      if (!d.ok) {
+        _notificarErro(btn, 'Erro ao atualizar: ' + (d.message || 'erro desconhecido'));
+        btn.disabled = false;
+        btn.textContent = 'Atualizar agora';
+      }
+      // Sucesso: o evento SSE 'atualizacao-status' já atualiza o banner sozinho.
+    } catch (ex) {
+      // A conexão pode cair se o processo antigo já tiver saído — não é necessariamente erro.
+    }
+  }
+
+  document.addEventListener('click', function (e) {
+    if (e.target && e.target.id === 'btn-atualizar-agora') _iniciarAtualizacaoManual(e.target);
+  });
+
+  renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, window.__atualizacaoStatusInicial);
+
   // ── SSE: badges e notificações em tempo real ─────────────────────────────
   (function () {
     fetch('/api/erros/count')
@@ -168,6 +234,13 @@
             tag: 'sync-conflito-' + (c.tabela || 'geral'),
           });
         }
+      } catch (_) {}
+    });
+
+    es.addEventListener('atualizacao-status', function(e) {
+      try {
+        var status = JSON.parse(e.data);
+        renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, status);
       } catch (_) {}
     });
 

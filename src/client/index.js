@@ -139,7 +139,10 @@ async function main() {
   const TABELAS = require('./tabelas');
   const { tabelaAtiva } = require('./tabelasConfig');
   const { salvarErro } = require('./erros');
-  const { verificarAtualizacao, aplicarAtualizacao, limparExeAntigo } = require('./updater');
+  const {
+    verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
+    lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
+  } = require('./updater');
   const { notificarToast } = require('./notificar');
   const { version: VERSAO_ATUAL } = require('../../package.json');
 
@@ -155,7 +158,7 @@ async function main() {
   let rodando = false;
   const contextoSync = {
     baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
-    versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null,
+    versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null, atualizacaoStatus: null,
   };
 
   function log(msg) {
@@ -163,11 +166,28 @@ async function main() {
     console.log(`[${hora}] ${msg}`);
   }
 
+  // AUTO_ATUALIZAR: ligado por padrão — só 'false' explícito desliga o auto-apply e volta
+  // ao fluxo 100% manual (banner + botão "Atualizar agora").
+  const AUTO_ATUALIZAR = process.env.AUTO_ATUALIZAR !== 'false';
+  const MAX_TENTATIVAS_AUTO_POR_VERSAO = 3;
+  const JANELA_JITTER_MS = 4 * 60 * 60 * 1000; // 0-4h, espalha a aplicação automática entre lojas
+
+  // Espera determinística por loja (0-4h) entre "detectar" e "aplicar automaticamente" —
+  // se um release tiver um problema sutil que escape do watchdog/rollback, dá tempo de
+  // perceber antes que todas as lojas atualizem ao mesmo tempo. O botão manual ignora isso.
+  function jitterMsParaLoja(idLoja) {
+    if (!idLoja) return 0;
+    let h = 0;
+    const s = String(idLoja);
+    for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return h % JANELA_JITTER_MS;
+  }
+
   // ── Auto-atualização (só no .exe empacotado) ──
-  // Roda a cada ciclo mas só bate a rede a cada INTERVALO_ATUALIZACAO_MS (12h) — evita
-  // estourar o rate-limit do GitHub. Nova versão só avisa (log/notificação/banner);
-  // aplicar de fato exige clique em "Atualizar agora" (POST /atualizacao/aplicar em webui.js).
+  // Roda a cada ciclo mas só bate a rede a cada INTERVALO_ATUALIZACAO_MS (10min) — evita
+  // estourar o rate-limit do GitHub.
   let ultimaVerificacaoAtualizacao = 0;
+  const versaoDetectadaEm = {}; // versao -> timestamp da 1ª detecção (sobrevive a re-checagens)
   async function verificarAtualizacaoSeNecessario() {
     if (!isPackaged) return;
     if (Date.now() - ultimaVerificacaoAtualizacao < INTERVALO_ATUALIZACAO_MS) return;
@@ -176,7 +196,8 @@ async function main() {
       const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
       if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
         log(`[Atualização] Nova versão disponível: v${disponivel.versao} (atual: v${VERSAO_ATUAL})`);
-        notificarToast('Sincronizador', `Nova versão disponível: v${disponivel.versao}. Abra a tela local para atualizar.`);
+        notificarToast('Sincronizador', `Nova versão disponível: v${disponivel.versao}.`);
+        if (!(disponivel.versao in versaoDetectadaEm)) versaoDetectadaEm[disponivel.versao] = Date.now();
       }
       contextoSync.atualizacaoDisponivel = disponivel;
     } catch (e) {
@@ -184,16 +205,55 @@ async function main() {
     }
   }
 
-  if (isPackaged) {
-    limparExeAntigo(process.execPath); // remove client.old/.new.exe de uma atualização anterior
+  // Decide se aplica a atualização detectada automaticamente — chamado só entre ciclos
+  // (nunca no meio de um pull/push), ver `cicloComAutoAtualizacao` mais abaixo.
+  const tentativasFalhasPorVersao = {};
+  async function aplicarAtualizacaoSeNecessario() {
+    if (!isPackaged || !AUTO_ATUALIZAR) return;
+    const info = contextoSync.atualizacaoDisponivel;
+    if (!info?.urlDownload) return;
+    if (!contextoSync.idLoja) return; // ainda sem loja conhecida — sem isso não dá pra calcular o jitter
 
-    // Sob demanda via "Atualizar agora" — só troca o executável e encerra; não relança
-    // sozinho, o usuário (ou a tray) inicia o cliente atualizado de novo.
+    const detectadaEm = versaoDetectadaEm[info.versao] ?? Date.now();
+    if (Date.now() - detectadaEm < jitterMsParaLoja(contextoSync.idLoja)) return;
+
+    const tentativas = tentativasFalhasPorVersao[info.versao] || 0;
+    if (tentativas >= MAX_TENTATIVAS_AUTO_POR_VERSAO) return;
+
+    try {
+      await contextoSync._aplicarAtualizacao();
+      // se não lançou, o respawn foi confirmado e este processo já está saindo (ver updater.js)
+    } catch (e) {
+      tentativasFalhasPorVersao[info.versao] = tentativas + 1;
+      log(`[Atualização] tentativa automática falhou (${tentativas + 1}/${MAX_TENTATIVAS_AUTO_POR_VERSAO}): ${e.message}`);
+    }
+  }
+
+  // Estado herdado de uma atualização em andamento quando ESTE processo é o "novo" —
+  // confirmado (ou não) depois do primeiro ciclo, ver abaixo.
+  let estadoPosAtualizacao = isPackaged ? lerEstadoPendente(process.execPath) : null;
+
+  if (isPackaged) {
+    limparExeAntigo(process.execPath); // remove sobras de atualizações anteriores (preserva o que um rollback pendente ainda precisa)
+
+    // Usada tanto pelo fluxo automático quanto pelo botão manual "Atualizar agora" — ambos
+    // ganham o mesmo respawn supervisionado + rollback (ver updater.js).
     contextoSync._aplicarAtualizacao = async () => {
       const info = contextoSync.atualizacaoDisponivel;
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
-      await aplicarAtualizacao({ urlDownload: info.urlDownload, exePath: process.execPath });
+      await aplicarAtualizacaoComRespawn({
+        urlDownload: info.urlDownload,
+        exePath: process.execPath,
+        versaoAtual: VERSAO_ATUAL,
+        versaoNova: info.versao,
+      });
     };
+
+    atualizacaoEmitter.on('status', (status) => {
+      contextoSync.atualizacaoStatus = status;
+      if (status.status === 'aplicando') notificarToast('Sincronizador', `Atualizando para v${status.versao}...`);
+      else if (status.status === 'revertida') notificarToast('Sincronizador', `Falha ao atualizar para v${status.versao} — revertido automaticamente para a versão anterior.`);
+    });
   }
 
   // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
@@ -394,12 +454,68 @@ async function main() {
     }
   }
 
+  async function cicloComAutoAtualizacao() {
+    await executarCiclo();
+    await aplicarAtualizacaoSeNecessario();
+  }
+
   // Pausa breve para o Firebird liberar a sessão do setup antes do primeiro ciclo.
   // Sem isso, o detach() e a nova conexão chegam ao servidor quase simultaneamente
   // e ele rejeita com "user name and password not defined".
   await new Promise(r => setTimeout(r, 1000));
   await executarCiclo();
-  setInterval(executarCiclo, INTERVALO_MS);
+
+  // Este processo é o "novo" de uma atualização recém-aplicada: o primeiro ciclo acima
+  // terminou sem lançar exceção (executarCiclo já engole tudo internamente) — critério
+  // simples de propósito para "o build subiu e está funcionando". Libera o .exe antigo.
+  if (estadoPosAtualizacao) {
+    const confirmado = await confirmarAtualizacao(process.execPath);
+    if (confirmado) notificarToast('Sincronizador', `Atualizado com sucesso para v${confirmado.versao}.`);
+    estadoPosAtualizacao = null;
+  }
+
+  setInterval(cicloComAutoAtualizacao, INTERVALO_MS);
+}
+
+// Segunda camada de rollback (Camada 2): cobre o caso de um build recém-atualizado que
+// lança exceção síncrona antes mesmo de chegar ao primeiro executarCiclo() — mais lento
+// que o watchdog de liveness em updater.js (Camada 1), mas ainda dentro deste laço de
+// retry. Deliberadamente NÃO usa require('./updater') — se o bug estiver dentro desse
+// módulo, importá-lo aqui durante o rollback poderia falhar também. Só fs/path/child_process.
+function _temAtualizacaoPendenteBruto() {
+  try {
+    return fs.existsSync(path.join(path.dirname(process.execPath), '.update-pending.json'));
+  } catch {
+    return false;
+  }
+}
+
+function _rollbackAtualizacaoFatalBruto() {
+  try {
+    const exePath = process.execPath;
+    const dir = path.dirname(exePath);
+    const statePath = path.join(dir, '.update-pending.json');
+    if (!fs.existsSync(statePath)) return false;
+
+    let estado;
+    try { estado = JSON.parse(fs.readFileSync(statePath, 'utf8')); } catch { return false; }
+    if (!estado || !estado.exeAntigoPath || !fs.existsSync(estado.exeAntigoPath)) return false;
+
+    const quebradoPath = path.join(dir, `client.broken.${Date.now()}.exe`);
+    try { fs.renameSync(exePath, quebradoPath); } catch { /* segue tentando restaurar mesmo assim */ }
+    fs.renameSync(estado.exeAntigoPath, exePath);
+    try { fs.unlinkSync(statePath); } catch {}
+
+    require('child_process').spawn(exePath, [], {
+      detached: true,
+      windowsHide: true,
+      stdio: 'ignore',
+      env: { ...process.env, SINCRONIZADOR_BG: '1' },
+    }).unref();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Reinicia automaticamente se main() lançar erro inesperado
@@ -413,13 +529,31 @@ async function main() {
       tentativas++;
       const msg = e.stack || e.message;
       try { require('./erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
-      // Após 3 falhas consecutivas na inicialização, para e exibe o erro
+
+      const pendente = isPackaged && _temAtualizacaoPendenteBruto();
+
+      // Após 3 falhas consecutivas na inicialização, para (ou reverte, se for um build
+      // recém-atualizado que nunca conseguiu subir)
       if (tentativas >= 3) {
+        if (pendente) {
+          console.error('[Atualização] a nova versão falhou ao iniciar 3x seguidas — revertendo para a versão anterior...');
+          const revertido = _rollbackAtualizacaoFatalBruto();
+          if (revertido) {
+            console.error('[Atualização] Revertido — a versão anterior foi reiniciada em segundo plano.');
+            process.exit(1);
+            return;
+          }
+          console.error('[Atualização] Falha ao reverter automaticamente — intervenção manual necessária.');
+        }
         encerrarComErro(e);
         break;
       }
-      console.error(`[ERRO FATAL] ${msg} — reiniciando em 30s... (tentativa ${tentativas}/3)`);
-      await new Promise(r => setTimeout(r, 30000));
+
+      // Build recém-atualizado falhando: backoff curto (é o suspeito óbvio, não vale
+      // esperar como se fosse instabilidade de rede/infra transitória)
+      const espera = pendente ? 3000 : 30000;
+      console.error(`[ERRO FATAL] ${msg} — reiniciando em ${Math.round(espera / 1000)}s... (tentativa ${tentativas}/3)`);
+      await new Promise(r => setTimeout(r, espera));
     }
   }
 })();
