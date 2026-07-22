@@ -7,6 +7,17 @@ process.on('warning', w => { if (w.code !== 'DEP0060') process.stderr.write(`War
 
 const isPackaged = typeof process.pkg !== 'undefined';
 
+// Iniciado via chave de registro Run (Windows autostart, "Iniciar com o Windows" na
+// bandeja) herda cwd = C:\Windows\System32 — sem permissão de escrita ali, isso quebra com
+// EPERM qualquer módulo que grave estado via process.cwd() (conflitos.js, tabelasConfig.js,
+// parametrosGlobaisState.js). Fixa o cwd pra pasta do .exe logo de cara, antes de qualquer
+// spawn ou require desses módulos, pra funcionar igual não importa como foi iniciado
+// (duplo-clique, --background manual, ou o registro Run) — o child spawnado pelo bloco
+// --background abaixo também herda esse cwd corrigido, então cobre os dois processos.
+if (isPackaged) {
+  try { process.chdir(path.dirname(process.execPath)); } catch { /* segue mesmo assim — mesmo EPERM de antes, não piora nada */ }
+}
+
 // Quando empacotado, __dirname é read-only (virtual). Usa o diretório do .exe.
 const ENV_PATH = isPackaged
   ? path.join(path.dirname(process.execPath), '.env')
