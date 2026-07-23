@@ -30,6 +30,10 @@ GEMINI.md
 
 # Variáveis de ambiente (contém token e segredos)
 .env
+
+# Credenciais do client.exe criptografadas via DPAPI (gerado pelo wizard/migração,
+# amarrado ao Windows/usuário da loja — ver src/client/config-crypto.js)
+config.enc
 .vscode/
 dist/
 

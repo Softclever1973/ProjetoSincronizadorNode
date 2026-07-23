@@ -22,6 +22,10 @@ if (isPackaged) {
 const ENV_PATH = isPackaged
   ? path.join(path.dirname(process.execPath), '.env')
   : path.resolve(__dirname, '.env');
+const CONFIG_ENC_PATH = path.join(path.dirname(ENV_PATH), 'config.enc');
+// DPAPI so existe no Windows e so faz sentido pra um .exe instalado numa loja (amarra
+// a um Windows/usuario fixo) — em dev (npm run client) continua sendo .env em texto puro.
+const USAR_CRIPTOGRAFIA = isPackaged && process.platform === 'win32';
 
 const LOG_PATH   = path.join(path.dirname(ENV_PATH), 'client.log');
 const CRASH_PATH = path.join(path.dirname(ENV_PATH), 'crash.log');
@@ -35,7 +39,7 @@ function encerrarComErro(err) {
     '',
     err.message,
     '',
-    'Verifique o arquivo .env na pasta do executável.',
+    'Verifique o arquivo de configuração (config.enc ou .env) na pasta do executável.',
     '',
   ];
   console.error(linhas.join('\n'));
@@ -56,7 +60,7 @@ function encerrarComErro(err) {
 // (uso explícito — o exe não faz isso automaticamente)
 // ---------------------------------------------------------------------------
 if (process.argv.includes('--background')) {
-  if (!fs.existsSync(ENV_PATH)) {
+  if (!fs.existsSync(ENV_PATH) && !fs.existsSync(CONFIG_ENC_PATH)) {
     console.error('[ERRO] Configure o cliente primeiro (execute sem --background).');
     process.exit(1);
   }
@@ -117,7 +121,7 @@ process.on('unhandledRejection', e => {
 // ---------------------------------------------------------------------------
 if (isPackaged && !process.env.SINCRONIZADOR_BG) {
   process.on('SIGHUP', () => {
-    if (!fs.existsSync(ENV_PATH)) { process.exit(0); return; }
+    if (!fs.existsSync(ENV_PATH) && !fs.existsSync(CONFIG_ENC_PATH)) { process.exit(0); return; }
     require('child_process').spawn(process.execPath, [], {
       detached: true,
       windowsHide: true,
@@ -131,13 +135,64 @@ if (isPackaged && !process.env.SINCRONIZADOR_BG) {
 // ---------------------------------------------------------------------------
 // Inicialização principal — reinicia automaticamente em caso de erro fatal
 // ---------------------------------------------------------------------------
-async function main() {
-  if (!fs.existsSync(ENV_PATH)) {
-    const { runSetupWizard } = require('./setup-wizard');
-    await runSetupWizard(ENV_PATH);
+// Le a configuracao de credenciais (config.enc criptografado ou .env legado em texto
+// puro), rodando o wizard se nenhum dos dois existir ainda. Se so existir o .env antigo
+// num build empacotado, migra pra config.enc na hora e apaga o texto puro — cobre quem
+// ja tinha o cliente instalado antes dessa mudanca, sem precisar reconfigurar do zero.
+async function carregarConfiguracao() {
+  if (fs.existsSync(CONFIG_ENC_PATH)) {
+    const { desprotegerConfig } = require('./config-crypto');
+    let dados;
+    try {
+      dados = desprotegerConfig(fs.readFileSync(CONFIG_ENC_PATH, 'utf8'));
+    } catch (e) {
+      throw new Error(
+        `Não foi possível descriptografar config.enc (${e.message}). ` +
+        'Isso acontece se o arquivo foi copiado para outro Windows/usuário — ' +
+        'a criptografia é amarrada à máquina/usuário original. ' +
+        'Apague config.enc e execute novamente para reconfigurar.'
+      );
+    }
+    Object.assign(process.env, dados);
+    return;
   }
 
-  require('dotenv').config({ path: ENV_PATH });
+  if (fs.existsSync(ENV_PATH)) {
+    require('dotenv').config({ path: ENV_PATH });
+    if (USAR_CRIPTOGRAFIA) {
+      try {
+        const { protegerConfig } = require('./config-crypto');
+        const CHAVES = ['SYNC_TOKEN', 'FIREBIRD_HOST', 'FIREBIRD_PORT', 'FIREBIRD_DATABASE', 'FIREBIRD_USER', 'FIREBIRD_PASSWORD', 'INTERVALO_MS', 'NOME_FILIAL'];
+        const dados = {};
+        for (const chave of CHAVES) if (process.env[chave] !== undefined) dados[chave] = process.env[chave];
+        fs.writeFileSync(CONFIG_ENC_PATH, protegerConfig(dados), 'utf8');
+        fs.unlinkSync(ENV_PATH);
+        console.log('[OK] .env migrado para config.enc (criptografado) — o arquivo em texto puro foi removido.');
+      } catch (e) {
+        console.error('[!] Não foi possível migrar .env para config.enc automaticamente: ' + e.message);
+      }
+    }
+    return;
+  }
+
+  const { runSetupWizard } = require('./setup-wizard');
+  const dados = await runSetupWizard({
+    destino: USAR_CRIPTOGRAFIA ? CONFIG_ENC_PATH : ENV_PATH,
+    criptografado: USAR_CRIPTOGRAFIA,
+  });
+  Object.assign(process.env, dados);
+}
+
+async function main() {
+  try {
+    await carregarConfiguracao();
+  } catch (e) {
+    // Falha de configuração (ex.: config.enc ilegível) é permanente, não transitória —
+    // encerra direto em vez de deixar o laço de retry no fim do arquivo tentar de novo
+    // por até 90s (mesmo padrão do erro de SYNC_TOKEN ausente, logo abaixo).
+    encerrarComErro(e);
+    return;
+  }
 
   const { getConnection, closeConnection, getParam, setParam, getTabelasExistentes } = require('./db');
   const { sincronizarTabela } = require('./sync');

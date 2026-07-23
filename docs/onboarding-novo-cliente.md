@@ -76,7 +76,7 @@ Na primeira execução, o cliente inicia automaticamente um **assistente de conf
 +--------------------------------------+
 
 SYNC_TOKEN (fornecido pelo administrador do servidor):
-> a3f8c2d1e9b4...
+>
 
 URL do servidor
   ex: http://192.168.1.100:8080
@@ -87,8 +87,7 @@ Caminho do banco Firebird
 > C:\FDBS\KR_FILIAL.FDB
 
 Senha do Firebird:
-> masterkey
-
+>
 Host do Firebird [localhost]:
 >
 
@@ -102,13 +101,18 @@ Intervalo entre ciclos em ms [30000]:
 >
 ```
 
-Campos entre `[colchetes]` têm valor padrão — pressione Enter para aceitar. **Ctrl+V** funciona para colar (Windows).
+Campos entre `[colchetes]` têm valor padrão — pressione Enter para aceitar. **Ctrl+V** funciona para colar (Windows). O `SYNC_TOKEN` e a senha do Firebird não aparecem no terminal enquanto você digita (igual a um prompt de senha do `sudo`) — isso é proposital, para que ninguém olhando a tela veja a credencial.
 
-O wizard cria `src/client/.env` (ou `.env` ao lado do `client.exe`) e grava a URL do servidor em `PARAMETROS(60024)` no banco Firebird automaticamente.
+O wizard grava a URL do servidor em `PARAMETROS(60024)` no banco Firebird automaticamente, e salva as credenciais de dois jeitos diferentes dependendo de como o cliente está rodando:
 
-> Para reconfigurar, apague o `.env` e reinicie o cliente.
+- **`client.exe` (produção, Windows)** — grava `config.enc`, criptografado via DPAPI do Windows e amarrado a este Windows/usuário específico (copiar o arquivo para outra máquina ou rodar sob outro usuário não funciona — é proposital). Não existe `.env` em texto puro nesse modo.
+- **`npm run client` (desenvolvimento, Node.js)** — grava `src/client/.env` em texto puro, como antes.
 
-**Configuração manual** (alternativa ao wizard): crie o arquivo `.env` diretamente:
+> Para reconfigurar, apague `config.enc` (produção) ou `.env` (desenvolvimento) e reinicie o cliente.
+
+Se você já tinha uma instalação com `.env` em texto puro ao lado do `client.exe` (de antes dessa mudança), não precisa fazer nada: na próxima vez que o `client.exe` iniciar, ele migra sozinho para `config.enc` e apaga o `.env` antigo.
+
+**Configuração manual** (alternativa ao wizard, ambos os modos): crie o arquivo `.env` diretamente — mesmo ao lado do `client.exe`, o cliente detecta esse `.env` manual e o converte para `config.enc` automaticamente na primeira execução:
 
 ```env
 SYNC_TOKEN=a3f8c2d1e9b4...
@@ -138,7 +142,7 @@ client.exe
 ```
 
 **Na primeira execução**, o cliente:
-1. Executa o wizard de configuração (se `.env` ausente)
+1. Executa o wizard de configuração (se `config.enc`/`.env` ausente)
 2. Conecta ao Firebird e executa `setup.js` — cria tabelas e triggers de rastreamento (`SYNC_ALTERACOES_PENDENTES`, `SYNC_VERSOES_SERVIDOR`, etc.) — operação idempotente
 3. Inicia a WebUI de conflitos em `http://localhost:3001`
 4. Executa o primeiro ciclo pull → push
@@ -244,10 +248,13 @@ Resposta:
 ## Troubleshooting
 
 ### `[ERRO] SYNC_TOKEN não configurado`
-O arquivo `.env` não existe ou está vazio. Execute o cliente sem `.env` para que o wizard de configuração seja iniciado automaticamente.
+Nem `config.enc` nem `.env` existem (ou estão vazios). Apague os dois, se existirem, e execute o cliente para que o wizard de configuração seja iniciado automaticamente.
 
 ### `[ERRO] FIREBIRD_DATABASE não definido`
-Adicione `FIREBIRD_DATABASE=C:\caminho\para\banco.fdb` no `.env`.
+No modo desenvolvimento (`.env`), adicione `FIREBIRD_DATABASE=C:\caminho\para\banco.fdb`. No `client.exe` (produção), apague `config.enc` e rode o wizard de novo — o `config.enc` é criptografado, não dá para editar campo a campo.
+
+### `Não foi possível descriptografar config.enc`
+O `config.enc` foi copiado para outro Windows ou está sendo executado sob um usuário diferente do que gerou o arquivo — a criptografia (DPAPI) é amarrada de propósito a essa combinação máquina+usuário. Apague `config.enc` nessa instalação e rode o wizard de novo para gerar um novo, específico dessa máquina.
 
 ### `Error: Connection refused` ao conectar no servidor
 - Verifique se o servidor está rodando (`npm start` na matriz)
@@ -255,7 +262,7 @@ Adicione `FIREBIRD_DATABASE=C:\caminho\para\banco.fdb` no `.env`.
 - Verifique firewall da máquina do servidor liberando a porta `PORT`
 
 ### Token rejeitado (HTTP 401 ou 403)
-- Confirme que o `SYNC_TOKEN` no `.env` do cliente é **idêntico** ao cadastrado com `create-empresa.js`
+- Confirme que o `SYNC_TOKEN` gravado no cliente (`config.enc` em produção, `.env` em desenvolvimento) é **idêntico** ao cadastrado com `create-empresa.js`
 - Verifique se a empresa está ativa: `SELECT ativo FROM public.sync_tenants WHERE token = '...'`
 - Se o token foi cadastrado recentemente sem reiniciar o servidor, force o reload: `POST /admin/reload-empresas`
 

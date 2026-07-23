@@ -6,6 +6,25 @@ async function pergunta(rl, texto) {
   return new Promise(resolve => rl.question(texto, answer => resolve(answer.trim())));
 }
 
+// Mesma ideia do prompt de senha do sudo: nada e ecoado enquanto o usuario digita (nem
+// o caractere real, nem asterisco) — evita ter que reimplementar backspace/setas por
+// conta propria. Suprime _writeToOutput do readline (API interna, mas estavel ha varias
+// major versions do Node e e o mecanismo padrao pra isso) so durante essa pergunta; o
+// buffer de linha do readline continua funcionando normalmente por baixo, entao o hack
+// de colar com Ctrl+V (habilitarCtrlV, que injeta 'keypress') continua funcionando aqui.
+async function perguntaSenha(rl, texto) {
+  return new Promise(resolve => {
+    process.stdout.write(texto);
+    const escreverOriginal = rl._writeToOutput.bind(rl);
+    rl._writeToOutput = () => {};
+    rl.question('', answer => {
+      rl._writeToOutput = escreverOriginal;
+      process.stdout.write('\n');
+      resolve(answer.trim());
+    });
+  });
+}
+
 function habilitarCtrlV() {
   if (process.platform !== 'win32' || !process.stdin.isTTY) return;
 
@@ -99,11 +118,20 @@ function gravarParametro(connOpts, idParametro, valor) {
   });
 }
 
-async function runSetupWizard(envPath) {
+// destino: caminho do arquivo a gravar (config.enc ou .env).
+// criptografado: true grava via DPAPI (so Windows/pacote empacotado); false grava .env
+// em texto puro (modo dev, sem empacotar — nao ha exe fixo pra amarrar via DPAPI).
+// Retorna o objeto de configuracao coletado, pra quem chamou popular process.env direto
+// sem precisar reabrir/descriptografar o arquivo que acabou de escrever.
+async function runSetupWizard({ destino, criptografado }) {
   console.log('\n+--------------------------------------+');
   console.log('|   Configuracao inicial do Cliente    |');
   console.log('+--------------------------------------+\n');
-  console.log('Arquivo .env nao encontrado. Configure agora:\n');
+  console.log('Configuracao nao encontrada. Configure agora:\n');
+  if (criptografado) {
+    console.log('  (as credenciais serao gravadas criptografadas em config.enc,');
+    console.log('   amarradas a este Windows/usuario — nao ficam em texto puro em disco)\n');
+  }
 
   habilitarCtrlV();
 
@@ -118,7 +146,7 @@ async function runSetupWizard(envPath) {
   try {
     let syncToken = '';
     while (!syncToken) {
-      syncToken = await pergunta(rl, 'SYNC_TOKEN (fornecido pelo administrador do servidor):\n> ');
+      syncToken = await perguntaSenha(rl, 'SYNC_TOKEN (fornecido pelo administrador do servidor):\n> ');
       if (!syncToken) console.log('  [!] Campo obrigatorio.\n');
     }
 
@@ -159,7 +187,7 @@ async function runSetupWizard(envPath) {
 
     let fbPassword = '';
     while (!fbPassword) {
-      fbPassword = await pergunta(rl, '\nSenha do Firebird:\n> ');
+      fbPassword = await perguntaSenha(rl, '\nSenha do Firebird:\n> ');
       if (!fbPassword) console.log('  [!] Campo obrigatorio.\n');
     }
 
@@ -201,19 +229,26 @@ async function runSetupWizard(envPath) {
     }
     const idLoja = parseInt(idLojaStr, 10);
 
-    const conteudo = [
-      `SYNC_TOKEN=${syncToken}`,
-      `FIREBIRD_HOST=${fbHost}`,
-      `FIREBIRD_PORT=${fbPort}`,
-      `FIREBIRD_DATABASE=${fbDatabase}`,
-      `FIREBIRD_USER=${fbUser}`,
-      `FIREBIRD_PASSWORD=${fbPassword}`,
-      `INTERVALO_MS=${intervalo}`,
-      `NOME_FILIAL=${nomeFilial}`,
-    ].join('\n') + '\n';
+    const dados = {
+      SYNC_TOKEN: syncToken,
+      FIREBIRD_HOST: fbHost,
+      FIREBIRD_PORT: fbPort,
+      FIREBIRD_DATABASE: fbDatabase,
+      FIREBIRD_USER: fbUser,
+      FIREBIRD_PASSWORD: fbPassword,
+      INTERVALO_MS: intervalo,
+      NOME_FILIAL: nomeFilial,
+    };
 
-    fs.writeFileSync(envPath, conteudo, 'utf8');
-    console.log('\n  [OK] .env criado em: ' + envPath);
+    if (criptografado) {
+      const { protegerConfig } = require('./config-crypto');
+      fs.writeFileSync(destino, protegerConfig(dados), 'utf8');
+      console.log('\n  [OK] Configuracao criptografada gravada em: ' + destino);
+    } else {
+      const conteudo = Object.entries(dados).map(([k, v]) => `${k}=${v}`).join('\n') + '\n';
+      fs.writeFileSync(destino, conteudo, 'utf8');
+      console.log('\n  [OK] .env criado em: ' + destino);
+    }
 
     const connOpts = { host: fbHost, port: parseInt(fbPort, 10), database: fbDatabase, user: fbUser, password: fbPassword };
 
@@ -228,7 +263,9 @@ async function runSetupWizard(envPath) {
       await gravarParametro(connOpts, 50005, nomeFilial);
     }
 
-    console.log('  Para reconfigurar, delete o .env e execute novamente.\n');
+    console.log(`  Para reconfigurar, delete ${path.basename(destino)} e execute novamente.\n`);
+
+    return dados;
   } finally {
     rl.close();
   }
