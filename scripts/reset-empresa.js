@@ -13,9 +13,19 @@
  * Opções PostgreSQL (usa DATABASE_URL do .env se não informado):
  *   --pg-url=postgresql://user:pass@host:5432/db
  *
- * Opções Firebird (omita para pular o reset do cliente):
+ * Conexão Firebird — resolvida nesta ordem (a primeira que resolver vence):
+ *   1. Flags explícitas nesta chamada (--fb-database etc., abaixo).
+ *   2. Entrada `schema` em scripts/lojas.json (ver scripts/lojas.example.json) — assim
+ *      você não precisa digitar caminho/senha do Firebird toda vez, só manter esse
+ *      arquivo local atualizado por loja.
+ *   3. Nenhuma das duas: o script recusa a rodar, a menos que --only-postgres seja
+ *      passado explicitamente — resetar só o Postgres sem resetar o cursor local do
+ *      Firebird deixa o cliente dessincronizado (ver CLAUDE.md, incidente de reset
+ *      parcial) e não deve ser o caminho padrão por esquecimento.
+ *
+ * Opções Firebird (sobrepõem o que estiver em scripts/lojas.json):
  *   --fb-database=C:\FDBS\filial.fdb   (caminho completo)
- *   --fb-password=senha                (obrigatório com --fb-database)
+ *   --fb-password=senha                (obrigatório se --fb-database for passado direto)
  *   --fb-host=localhost                (padrão: localhost)
  *   --fb-port=3050                     (padrão: 3050)
  *   --fb-user=SYSDBA                   (padrão: SYSDBA)
@@ -23,6 +33,7 @@
  *   --skip-fb-srv-id                   (pula a limpeza de SRV_ID — útil quando há locks nas tabelas)
  *
  * Opções adicionais:
+ *   --only-postgres                    (confirma resetar só o servidor, sem tocar no Firebird)
  *   --json-dir=C:\caminho              (diretório dos .json, padrão: cwd)
  *   --force                            (pula confirmação interativa)
  */
@@ -56,21 +67,17 @@ const args = Object.fromEntries(
 
 const schema      = args['schema'];
 const pgUrl       = args['pg-url'] || process.env.DATABASE_URL;
-const fbDatabase  = args['fb-database'];
-const fbPassword  = args['fb-password'];
-const fbHost      = args['fb-host'] || 'localhost';
-const fbPort      = parseInt(args['fb-port'] || '3050', 10);
-const fbUser      = args['fb-user']  || 'SYSDBA';
 const jsonDir     = args['json-dir'] || process.cwd();
 const force       = 'force' in args;
 const skipFbSrvId = 'skip-fb-srv-id' in args;
 const fbTimeout   = parseInt(args['fb-timeout'] || '30000', 10);
+const onlyPostgres = 'only-postgres' in args;
 
-// ── Validação ─────────────────────────────────────────────────────────────────
+// ── Validação básica ──────────────────────────────────────────────────────────
 
 if (!schema) {
   console.error('Erro: --schema é obrigatório.');
-  console.error('Uso: node scripts/reset-empresa.js --schema=empresa_jb [--pg-url=...] [--fb-database=... --fb-password=...]');
+  console.error('Uso: node scripts/reset-empresa.js --schema=empresa_jb [--pg-url=...] [--fb-database=... --fb-password=...] [--only-postgres]');
   process.exit(1);
 }
 
@@ -84,8 +91,40 @@ if (!pgUrl) {
   process.exit(1);
 }
 
+// ── Resolução da conexão Firebird: flags explícitas > scripts/lojas.json > erro ──
+// (a menos que --only-postgres confirme que resetar só o servidor é intencional)
+
+function lerMapeamentoLojas() {
+  const caminho = path.join(__dirname, 'lojas.json');
+  if (!fs.existsSync(caminho)) return {};
+  try {
+    return JSON.parse(fs.readFileSync(caminho, 'utf8'));
+  } catch (e) {
+    console.error(`Erro: scripts/lojas.json existe mas não é um JSON válido: ${e.message}`);
+    process.exit(1);
+  }
+}
+
+const lojaMapeada = lerMapeamentoLojas()[schema] || {};
+
+const fbDatabase = args['fb-database'] || lojaMapeada.fbDatabase;
+const fbPassword = args['fb-password'] || lojaMapeada.fbPassword;
+const fbHost     = args['fb-host']     || lojaMapeada.fbHost || 'localhost';
+const fbPort     = parseInt(args['fb-port'] || lojaMapeada.fbPort || '3050', 10);
+const fbUser     = args['fb-user']     || lojaMapeada.fbUser || 'SYSDBA';
+
 if (fbDatabase && !fbPassword) {
-  console.error('Erro: --fb-password é obrigatório quando --fb-database é informado.');
+  console.error('Erro: senha do Firebird não encontrada (nem em --fb-password, nem em scripts/lojas.json para este schema).');
+  process.exit(1);
+}
+
+if (!fbDatabase && !onlyPostgres) {
+  console.error(`Erro: nenhuma conexão Firebird encontrada para o schema "${schema}".`);
+  console.error('Resetar só o lado Postgres deixa o cursor local do cliente dessincronizado (ele fica sem saber que o servidor voltou a contar do zero, e pára de puxar updates/inserts — só reflete isso o próximo reset do Firebird).');
+  console.error('Escolha uma opção:');
+  console.error(`  1. Adicione uma entrada "${schema}" em scripts/lojas.json (ver scripts/lojas.example.json)`);
+  console.error('  2. Passe --fb-database=... --fb-password=... nesta chamada');
+  console.error('  3. Passe --only-postgres pra confirmar que resetar só o servidor é intencional');
   process.exit(1);
 }
 
@@ -101,12 +140,16 @@ function confirmar() {
   console.log(`    • Truncar as tabelas de infraestrutura (filiais, config, srv_id_map, etc.)`);
   console.log(`    • Reiniciar as sequências seq_atualizacao_matriz, seq_srv_id e seq_srv_id_<tabela>`);
   if (fbDatabase) {
-    console.log(`\n  Firebird (${fbDatabase})`);
+    console.log(`\n  Firebird (${fbHost}:${fbPort} — ${fbDatabase})`);
     console.log('    • Limpar SYNC_ALTERACOES_PENDENTES, SYNC_VERSOES_SERVIDOR, SYNC_ERROS');
     console.log('    • Zerar cursores em ULTIMOS_REGISTROS_MATRIZ');
     console.log('    • Limpar coluna SRV_ID em todas as tabelas sincronizadas');
     console.log(`\n  JSON (${jsonDir})`);
     console.log('    • Limpar conflitos.json e erros.json');
+  } else {
+    console.log('\n  ⚠️  --only-postgres: o Firebird desta loja NÃO será tocado.');
+    console.log('      O cursor local vai continuar contando de onde parou, e vai parar de');
+    console.log('      ver updates/inserts novos até você resetar o Firebird manualmente depois.');
   }
   console.log('\n  Certifique-se de que o servidor Node.js está PARADO antes de continuar.\n');
   return new Promise(resolve => {

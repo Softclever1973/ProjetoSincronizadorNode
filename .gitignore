@@ -9,6 +9,10 @@ sirius-client.ini
 conflitos.json
 tabelas-config.json
 
+# Mapeamento local schema → conexão Firebird de cada loja (contém senhas) — ver
+# scripts/lojas.example.json para o formato esperado.
+scripts/lojas.json
+
 # Logs
 *.log
 npm-debug.log*

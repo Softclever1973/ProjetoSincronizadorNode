@@ -1,0 +1,14 @@
+{
+  "new_kr_schema": {
+    "fbHost": "177.131.142.37",
+    "fbPort": 3050,
+    "fbDatabase": "C:\\FDBS\\KR_OLIVEIRANEW.FDB",
+    "fbUser": "SYSDBA",
+    "fbPassword": "senha-do-firebird-dessa-loja"
+  },
+  "empresa_kr": {
+    "fbHost": "localhost",
+    "fbDatabase": "C:\\FDBS\\FILIAL.FDB",
+    "fbPassword": "outra-senha"
+  }
+}
