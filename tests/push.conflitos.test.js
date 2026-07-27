@@ -90,7 +90,8 @@ describe('empurrarTabela — FK referenciando um pai sem SRV_ID ainda (o caso do
     mockQueryPorSql([
       ['SYNC_ALTERACOES_PENDENTES', [{ PK_VALOR: '14760' }]],
       [`SELECT * FROM ${configBase.nome}`, [{ ID_MOVIMENTACAO: 14760, ID_PRODUTO: 777, ID_LOJA: 5 }]],
-      ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', []], // PRODUTOS ainda não foi pushado — sem SRV_ID
+      // PRODUTOS existe localmente mas ainda não foi pushado — SRV_ID nulo, não linha ausente
+      ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', [{ SRV_ID: null }]],
     ]);
 
     await empurrarTabela({}, 'http://servidor-teste', 5, configComFk, noopLog);
@@ -99,6 +100,26 @@ describe('empurrarTabela — FK referenciando um pai sem SRV_ID ainda (o caso do
     const reenfileiramentos = chamadasExecuteComTrecho('UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES');
     expect(reenfileiramentos).toHaveLength(1);
     expect(reenfileiramentos[0][2]).toEqual(['PRODUTOS', '777']);
+  });
+
+  test('produto pai não existe mais localmente (deletado): loga erro e NÃO reenfileira (evita loop infinito)', async () => {
+    mockQueryPorSql([
+      ['SYNC_ALTERACOES_PENDENTES', [{ PK_VALOR: '14760' }]],
+      [`SELECT * FROM ${configBase.nome}`, [{ ID_MOVIMENTACAO: 14760, ID_PRODUTO: 777, ID_LOJA: 5 }]],
+      ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', []], // produto 777 não existe mais (foi deletado)
+    ]);
+    const { salvarErro } = require('../src/client/erros');
+
+    await empurrarTabela({}, 'http://servidor-teste', 5, configComFk, noopLog);
+
+    expect(enviarRegistro).not.toHaveBeenCalled();
+    // não reenfileira o pai — ele nunca vai existir de novo, reenfileirar causaria loop infinito
+    expect(chamadasExecuteComTrecho('UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES')).toHaveLength(0);
+    expect(salvarErro).toHaveBeenCalledWith(expect.objectContaining({
+      tabela: 'MOVIMENTACOES',
+      operacao: 'push',
+      mensagem: expect.stringContaining('PRODUTOS'),
+    }));
   });
 
   test('FK resolvida: traduz o ID local para SRV_ID antes de enviar', async () => {
@@ -135,8 +156,8 @@ describe('empurrarTabela — múltiplos pendentes no mesmo ciclo', () => {
           ? [{ ID_MOVIMENTACAO: 100, ID_PRODUTO: 111, ID_LOJA: 5 }]
           : [{ ID_MOVIMENTACAO: 200, ID_PRODUTO: 222, ID_LOJA: 5 }]
       )],
-      // produto 111 já foi pushado (tem SRV_ID) — produto 222 ainda não
-      ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', (params) => (params[0] === 111 ? [{ SRV_ID: 500 }] : [])],
+      // produto 111 já foi pushado (tem SRV_ID) — produto 222 existe mas ainda não
+      ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', (params) => (params[0] === 111 ? [{ SRV_ID: 500 }] : [{ SRV_ID: null }])],
       ['SYNC_VERSOES_SERVIDOR', []],
     ]);
     enviarRegistro.mockResolvedValue({ novoId: 1 });

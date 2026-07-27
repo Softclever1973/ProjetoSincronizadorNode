@@ -1330,9 +1330,24 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     }
   });
 
-  app.listen(porta, () => {
-    console.log(`[WEBUI] Interface de conflitos: http://localhost:${porta}`);
-  });
+  // Durante um respawn de atualização (updater.js), o processo antigo ainda segura a
+  // porta por até JANELA_LIVENESS_MS (~10s) enquanto observa se o novo se mantém de pé —
+  // então o primeiro listen() aqui costuma bater num EADDRINUSE transitório. Sem retry,
+  // isso vira exceção não tratada, é engolida pelo handler global process.on('uncaughtException')
+  // em index.js e a web UI nunca mais sobe nesse processo. Tenta de novo por ~20s antes de desistir.
+  const escutar = (tentativasRestantes = 20) => {
+    const server = app.listen(porta, () => {
+      console.log(`[WEBUI] Interface de conflitos: http://localhost:${porta}`);
+    });
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE' && tentativasRestantes > 0) {
+        setTimeout(() => escutar(tentativasRestantes - 1), 1000);
+      } else {
+        console.error(`[WEBUI] Nao foi possivel escutar na porta ${porta}: ${err.message}`);
+      }
+    });
+  };
+  escutar();
 }
 
 module.exports = { iniciarWebUI };

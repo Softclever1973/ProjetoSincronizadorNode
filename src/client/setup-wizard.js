@@ -92,6 +92,16 @@ function lerParametro(connOpts, idParametro) {
   });
 }
 
+function testarConexaoFirebird(connOpts) {
+  return new Promise((resolve) => {
+    Firebird.attach(connOpts, (err, db) => {
+      if (err) return resolve({ ok: false, erro: err.message });
+      db.detach(() => {});
+      resolve({ ok: true });
+    });
+  });
+}
+
 function gravarParametro(connOpts, idParametro, valor) {
   return new Promise((resolve) => {
     Firebird.attach(connOpts, (err, db) => {
@@ -180,25 +190,51 @@ async function runSetupWizard({ destino, criptografado }) {
     }
 
     let fbDatabase = '';
-    while (!fbDatabase) {
-      fbDatabase = await pergunta(rl, '\nCaminho do banco Firebird\n  ex: C:\\FDBS\\FILIAL.FDB\n> ');
-      if (!fbDatabase) console.log('  [!] Campo obrigatorio.\n');
-    }
-
     let fbPassword = '';
-    while (!fbPassword) {
-      fbPassword = await perguntaSenha(rl, '\nSenha do Firebird:\n> ');
-      if (!fbPassword) console.log('  [!] Campo obrigatorio.\n');
+    let fbHost = '';
+    let fbPort = '';
+    let fbUser = '';
+    let conexaoFirebirdOk = false;
+
+    while (!conexaoFirebirdOk) {
+      fbDatabase = '';
+      while (!fbDatabase) {
+        fbDatabase = await pergunta(rl, '\nCaminho do banco Firebird\n  ex: C:\\FDBS\\FILIAL.FDB\n> ');
+        if (!fbDatabase) console.log('  [!] Campo obrigatorio.\n');
+      }
+
+      fbPassword = '';
+      while (!fbPassword) {
+        fbPassword = await perguntaSenha(rl, '\nSenha do Firebird:\n> ');
+        if (!fbPassword) console.log('  [!] Campo obrigatorio.\n');
+      }
+
+      const fbHostRaw = await pergunta(rl, '\nHost do Firebird [localhost]:\n> ');
+      fbHost = fbHostRaw || 'localhost';
+
+      const fbPortRaw = await pergunta(rl, '\nPorta do Firebird [3050]:\n> ');
+      fbPort = fbPortRaw || '3050';
+
+      const fbUserRaw = await pergunta(rl, '\nUsuario do Firebird [SYSDBA]:\n> ');
+      fbUser = fbUserRaw || 'SYSDBA';
+
+      process.stdout.write('\n  Testando conexao com o Firebird...');
+      const resultado = await testarConexaoFirebird({
+        host: fbHost,
+        port: parseInt(fbPort, 10),
+        database: fbDatabase,
+        user: fbUser,
+        password: fbPassword,
+      });
+
+      if (resultado.ok) {
+        console.log(' Conectado com sucesso!\n');
+        conexaoFirebirdOk = true;
+      } else {
+        console.log(` Falhou: ${resultado.erro}`);
+        console.log('  [!] Confira caminho do banco, host, porta, usuario e senha e tente novamente.\n');
+      }
     }
-
-    const fbHostRaw = await pergunta(rl, '\nHost do Firebird [localhost]:\n> ');
-    const fbHost = fbHostRaw || 'localhost';
-
-    const fbPortRaw = await pergunta(rl, '\nPorta do Firebird [3050]:\n> ');
-    const fbPort = fbPortRaw || '3050';
-
-    const fbUserRaw = await pergunta(rl, '\nUsuario do Firebird [SYSDBA]:\n> ');
-    const fbUser = fbUserRaw || 'SYSDBA';
 
     const intervaloRaw = await pergunta(rl, '\nIntervalo entre ciclos em ms [30000]:\n> ');
     const intervalo = intervaloRaw || '30000';

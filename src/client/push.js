@@ -94,7 +94,18 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         fkNaoResolvida = true;
         break;
       }
-      if (srvRows.length === 0 || srvRows[0].SRV_ID == null) {
+      if (srvRows.length === 0) {
+        // Pai não existe mais localmente (foi deletado) — nunca vai ganhar SRV_ID, então
+        // reenfileirá-lo (como no caso abaixo) causaria loop infinito: o pai é reenviado
+        // como deleção, some da fila, e este filho volta a reenfileirá-lo no próximo
+        // ciclo, para sempre. Registra erro visível em vez de tentar de novo às cegas.
+        const msg = `FK ${fkRef.coluna}=${localId} aponta para ${fkRef.tabela} que não existe mais localmente (foi deletado) — registro não pode ser sincronizado até a referência ser corrigida`;
+        log(`[${nome}] ERRO FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} não existe mais em ${fkRef.tabela} — requer revisão manual`);
+        salvarErro({ tabela: nome, operacao: 'push', mensagem: msg });
+        fkNaoResolvida = true;
+        break;
+      }
+      if (srvRows[0].SRV_ID == null) {
         log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} sem SRV_ID — enfileirando ${fkRef.tabela} para sync`);
         // Auto-enfileira o registro pai para que o próximo ciclo resolva o SRV_ID.
         // Sem isso, o filho fica bloqueado indefinidamente até intervenção manual.
