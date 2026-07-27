@@ -47,18 +47,27 @@ function chaveNegocioTabela(pks, colunasDisponiveis) {
 }
 
 /**
- * Cria a tabela no schema do tenant usando os tipos inferidos do primeiro registro recebido.
- * Chamado quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente).
+ * Deriva a lista de colunas tipadas de um registro real recebido via push, inferindo o
+ * tipo PostgreSQL de cada valor. Usado por criarTabelaSeNecessario quando a criação parte
+ * de um ReceberRegistro (há um registro de verdade pra inferir tipo por valor).
  */
-async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks, useSrvId = false) {
+function colunasTipadasDeRegistro(registro) {
+  return Object.keys(registro).map(nome => ({ nome, tipoPg: inferirTipoPg(registro[nome]) }));
+}
+
+/**
+ * Cria a tabela no schema do tenant a partir de uma lista de colunas já tipadas.
+ * Chamado tanto quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente,
+ * tipos inferidos do primeiro registro via colunasTipadasDeRegistro) quanto por
+ * GarantirTabela (tabela vazia na filial — sem registro real, tipos vêm da introspecção do
+ * Firebird feita pelo cliente). colunasTipadas: [{ nome, tipoPg }, ...].
+ */
+async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadas, pks, useSrvId = false) {
   const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
-  const colunas = Object.keys(registro)
-    .filter(nome => !COLUNAS_IGNORADAS_SERVIDOR.has(nome))
-    .map(nome => {
-      const tipo = inferirTipoPg(registro[nome]);
-      return `${nome} ${tipo}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`;
-    });
-  if (!Object.prototype.hasOwnProperty.call(registro, 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
+  const colunasTipadasFiltradas = colunasTipadas.filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome));
+  const colunas = colunasTipadasFiltradas
+    .map(({ nome, tipoPg }) => `${nome} ${tipoPg}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`);
+  if (!colunasTipadas.some(c => c.nome === 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
     colunas.push('ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER');
   }
   if (useSrvId) {
@@ -68,7 +77,7 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, registro, pks
     );
     // Garante que as chaves de negócio do Firebird sejam únicas no servidor,
     // impedindo duplicatas caso o srv_id_map perca a entrada e o registro seja re-inserido.
-    const chaveNegocio = chaveNegocioTabela(pks, new Set(Object.keys(registro)));
+    const chaveNegocio = chaveNegocioTabela(pks, new Set(colunasTipadas.map(c => c.nome)));
     if (chaveNegocio.length > 0) {
       await execute(db,
         `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${chaveNegocio.join(', ')})`
@@ -591,7 +600,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       const tabelaJaExistia = colunasServidor.size > 0;
 
       if (!tabelaJaExistia) {
-        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
         const cacheKey = `${req.schemaName}:${nomeTabela}`;
         delete cacheColunasServidor[cacheKey];
         delete cacheComputadas[cacheKey];
@@ -688,7 +697,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         delete cacheColunasServidor[cacheKey];
         delete cacheComputadas[cacheKey];
         delete cachePkServidor[cacheKey];
-        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
         colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
         atual = [];
       }
@@ -891,6 +900,64 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       }
     }
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
+  }
+});
+
+// Tags de tipo que o cliente manda (derivadas da introspecção do Firebird), mapeadas pros
+// mesmos buckets grosseiros que inferirTipoPg já usa a partir de valor real.
+const TIPO_PG_POR_TAG = {
+  texto: 'TEXT',
+  numero: 'NUMERIC',
+  data: 'TIMESTAMP',
+  booleano: 'BOOLEAN',
+  binario: 'BYTEA',
+};
+
+/**
+ * POST /datasnap/rest/TSMSincronizacao/GarantirTabela
+ * Body: { tabela, colunas: [{ nome, tipo }], pks, temSrvId }
+ *
+ * Cria a tabela no servidor com a estrutura correta mesmo sem nenhum registro pra inferir
+ * tipo por valor — necessário pra tabelas que existem na filial mas estão vazias (instalação
+ * nova, sem dados ainda): sem isso, criarTabelaSeNecessario só roda dentro de ReceberRegistro,
+ * que nunca é chamado se não há nada pra empurrar, e a tabela nunca nasce no servidor. No-op
+ * se a tabela já existe (idempotente, mesma checagem de colunasServidor usada em ReceberRegistro).
+ */
+router.post('/GarantirTabela', auth, async (req, res) => {
+  const { tabela, colunas, pks, temSrvId = false } = req.body || {};
+
+  if (!tabela || !Array.isArray(colunas) || colunas.length === 0 || !pks) {
+    return res.status(400).json({ message: 'tabela, colunas e pks são obrigatórios' });
+  }
+
+  const nomeTabela = tabela.toUpperCase().trim();
+  if (!validarNomeTabela(nomeTabela)) {
+    return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
+  }
+
+  const pksArr = (Array.isArray(pks) ? pks : [pks]).map(p => String(p).toUpperCase().trim());
+  const colunasTipadas = colunas
+    .map(c => ({ nome: String(c?.nome || '').toUpperCase().trim(), tipoPg: TIPO_PG_POR_TAG[c?.tipo] || 'TEXT' }))
+    .filter(c => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c.nome));
+
+  if (colunasTipadas.length === 0) {
+    return res.status(400).json({ message: 'Nenhuma coluna válida informada' });
+  }
+
+  try {
+    await withTenantConnection(req.schemaName, async (db) => {
+      const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
+      if (colunasServidor.size === 0) {
+        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadas, pksArr, temSrvId);
+        const cacheKey = `${req.schemaName}:${nomeTabela}`;
+        delete cacheColunasServidor[cacheKey];
+        delete cacheComputadas[cacheKey];
+        delete cachePkServidor[cacheKey];
+      }
+    });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ message: `Erro ao garantir tabela: ${e.message}` });
   }
 });
 

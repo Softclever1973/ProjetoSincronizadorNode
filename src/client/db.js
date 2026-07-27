@@ -18,10 +18,23 @@ const opcoes = {
   password: process.env.FIREBIRD_PASSWORD,
 };
 
-function getConnection() {
+// "Your user name and password are not defined" às vezes não é credencial errada de
+// verdade — é uma corrida de handshake quando um detach() de outra conexão (ex.: a
+// escrita em background de salvarErro() em erros.js) chega ao Firebird quase junto com
+// este attach(). Retry curto só pra essa mensagem específica; qualquer outro erro
+// (credencial de fato errada, banco fora do ar) rejeita na primeira tentativa mesmo.
+function getConnection(tentativasRestantes = 2) {
   return new Promise((resolve, reject) => {
     Firebird.attach(opcoes, (err, db) => {
-      if (err) return reject(err);
+      if (err) {
+        if (tentativasRestantes > 0 && /user name and password are not defined/i.test(err.message)) {
+          setTimeout(() => {
+            getConnection(tentativasRestantes - 1).then(resolve, reject);
+          }, 500);
+          return;
+        }
+        return reject(err);
+      }
       resolve(db);
     });
   });

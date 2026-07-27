@@ -114,6 +114,8 @@ Use esse botão sempre logo depois da primeira instalação, ou sempre que preci
 - Na web UI do cliente (`http://localhost:3001`, login `admin`/`admin` → **Status**), veja se as tabelas estão sincronizadas.
 - No SiriusWebFrontend, logado como o `dono` dessa empresa, abra as telas de Produtos/Clientes/Pedidos e confira se os dados aparecem.
 
+  > **Se você estava logado no `admin.html` (super-admin):** clique em **Sair** primeiro. O login de super-admin fica salvo no navegador e, se você só trocar a URL para `login.html` sem deslogar, o sistema te manda de volta pro `admin.html` automaticamente. Só depois de deslogar é que a tela de login normal aceita o e-mail/senha do `dono` (criados na seção 1).
+
 ---
 
 ## Problemas comuns

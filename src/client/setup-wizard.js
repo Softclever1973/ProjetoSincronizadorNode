@@ -6,18 +6,35 @@ async function pergunta(rl, texto) {
   return new Promise(resolve => rl.question(texto, answer => resolve(answer.trim())));
 }
 
-// Mesma ideia do prompt de senha do sudo: nada e ecoado enquanto o usuario digita (nem
-// o caractere real, nem asterisco) — evita ter que reimplementar backspace/setas por
-// conta propria. Suprime _writeToOutput do readline (API interna, mas estavel ha varias
-// major versions do Node e e o mecanismo padrao pra isso) so durante essa pergunta; o
-// buffer de linha do readline continua funcionando normalmente por baixo, entao o hack
-// de colar com Ctrl+V (habilitarCtrlV, que injeta 'keypress') continua funcionando aqui.
-async function perguntaSenha(rl, texto) {
+// Suprime o eco nativo do readline (API interna _writeToOutput, mas estavel ha varias
+// major versions do Node) e desenha o mascaramento (#) na mao a cada 'keypress'. O
+// buffer de linha do readline (rl.line) continua sendo a fonte da verdade — so lemos o
+// comprimento dele apos cada tecla e ajustamos a tela pra bater, entao backspace, colar
+// com Ctrl+V (habilitarCtrlV, que injeta 'keypress' sintetico) e edicao continuam
+// funcionando normalmente por baixo; so a parte visual muda de "nada" para "#####".
+async function perguntaSenha(rl, texto, mascara = '#') {
   return new Promise(resolve => {
     process.stdout.write(texto);
     const escreverOriginal = rl._writeToOutput.bind(rl);
     rl._writeToOutput = () => {};
+
+    let exibidos = 0;
+    const onKeypress = (_ch, key) => {
+      // Enter/Return: rl ja zerou rl.line ao processar a linha internamente — nao mexer
+      // na tela aqui, senao os # que acabaram de ser digitados somem antes do resolve().
+      if (key && (key.name === 'return' || key.name === 'enter')) return;
+      const comprimento = rl.line.length;
+      if (comprimento > exibidos) {
+        process.stdout.write(mascara.repeat(comprimento - exibidos));
+      } else if (comprimento < exibidos) {
+        process.stdout.write('\b \b'.repeat(exibidos - comprimento));
+      }
+      exibidos = comprimento;
+    };
+    process.stdin.on('keypress', onKeypress);
+
     rl.question('', answer => {
+      process.stdin.removeListener('keypress', onKeypress);
       rl._writeToOutput = escreverOriginal;
       process.stdout.write('\n');
       resolve(answer.trim());
@@ -161,14 +178,15 @@ async function runSetupWizard({ destino, criptografado }) {
     }
 
     let serverUrl = '';
-    while (!serverUrl) {
-      serverUrl = await pergunta(rl, '\nURL do servidor\n  ex: http://192.168.1.100:8080\n> ');
-      if (!serverUrl) console.log('  [!] Campo obrigatorio.\n');
-    }
-    serverUrl = serverUrl.replace(/\/+$/, '');
-
     let filiaisServidor = [];
     while (true) {
+      serverUrl = '';
+      while (!serverUrl) {
+        serverUrl = await pergunta(rl, '\nURL do servidor\n  ex: http://192.168.1.100:8080\n> ');
+        if (!serverUrl) console.log('  [!] Campo obrigatorio.\n');
+      }
+      serverUrl = serverUrl.replace(/\/+$/, '');
+
       process.stdout.write('\n  Verificando conexao com o servidor...');
       try {
         filiaisServidor = await buscarFiliaisServidor(serverUrl, syncToken);
@@ -184,7 +202,7 @@ async function runSetupWizard({ destino, criptografado }) {
         break;
       } catch (e) {
         console.log(` Falhou: ${e.message}`);
-        const tentar = await pergunta(rl, '  Tentar novamente? [S/n]: ');
+        const tentar = await pergunta(rl, '  Tentar novamente com outra URL? [S/n]: ');
         if (tentar.toLowerCase() === 'n') break;
       }
     }

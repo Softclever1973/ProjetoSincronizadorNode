@@ -197,7 +197,8 @@ async function main() {
   const { getConnection, closeConnection, getParam, setParam, getTabelasExistentes } = require('./db');
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
-  const { atualizarRegime, atualizarParametros, buscarParametros } = require('./http');
+  const { atualizarRegime, atualizarParametros, buscarParametros, garantirTabela } = require('./http');
+  const { getColunasTipadas } = require('./db-utils');
   const { paramsSyncMap } = require('./paramsSyncMap');
   const { lerEstado: lerEstadoParametros, salvarEstado: salvarEstadoParametros, decidirAcao } = require('./parametrosGlobaisState');
   const { setup } = require('./setup');
@@ -222,6 +223,10 @@ async function main() {
   const INTERVALO_ATUALIZACAO_MS = 10 * 60 * 1000; // 10min — 6 checagens/hora por cliente, bem abaixo do rate-limit (60/hora)
 
   let rodando = false;
+  // Tabelas cuja existência no servidor já foi garantida (ou tentada) nesta execução do
+  // processo — evita bater GarantirTabela toda vez a cada ciclo de 30s. Reseta num restart,
+  // o que já serve de retry natural se a tentativa anterior tiver falhado (ex.: rede fora).
+  const tabelasGarantidas = new Set();
   const contextoSync = {
     baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
     versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null, atualizacaoStatus: null,
@@ -470,6 +475,27 @@ async function main() {
 
       if (tabelasParaSincronizar.length === 0) {
         log('Nenhuma tabela ativa — acesse http://localhost:3001/configuracoes para ativar tabelas.');
+      }
+
+      // Garante a existência da tabela no servidor mesmo se ela estiver vazia na filial —
+      // sem isso, uma tabela sem nenhum registro local nunca é criada no servidor (a criação
+      // normal só acontece dentro de um push real, que nunca ocorre se não há linha nenhuma
+      // pra enviar). Crítico pra clientes novos, que começam sem dado nenhum. Só uma vez por
+      // tabela por execução do processo — GarantirTabela já é no-op no servidor se a tabela
+      // já existir, então repetir a cada ciclo seria round-trip desperdiçado.
+      for (const tabela of tabelasParaSincronizar) {
+        if (tabelasGarantidas.has(tabela.nome)) continue;
+        tabelasGarantidas.add(tabela.nome);
+        try {
+          const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
+          const colunas = await getColunasTipadas(db, tabela.nome);
+          if (colunas.length > 0) {
+            await garantirTabela(baseURI, tabela.nome, colunas, pks, !!tabela.srvId);
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          log(`[${tabela.nome}] Aviso: não foi possível garantir tabela no servidor: ${msg}`);
+        }
       }
 
       for (const tabela of tabelasParaSincronizar) {

@@ -190,13 +190,16 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
       });
       if (colsExtrasValidas.length) {
         const colsTabela = await query(db, `
-          SELECT UPPER(column_name) AS column_name
+          SELECT UPPER(column_name) AS column_name, data_type
           FROM information_schema.columns
           WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
         `, [schema, tabela]);
-        const colsExistentes = new Set(colsTabela.map(r => r.COLUMN_NAME));
+        const tiposPorColuna = new Map(colsTabela.map(r => [r.COLUMN_NAME, r.DATA_TYPE]));
+        const COLUNAS_TEXTO = new Set(['character varying', 'text', 'character']);
         for (const col of colsExtrasValidas) {
-          if (!colsExistentes.has(col.toUpperCase())) continue;
+          const colUpper = col.toUpperCase();
+          if (!tiposPorColuna.has(colUpper)) continue;
+          const ehTexto = COLUNAS_TEXTO.has(tiposPorColuna.get(colUpper));
           const val = filtrosExtras[col];
           if (typeof val === 'object' && val !== null) {
             // Filtro de range: { gte: minimo, lte: maximo }
@@ -204,7 +207,15 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
             if (val.lte != null && val.lte !== '') { params.push(val.lte); conditions.push(`${col} <= $${params.length}`); }
           } else {
             params.push(val);
-            conditions.push(`${col} = $${params.length}`);
+            // TRIM dos dois lados só em coluna de texto: colunas sincronizadas de um Firebird
+            // CHAR(n) chegam com espaço de preenchimento (ex.: 'PDE         '), mas o valor
+            // vindo do filtro (dropdown do frontend) já é enviado trimado — sem TRIM aqui a
+            // igualdade nunca batia e o filtro voltava vazio mesmo com dado existindo. Não
+            // aplicamos em colunas não-texto pra não arriscar mudar semântica de comparação
+            // numérica/data (ex.: '10' vs '10.00' na representação em texto).
+            conditions.push(ehTexto
+              ? `TRIM(${col}::TEXT) = TRIM($${params.length}::TEXT)`
+              : `${col} = $${params.length}`);
           }
         }
       }

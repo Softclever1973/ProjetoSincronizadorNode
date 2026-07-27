@@ -2,6 +2,47 @@ const { query, execute } = require('./db');
 
 const cacheFKRefs  = {};
 const cacheCharLen = {};
+const cacheColunasTipadas = {};
+
+// RDB$FIELD_TYPE do Firebird → tag de tipo enviada ao servidor (GarantirTabela mapeia a
+// tag pro mesmo bucket grosseiro que inferirTipoPg usa a partir de valor real: BYTEA,
+// TIMESTAMP, BOOLEAN, NUMERIC ou TEXT — não há VARCHAR(n)/CHAR(n) em lugar nenhum desse
+// esquema, então nem tentamos preservar tamanho de string aqui).
+function tagTipoFirebird(tipo, subtipo) {
+  switch (tipo) {
+    case 12: case 13: case 35: return 'data';      // DATE, TIME, TIMESTAMP
+    case 23: return 'booleano';                      // BOOLEAN (Firebird 3+)
+    case 7: case 8: case 10: case 16: case 27: return 'numero'; // SMALLINT, INTEGER, FLOAT, INT64/BIGINT, DOUBLE PRECISION
+    case 261: return subtipo === 0 ? 'binario' : 'texto'; // BLOB binário vs texto
+    default: return 'texto'; // CHAR, VARCHAR, etc.
+  }
+}
+
+/**
+ * Introspecção das colunas reais de uma tabela no Firebird (exclui computadas), com o tipo
+ * já traduzido pra tag genérica que o servidor entende (ver tagTipoFirebird). Usada por
+ * GarantirTabela — cria a tabela no servidor a partir da estrutura, sem depender de nenhum
+ * registro real existir (necessário pra tabelas vazias em instalações novas).
+ */
+async function getColunasTipadas(db, tabela) {
+  if (cacheColunasTipadas[tabela]) return cacheColunasTipadas[tabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA,
+           f.RDB$FIELD_TYPE       AS TIPO,
+           f.RDB$FIELD_SUB_TYPE   AS SUBTIPO
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ?
+      AND f.RDB$COMPUTED_SOURCE IS NULL
+    ORDER BY rf.RDB$FIELD_POSITION
+  `, [tabela]);
+  const colunas = rows.map(r => ({
+    nome: r.COLUNA.trim(),
+    tipo: tagTipoFirebird(r.TIPO, r.SUBTIPO),
+  }));
+  cacheColunasTipadas[tabela] = colunas;
+  return colunas;
+}
 
 async function getColumnCharLen(db, tabela, coluna) {
   const chave = `${tabela}.${coluna}`;
@@ -138,4 +179,4 @@ async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
   await execute(db, `DELETE FROM ${nome} WHERE ${whereParts}`, whereValores);
 }
 
-module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal };
+module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas };

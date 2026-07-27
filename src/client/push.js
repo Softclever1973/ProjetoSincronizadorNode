@@ -99,8 +99,8 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         // reenfileirá-lo (como no caso abaixo) causaria loop infinito: o pai é reenviado
         // como deleção, some da fila, e este filho volta a reenfileirá-lo no próximo
         // ciclo, para sempre. Registra erro visível em vez de tentar de novo às cegas.
-        const msg = `FK ${fkRef.coluna}=${localId} aponta para ${fkRef.tabela} que não existe mais localmente (foi deletado) — registro não pode ser sincronizado até a referência ser corrigida`;
-        log(`[${nome}] ERRO FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} não existe mais em ${fkRef.tabela} — requer revisão manual`);
+        const msg = `${pk}=${pkValor}: FK ${fkRef.coluna}=${localId} aponta para ${fkRef.tabela} que não existe mais localmente (foi deletado) — registro não pode ser sincronizado até a referência ser corrigida`;
+        log(`[${nome}] ERRO FK ${pk}=${pkValor}: ${fkRef.coluna} (${fkRef.pkRef}=${localId}) não existe mais em ${fkRef.tabela} — requer revisão manual`);
         salvarErro({ tabela: nome, operacao: 'push', mensagem: msg });
         fkNaoResolvida = true;
         break;

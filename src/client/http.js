@@ -149,6 +149,18 @@ function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhe
 }
 
 /**
+ * Garante que a tabela existe no servidor com a estrutura correta, mesmo sem nenhum
+ * registro real pra inferir tipo por valor — cobre tabelas que existem na filial mas
+ * estão vazias (instalação nova). No-op no servidor se a tabela já existe.
+ */
+function garantirTabela(baseURI, nomeTabela, colunas, pks, temSrvId = false) {
+  return post(
+    `${baseURI}/datasnap/rest/TSMSincronizacao/GarantirTabela?token=${TOKEN}`,
+    { tabela: nomeTabela, colunas, pks, temSrvId }
+  );
+}
+
+/**
  * Envia o regime tributário (param 40026) ao servidor para ser armazenado no tenant.
  */
 function atualizarRegime(baseURI, regime) {
@@ -179,6 +191,7 @@ module.exports = {
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
   enviarRegistro,
+  garantirTabela,
   atualizarRegime,
   atualizarParametros,
   buscarParametros,
