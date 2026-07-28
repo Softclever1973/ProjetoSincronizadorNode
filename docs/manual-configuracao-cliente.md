@@ -27,7 +27,8 @@ São quatro etapas, sempre nessa ordem. As três primeiras acontecem em lugares 
 1. Abra **https://sirius-web-frontend-tau.vercel.app/** no navegador — isso cai na tela de login comum (`login.html`).
 2. Na barra de endereço, troque `login.html` por `admin.html`, ficando **https://sirius-web-frontend-tau.vercel.app/admin.html**. Essa página tem sua própria tela de login embutida.
 3. Entre com um e-mail/senha de **super-admin** (não é o login de `dono`/`gerente`/`vendedor` de uma empresa específica).
-4. Depois de logar, é recomendado **reiniciar a página** (F5) antes de continuar — o painel carrega mais confiável assim.
+
+> **Importante:** enquanto você estiver logado no `admin.html`, o navegador guarda esse login de super-admin. Se mais tarde você tentar acessar a tela de login comum (`login.html`) pra entrar como `dono`/`gerente`/`vendedor`, o sistema vai te mandar de volta pro `admin.html` automaticamente, sem pedir e-mail/senha. Pra logar como `dono`, primeiro clique em **Sair** aqui no `admin.html`.
 
 > Não tem usuário super-admin ainda? Ele precisa ser criado por quem tem acesso ao servidor, rodando `node scripts/create-usuario.js --email=... --senha=... --super-admin` — não existe cadastro público.
 

@@ -1,7 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool } = require('../db');
+const { pool, withTenantConnection, query } = require('../db');
 const { initializeTenantSchema } = require('../db-init');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
@@ -169,6 +169,29 @@ router.post('/empresas/:schema/reset', async (req, res) => {
     res.status(500).json({ erro: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ── GET /superadmin/empresas/:schema/filiais ──────────────────────────────────
+// Lista as filiais (id_loja + nome) de uma empresa — alimenta o seletor de loja
+// no cadastro de usuário gerente/vendedor. Super-admin não tem vínculo de schema
+// no JWT (checkSchema rejeitaria), então valida a existência direto em sync_tenants.
+
+router.get('/empresas/:schema/filiais', async (req, res) => {
+  const { schema } = req.params;
+  try {
+    const { rows: schemaCheck } = await pool.query(
+      'SELECT 1 FROM public.sync_tenants WHERE schema_name = $1', [schema]
+    );
+    if (schemaCheck.length === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    const rows = await withTenantConnection(schema, db =>
+      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
+    ).catch(() => []); // tabela pode ainda não existir numa empresa recém-criada
+
+    res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 

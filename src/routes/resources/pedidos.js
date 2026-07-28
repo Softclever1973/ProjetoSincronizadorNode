@@ -142,6 +142,7 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       const exprValorItem = temVtItem ? 'pi.VALOR_TOTAL_ITEM' : 'pi.VALOR_UNITARIO * pi.QUANTIDADE';
 
       const select = ['p.ID_PEDIDO'];
+      if (colNamesP.has('ID_LOJA'))         select.push('p.ID_LOJA');
       if (colNamesP.has('ID_CLIENTE'))     select.push('p.ID_CLIENTE');
       if (colNamesP.has('NOME_CLIENTE'))   select.push('p.NOME_CLIENTE');
       if (colNamesP.has('DATA_DO_PEDIDO')) select.push('p.DATA_DO_PEDIDO');
