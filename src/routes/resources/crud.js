@@ -196,15 +196,28 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) =>
         `, [schema, tabela]);
         const tiposPorColuna = new Map(colsTabela.map(r => [r.COLUMN_NAME, r.DATA_TYPE]));
         const COLUNAS_TEXTO = new Set(['character varying', 'text', 'character']);
+        const COLUNAS_TIMESTAMP = new Set(['timestamp without time zone', 'timestamp with time zone']);
         for (const col of colsExtrasValidas) {
           const colUpper = col.toUpperCase();
           if (!tiposPorColuna.has(colUpper)) continue;
-          const ehTexto = COLUNAS_TEXTO.has(tiposPorColuna.get(colUpper));
+          const tipoCol = tiposPorColuna.get(colUpper);
+          const ehTexto = COLUNAS_TEXTO.has(tipoCol);
+          const ehTimestamp = COLUNAS_TIMESTAMP.has(tipoCol);
           const val = filtrosExtras[col];
           if (typeof val === 'object' && val !== null) {
             // Filtro de range: { gte: minimo, lte: maximo }
             if (val.gte != null && val.gte !== '') { params.push(val.gte); conditions.push(`${col} >= $${params.length}`); }
-            if (val.lte != null && val.lte !== '') { params.push(val.lte); conditions.push(`${col} <= $${params.length}`); }
+            if (val.lte != null && val.lte !== '') {
+              // "Até" vindo de <input type="date"> (ex.: filtro range-date do frontend) é só
+              // a data, sem hora — comparado direto contra uma coluna timestamp, isso equivale
+              // a meia-noite daquele dia e exclui qualquer registro com horário posterior no
+              // mesmo dia. Mesmo bug já corrigido em resources/audit.js para o log de
+              // auditoria; replicado aqui de forma genérica para qualquer filtro de range.
+              const lteVal = ehTimestamp && /^\d{4}-\d{2}-\d{2}$/.test(String(val.lte))
+                ? `${val.lte} 23:59:59.999`
+                : val.lte;
+              params.push(lteVal); conditions.push(`${col} <= $${params.length}`);
+            }
           } else {
             params.push(val);
             // TRIM dos dois lados só em coluna de texto: colunas sincronizadas de um Firebird
