@@ -17,7 +17,7 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../db');
 const { COLS_DATA_PEDIDO } = require('./constants');
-const { colunasTabela, resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
+const { erroServidor, colunasTabela, resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
 
 /* ── GET /api/:schema/dashboard ── */
 router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {
@@ -64,7 +64,7 @@ router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {
       produtosAtivos:  parseInt(produtosAtivos[0]?.CNT ?? 0),
     });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard');
   }
 });
 
@@ -127,7 +127,7 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requ
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/faturamento-por-loja');
   }
 });
 
@@ -163,7 +163,7 @@ router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRo
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/evolucao-mensal');
   }
 });
 
@@ -218,7 +218,7 @@ router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, 
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/evolucao-mensal-por-loja');
   }
 });
 
@@ -261,7 +261,7 @@ router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole(
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/top-produtos');
   }
 });
 
@@ -283,7 +283,7 @@ router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requir
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/pedidos-por-status');
   }
 });
 
@@ -333,7 +333,7 @@ router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, 
     res.json(result);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET dashboard/faturamento-por-vendedor');
   }
 });
 

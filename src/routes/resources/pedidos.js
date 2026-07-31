@@ -13,7 +13,7 @@ const authJwt             = require('../../middleware/authJwt');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../db');
 const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('./constants');
-const { colunasTabela, resolveIdLoja } = require('./helpers');
+const { erroServidor, colunasTabela, resolveIdLoja } = require('./helpers');
 
 /* ── GET /api/:schema/pedidos-completo — JOIN das 3 tabelas de pedido ── */
 router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) => {
@@ -98,7 +98,7 @@ router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) =
     });
     res.json(result);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET pedidos-completo');
   }
 });
 
@@ -294,7 +294,7 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
     });
     res.json(result);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET pedidos-lista');
   }
 });
 
@@ -346,7 +346,7 @@ router.get('/:schema/pedidos/:id/itens', authJwt, checkSchema, async (req, res) 
     if (rows === null) return res.status(403).json({ erro: 'pedido não pertence à sua loja' });
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET pedidos/:id/itens');
   }
 });
 
@@ -380,7 +380,7 @@ router.get('/:schema/pedidos/:id/pagamentos', authJwt, checkSchema, async (req, 
     if (result === null) return res.status(403).json({ erro: 'pedido não pertence à sua loja' });
     res.json(result);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e, 'GET pedidos/:id/pagamentos');
   }
 });
 

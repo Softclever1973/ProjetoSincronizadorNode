@@ -11,18 +11,8 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
-const { colunasTabela, resolveIdLoja, resolverNomeVendedor, pedidoEstaCancelado, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
+const { erroServidor, colunasTabela, resolveIdLoja, resolverNomeVendedor, pedidoEstaCancelado, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
 const { getCurrentTime } = require('../../services/timeService');
-
-/**
- * Loga o erro com um ID rastreável e responde 500 com JSON.
- * O ID aparece tanto no log do servidor quanto na resposta — use-o para grep.
- */
-function erroServidor(res, e, rota) {
-  const id = `CRUD-${Date.now().toString(36).slice(-6).toUpperCase()}`;
-  console.error(`[${id}] ${rota}:`, e.stack || e.message);
-  res.status(500).json({ erro: 'Erro interno do servidor.', id });
-}
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
 router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req, res) => {
