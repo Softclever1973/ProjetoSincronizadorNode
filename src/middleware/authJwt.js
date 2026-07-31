@@ -19,6 +19,7 @@ function authJwt(req, res, next) {
     req.userRoles      = payload.roles       || {};
     req.userLojas      = payload.lojas       || {};
     req.userVendedores = payload.vendedores  || {};
+    req.userPlanos     = payload.planos      || {};
     req.isSuperAdmin   = payload.isSuperAdmin === true;
     next();
   } catch {

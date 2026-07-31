@@ -18,7 +18,10 @@ const JWT_EXPIRES_IN = '24h';
  */
 async function montarClaims(idUsuario) {
   const { rows } = await pool.query(
-    'SELECT schema_name, role, id_loja, id_vendedor FROM public.usuarios_empresas WHERE id_usuario = $1',
+    `SELECT ue.schema_name, ue.role, ue.id_loja, ue.id_vendedor, st.plano
+     FROM public.usuarios_empresas ue
+     JOIN public.sync_tenants st ON st.schema_name = ue.schema_name
+     WHERE ue.id_usuario = $1`,
     [idUsuario]
   );
 
@@ -35,6 +38,7 @@ async function montarClaims(idUsuario) {
     roles:      Object.fromEntries(rows.map(r => [r.schema_name, r.role])),
     lojas:      Object.fromEntries(rows.map(r => [r.schema_name, r.id_loja ?? null])),
     vendedores,
+    planos:     Object.fromEntries(rows.map(r => [r.schema_name, r.plano])),
   };
 }
 

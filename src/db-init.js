@@ -54,6 +54,15 @@ const DDL_CONTROLE = [
   `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS regime_tributario TEXT`,
   // Migração: flag de super-admin para acesso ao painel de gestão de empresas
   `ALTER TABLE public.usuarios ADD COLUMN IF NOT EXISTS is_super_admin BOOLEAN NOT NULL DEFAULT FALSE`,
+  // Migração: plano de assinatura do tenant — controla acesso a features via src/planos.json
+  `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS plano TEXT NOT NULL DEFAULT 'lite'`,
+  // Migração: renomeia o plano padrão antigo ('basico') para o novo nome de tier ('lite') —
+  // os planos foram renomeados para a nomenclatura Lite/Bronze/Prata/Ouro/Safira/Diamante
+  // (src/planos.json). Idempotente: depois da primeira execução não há mais linhas 'basico'.
+  `UPDATE public.sync_tenants SET plano = 'lite' WHERE plano = 'basico'`,
+  // ADD COLUMN IF NOT EXISTS acima não reaplica o DEFAULT em bancos onde a coluna já
+  // existia com o default antigo ('basico') — força explicitamente o default correto.
+  `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'lite'`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)

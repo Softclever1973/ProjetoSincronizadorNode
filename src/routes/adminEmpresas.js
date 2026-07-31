@@ -3,6 +3,7 @@ const router   = express.Router();
 const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../db');
 const { initializeTenantSchema } = require('../db-init');
+const { planoValido, listarPlanos, PLANO_PADRAO } = require('../planos');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.
@@ -10,17 +11,25 @@ const { initializeTenantSchema } = require('../db-init');
 router.get('/empresas', async (req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT t.schema_name, t.nome, t.ativo, t.regime_tributario,
+      SELECT t.schema_name, t.nome, t.ativo, t.regime_tributario, t.plano,
              COUNT(ue.id_usuario)::INTEGER AS total_usuarios
       FROM public.sync_tenants t
       LEFT JOIN public.usuarios_empresas ue ON ue.schema_name = t.schema_name
-      GROUP BY t.schema_name, t.nome, t.ativo, t.regime_tributario
+      GROUP BY t.schema_name, t.nome, t.ativo, t.regime_tributario, t.plano
       ORDER BY t.nome
     `);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
+});
+
+// ── GET /superadmin/planos ────────────────────────────────────────────────────
+// Lista os planos disponíveis (src/planos.json) — admin.html usa isso pra nunca
+// hardcodar nomes/labels de tier.
+
+router.get('/planos', (req, res) => {
+  res.json(listarPlanos());
 });
 
 // ── POST /superadmin/empresas ─────────────────────────────────────────────────
@@ -41,6 +50,10 @@ router.post('/empresas', async (req, res) => {
   if (dono.senha.length < 6)
     return res.status(400).json({ erro: 'Senha do dono deve ter no mínimo 6 caracteres' });
 
+  const plano = empresa.plano || PLANO_PADRAO;
+  if (!planoValido(plano))
+    return res.status(400).json({ erro: `Plano inválido: ${plano}` });
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -58,8 +71,8 @@ router.post('/empresas', async (req, res) => {
     await initializeTenantSchema(empresa.schema);
 
     await client.query(
-      'INSERT INTO public.sync_tenants (token, schema_name, nome, regime_tributario) VALUES ($1, $2, $3, $4)',
-      [empresa.token, empresa.schema, empresa.nome, empresa.regime_tributario]
+      'INSERT INTO public.sync_tenants (token, schema_name, nome, regime_tributario, plano) VALUES ($1, $2, $3, $4, $5)',
+      [empresa.token, empresa.schema, empresa.nome, empresa.regime_tributario, plano]
     );
 
     const senhaHash = await bcrypt.hash(dono.senha, 12);
@@ -97,6 +110,28 @@ router.patch('/empresas/:schema/ativo', async (req, res) => {
     const { rowCount } = await pool.query(
       'UPDATE public.sync_tenants SET ativo = $1 WHERE schema_name = $2',
       [ativo, schema]
+    );
+    if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/empresas/:schema/plano ────────────────────────────────────
+// Altera o plano de uma empresa.
+
+router.put('/empresas/:schema/plano', async (req, res) => {
+  const { schema } = req.params;
+  const { plano }  = req.body;
+
+  if (!planoValido(plano))
+    return res.status(400).json({ erro: `Plano inválido: ${plano}` });
+
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE public.sync_tenants SET plano = $1 WHERE schema_name = $2',
+      [plano, schema]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json({ ok: true });

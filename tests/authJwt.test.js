@@ -71,6 +71,7 @@ describe('authJwt', () => {
       roles: { empresa_kr: 'gerente' },
       lojas: { empresa_kr: 3 },
       vendedores: { empresa_kr: 7 },
+      planos: { empresa_kr: 'profissional' },
       isSuperAdmin: false,
     };
     const token = jwt.sign(payload, SECRET);
@@ -87,6 +88,7 @@ describe('authJwt', () => {
     expect(req.userRoles).toEqual({ empresa_kr: 'gerente' });
     expect(req.userLojas).toEqual({ empresa_kr: 3 });
     expect(req.userVendedores).toEqual({ empresa_kr: 7 });
+    expect(req.userPlanos).toEqual({ empresa_kr: 'profissional' });
     expect(req.isSuperAdmin).toBe(false);
     expect(res.status).not.toHaveBeenCalled();
   });
@@ -105,6 +107,7 @@ describe('authJwt', () => {
     expect(req.userRoles).toEqual({});
     expect(req.userLojas).toEqual({});
     expect(req.userVendedores).toEqual({});
+    expect(req.userPlanos).toEqual({});
     expect(req.isSuperAdmin).toBe(false);
   });
 });

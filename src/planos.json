@@ -1,0 +1,28 @@
+{
+  "planos": {
+    "lite": {
+      "nome": "Lite",
+      "features": ["demo.relatorio_avancado"]
+    },
+    "bronze": {
+      "nome": "Bronze",
+      "features": ["demo.relatorio_avancado"]
+    },
+    "prata": {
+      "nome": "Prata",
+      "features": ["demo.relatorio_avancado"]
+    },
+    "ouro": {
+      "nome": "Ouro",
+      "features": ["demo.relatorio_avancado"]
+    },
+    "safira": {
+      "nome": "Safira",
+      "features": ["demo.relatorio_avancado"]
+    },
+    "diamante": {
+      "nome": "Diamante",
+      "features": ["demo.relatorio_avancado"]
+    }
+  }
+}
