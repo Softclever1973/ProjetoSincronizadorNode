@@ -43,7 +43,7 @@ function encerrarComErro(err) {
     await runSetupWizard();
   }
 
-  require('dotenv').config();
+  require('dotenv').config({ quiet: true });
 
   const express = require('express');
   const config  = require('./config');

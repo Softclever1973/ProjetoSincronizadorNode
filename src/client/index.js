@@ -158,7 +158,7 @@ async function carregarConfiguracao() {
   }
 
   if (fs.existsSync(ENV_PATH)) {
-    require('dotenv').config({ path: ENV_PATH });
+    require('dotenv').config({ path: ENV_PATH, quiet: true });
     if (USAR_CRIPTOGRAFIA) {
       try {
         const { protegerConfig } = require('./config-crypto');
