@@ -7,6 +7,19 @@ const { pool, query, execute, withTenantConnection } = require('../../db');
 const { COLS_DATA_PEDIDO } = require('./constants');
 
 /**
+ * Loga o erro com um ID rastreável e responde 500 com JSON — nunca expõe e.message
+ * (pode conter SQL/detalhe interno) na resposta ao cliente. O ID aparece tanto no log
+ * do servidor quanto na resposta, use-o para grep. Compartilhado entre todas as rotas
+ * de resources/ (antes só existia dentro de crud.js; pedidos.js e dashboard.js
+ * devolviam e.message cru).
+ */
+function erroServidor(res, e, rota) {
+  const id = `CRUD-${Date.now().toString(36).slice(-6).toUpperCase()}`;
+  console.error(`[${id}] ${rota}:`, e.stack || e.message);
+  res.status(500).json({ erro: 'Erro interno do servidor.', id });
+}
+
+/**
  * Retorna as colunas de uma tabela consultando o information_schema do PostgreSQL.
  * Chaves normalizadas para UPPERCASE (padrão do projeto).
  *
@@ -342,6 +355,7 @@ async function vincularVendedorDono(schema, idUsuario) {
 }
 
 module.exports = {
+  erroServidor,
   colunasTabela,
   resolveIdLoja,
   resolverNomeVendedor,

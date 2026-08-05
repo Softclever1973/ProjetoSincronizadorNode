@@ -4,16 +4,35 @@ const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
-const { initializeTenantSchema } = require('../db-init');
 
-// Cache de colunas computadas do servidor
-const cacheComputadas = {};
+/**
+ * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções
+ * (colunas existentes, colunas computadas, colunas da PK) que sempre precisavam ser
+ * invalidadas em conjunto quando a estrutura de uma tabela muda — antes eram 3 dicts
+ * separados, repetindo o mesmo trio de `delete` em ~4 pontos espalhados do arquivo.
+ */
+function criarTenantCache(tipos) {
+  const stores = Object.fromEntries(tipos.map(t => [t, {}]));
+  const key = (schema, tabela) => `${schema}:${tabela}`;
 
-// Cache de colunas existentes no servidor por tabela
-const cacheColunasServidor = {};
+  return {
+    get(schema, tabela, tipo) {
+      return stores[tipo][key(schema, tabela)];
+    },
+    set(schema, tabela, tipo, valor) {
+      stores[tipo][key(schema, tabela)] = valor;
+      return valor;
+    },
+    // tiposParaLimpar: por padrão invalida todos os tipos; passe um subconjunto pra
+    // preservar algum (ex.: migração de coluna isolada que não muda colunas computadas).
+    invalidate(schema, tabela, tiposParaLimpar = tipos) {
+      const k = key(schema, tabela);
+      for (const tipo of tiposParaLimpar) delete stores[tipo][k];
+    },
+  };
+}
 
-// Cache da PK real de cada tabela (schema:tabela → string[])
-const cachePkServidor = {};
+const colunasCache = criarTenantCache(['colunas', 'pk', 'computadas']);
 
 // Cache de sequences por-tabela já criadas nesta execução do servidor.
 // Evita DDL (CREATE SEQUENCE IF NOT EXISTS) em toda requisição de push.
@@ -106,27 +125,27 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipada
 }
 
 async function getColunasServidor(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cacheColunasServidor[key]) return cacheColunasServidor[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'colunas');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
      WHERE table_name = lower($1) AND table_schema = lower($2)`,
     [nomeTabela, schemaName]
   );
-  cacheColunasServidor[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheColunasServidor[key];
+  return colunasCache.set(schemaName, nomeTabela, 'colunas', new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase())));
 }
 
 /**
  * Retorna as colunas que compõem a PRIMARY KEY real da tabela no PostgreSQL.
  * Para tabelas srvId criadas pelo servidor, isso retorna ['SRV_ID'].
  * Para tabelas legadas (PK original), retorna as colunas da PK Firebird.
- * Resultado cacheado por schema:tabela — invalidar junto com cacheColunasServidor.
+ * Resultado cacheado por schema:tabela — invalidado junto com o cache de colunas (mesma
+ * TenantCache, tipo 'pk').
  */
 async function getPkServidor(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cachePkServidor[key]) return cachePkServidor[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'pk');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT kcu.column_name AS "COLUNA"
      FROM information_schema.key_column_usage kcu
@@ -141,8 +160,7 @@ async function getPkServidor(db, nomeTabela, schemaName) {
     [schemaName, nomeTabela]
   );
   const pkCols = rows.map(r => (r.COLUNA || '').trim().toUpperCase());
-  cachePkServidor[key] = pkCols.length > 0 ? pkCols : null;
-  return cachePkServidor[key];
+  return colunasCache.set(schemaName, nomeTabela, 'pk', pkCols.length > 0 ? pkCols : null);
 }
 
 function normalizarBlobs(row) {
@@ -156,8 +174,8 @@ function normalizarBlobs(row) {
 }
 
 async function getColunasComputadas(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cacheComputadas[key]) return cacheComputadas[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'computadas');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
@@ -166,8 +184,7 @@ async function getColunasComputadas(db, nomeTabela, schemaName) {
        AND is_generated = 'ALWAYS'`,
     [nomeTabela, schemaName]
   );
-  cacheComputadas[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheComputadas[key];
+  return colunasCache.set(schemaName, nomeTabela, 'computadas', new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase())));
 }
 
 async function registrarFilial(db, idLoja, nomeFilial) {
@@ -451,6 +468,269 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
 });
 
 /**
+ * Aloca (ou reusa) o SRV_ID de um registro, para tabelas que usam SRV_ID como PK real no
+ * servidor. Sequence por-tabela (seq_srv_id_<tabela>) evita contador global compartilhado.
+ */
+async function alocarSrvId(db, { schemaName, idLoja, nomeTabela, pks, registro }) {
+  const pkValorStr = pks.map(p => String(registro[p])).join('|');
+  const seqNome = `seq_srv_id_${nomeTabela.toLowerCase()}`;
+  const seqKey  = `${schemaName}:${seqNome}`;
+
+  // SRV_ID já no payload = registro criado via web (PK null) e ecoado no pull —
+  // reusa o ID existente em vez de alocar um novo, evitando duplicatas.
+  const srvIdFilial = registro.SRV_ID != null ? Number(registro.SRV_ID) : null;
+
+  if (srvIdFilial != null) {
+    // Registra id_local → srv_id existente (sem alocar novo valor). Cada filial tem
+    // seu próprio generator Firebird, então (filial_id, tabela, id_local) é a chave
+    // real — o mesmo id_local em filiais diferentes são registros distintos.
+    await execute(db,
+      `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
+       DO UPDATE SET srv_id = EXCLUDED.srv_id`,
+      [idLoja, nomeTabela, pkValorStr, srvIdFilial]
+    ).catch(() => {});
+    return srvIdFilial;
+  }
+
+  const criarSequence = async () => {
+    // Começa a sequence após o maior SRV_ID já atribuído à tabela,
+    // para não colidir com valores de instalações existentes.
+    const [maxRow] = await query(db,
+      `SELECT COALESCE(MAX(srv_id), 0) + 1 AS inicio FROM srv_id_map WHERE tabela = $1`,
+      [nomeTabela]
+    ).catch(() => [{ INICIO: 1 }]);
+    const inicio = maxRow?.INICIO ?? 1;
+    await execute(db, `CREATE SEQUENCE IF NOT EXISTS ${seqNome} START WITH ${inicio}`).catch(() => {});
+    seqsSrvIdInicializadas.add(seqKey);
+  };
+
+  if (!seqsSrvIdInicializadas.has(seqKey)) await criarSequence();
+
+  const inserirMapa = () => query(db,
+    `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
+     VALUES ($1, $2, $3, nextval('${seqNome}'))
+     ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
+     DO UPDATE SET srv_id = srv_id_map.srv_id
+     RETURNING srv_id`,
+    [idLoja, nomeTabela, pkValorStr]
+  );
+
+  // Retry único: reset-empresa.js pode ter apagado esta sequence com o servidor
+  // no ar, deixando o cache em memória desatualizado (42P01). Recria e tenta de novo.
+  let mapa;
+  try {
+    [mapa] = await inserirMapa();
+  } catch (eSeq) {
+    if (!isMissingTableError(eSeq)) throw eSeq;
+    seqsSrvIdInicializadas.delete(seqKey);
+    await criarSequence();
+    [mapa] = await inserirMapa();
+  }
+
+  return mapa?.SRV_ID ?? null;
+}
+
+/**
+ * Aplica uma deleção vinda da filial: remove a linha (por SRV_ID via srv_id_map, ou pela
+ * PK original conforme a tabela use ou não SRV_ID) e registra o rastro em registros_deletados.
+ */
+async function processarDelecao(db, { nomeTabela, temSrvId, pks, registro, idLoja }) {
+  if (temSrvId) {
+    const pkValorStr = pks.map(p => registro[p]).join('|');
+    const [mapa] = await query(db,
+      `SELECT srv_id FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
+      [nomeTabela, pkValorStr, idLoja]
+    ).catch(() => [null]);
+    const srvIdDel = mapa?.SRV_ID;
+    try {
+      if (srvIdDel) {
+        await execute(db, `DELETE FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvIdDel]);
+        await execute(db,
+          `DELETE FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
+          [nomeTabela, pkValorStr, idLoja]
+        );
+      }
+      await execute(db,
+        `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
+        [nomeTabela, pkValorStr]
+      );
+    } catch (e) {
+      if (!isMissingTableError(e)) throw e;
+    }
+  } else {
+    const whereValores = pks.map(p => registro[p]);
+    const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+    try {
+      await execute(db, `DELETE FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+      await execute(db,
+        `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
+        [nomeTabela, whereValores.join('|')]
+      );
+    } catch (e) {
+      if (!isMissingTableError(e)) throw e;
+    }
+  }
+}
+
+/**
+ * Garante que a tabela existe no servidor antes de qualquer query nela, criando-a (tipos
+ * inferidos do registro, na carga inicial) ou migrando a coluna SRV_ID quando necessário.
+ * Invalida os caches de módulo (colunas/computadas/pk) sempre que a estrutura muda.
+ */
+async function garantirColunasServidor(db, nomeTabela, schemaName, registro, pks, temSrvId) {
+  const computadas = await getColunasComputadas(db, nomeTabela, schemaName);
+  let colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
+  const tabelaJaExistia = colunasServidor.size > 0;
+
+  if (!tabelaJaExistia) {
+    await criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
+    colunasCache.invalidate(schemaName, nomeTabela);
+    colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
+  } else if (temSrvId && !colunasServidor.has('SRV_ID')) {
+    // Migração: tabela existe (criada antes do srvId ser ativado) sem coluna SRV_ID.
+    // Adiciona como coluna comum nullable — não destrói a PK original da tabela.
+    await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS srv_id INTEGER`);
+    // Só colunas e pk — computadas não muda numa migração de coluna comum (mesmo
+    // comportamento de antes da TenantCache, preservado de propósito).
+    colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+    colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
+  }
+
+  return { colunasServidor, computadas, tabelaJaExistia };
+}
+
+/**
+ * Migração one-time: tabelas criadas antes do multi-filial têm a UNIQUE só em (pks), sem
+ * ID_LOJA — rejeita como duplicata pushes legítimos de outra filial com o mesmo id_local.
+ * Detecta e recria; constraintsUqAdicionadas evita repetir a checagem a cada push.
+ */
+async function garantirConstraintUnica(db, { schemaName, nomeTabela, tabelaJaExistia, temSrvId, pks, colunasServidor }) {
+  if (!(tabelaJaExistia && temSrvId && pks.length > 0)) return;
+
+  const cqKey = `${schemaName}:${nomeTabela}`;
+  if (constraintsUqAdicionadas.has(cqKey)) return;
+  constraintsUqAdicionadas.add(cqKey);
+
+  const constraintName = `uq_${nomeTabela.toLowerCase()}_bk`;
+  const chaveNegocio = chaveNegocioTabela(pks, colunasServidor);
+
+  const colunasAtuais = await query(db, `
+    SELECT kcu.column_name AS "COLUNA"
+    FROM information_schema.table_constraints tc
+    JOIN information_schema.key_column_usage kcu
+      ON tc.constraint_name = kcu.constraint_name
+     AND tc.table_schema    = kcu.table_schema
+     AND tc.table_name      = kcu.table_name
+    WHERE tc.table_schema = lower($1) AND tc.table_name = lower($2) AND tc.constraint_name = $3
+  `, [schemaName, nomeTabela, constraintName]).catch(() => []);
+
+  const setAtual = new Set(colunasAtuais.map(r => (r.COLUNA || '').toUpperCase()));
+  const setEsperado = new Set(chaveNegocio.map(c => c.toUpperCase()));
+  const constraintDesatualizada = setAtual.size > 0 &&
+    (setAtual.size !== setEsperado.size || [...setEsperado].some(c => !setAtual.has(c)));
+
+  if (constraintDesatualizada) {
+    console.log(`[${schemaName}] ${nomeTabela}: atualizando ${constraintName} de (${[...setAtual].join(', ')}) para (${chaveNegocio.join(', ')})`);
+    await execute(db, `ALTER TABLE ${nomeTabela} DROP CONSTRAINT ${constraintName}`).catch(e => {
+      // 42704 = constraint não existe (corrida com outra instância) — inofensivo.
+      // Qualquer outro erro impede a correção e precisa aparecer no log.
+      if (e.code !== '42704') {
+        console.warn(`[${schemaName}] ${nomeTabela}: falha ao remover ${constraintName} antigo: ${e.message}`);
+      }
+    });
+  }
+
+  if (setAtual.size === 0 || constraintDesatualizada) {
+    await execute(db,
+      `ALTER TABLE ${nomeTabela} ADD CONSTRAINT ${constraintName} UNIQUE (${chaveNegocio.join(', ')})`
+    ).catch(e => {
+      if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
+      // Falso positivo: tabelaJaExistia veio de cache desatualizado (reset-empresa.js
+      // apagou a tabela com o servidor no ar). selecionarRegistroAtual detecta e recria depois.
+      if (isMissingTableError(e)) return;
+      if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
+        console.warn(`[${schemaName}] ${nomeTabela}: duplicatas em (${chaveNegocio.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
+        return;
+      }
+      throw e;
+    });
+  }
+}
+
+/**
+ * Busca o registro atual no servidor (por SRV_ID quando é a PK real, senão pela PK original
+ * da filial) para detecção de conflito. Se a tabela foi dropada depois de cacheada (cache
+ * obsoleto), recria e retorna atual=[] em vez de propagar o erro.
+ */
+async function selecionarRegistroAtual(db, { schemaName, nomeTabela, srvIdEhPk, srvId, pks, registro, temSrvId, colunasServidor }) {
+  const _selecionarAtual = () => {
+    if (srvIdEhPk) {
+      return query(db, `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]);
+    }
+    const whereValores = pks.map(p => registro[p]);
+    const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+    return query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
+  };
+
+  try {
+    return { atual: await _selecionarAtual(), colunasServidor };
+  } catch (eSel) {
+    if (!isMissingTableError(eSel)) throw eSel;
+    // Cache obsoleto: tabela foi dropada após ser cacheada — recria agora mesmo.
+    colunasCache.invalidate(schemaName, nomeTabela);
+    await criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
+    return { atual: [], colunasServidor: await getColunasServidor(db, nomeTabela, schemaName) };
+  }
+}
+
+/**
+ * Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha correspondente
+ * (srv_id_map foi limpo/resetado), mas já existe registro com a mesma chave de negócio —
+ * reusa o SRV_ID existente em vez de duplicar.
+ */
+async function recuperarSrvIdPerdido(db, { schemaName, nomeTabela, srvIdEhPk, atual, tabelaJaExistia, pks, registro, idLoja, srvId }) {
+  if (!(srvIdEhPk && atual.length === 0 && tabelaJaExistia)) return { srvId, atual };
+
+  const pkWhere = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+  const pkVals  = pks.map(p => registro[p]);
+  const [existente] = await query(db,
+    `SELECT SRV_ID FROM ${nomeTabela} WHERE ${pkWhere} LIMIT 1`,
+    pkVals
+  ).catch(() => [null]);
+
+  if (existente?.SRV_ID == null) return { srvId, atual };
+
+  const pkValorStrLocal = pks.map(p => String(registro[p])).join('|');
+  await execute(db,
+    `UPDATE srv_id_map SET srv_id = $1 WHERE tabela = $2 AND id_local = $3 AND filial_id = $4`,
+    [existente.SRV_ID, nomeTabela, pkValorStrLocal, idLoja]
+  ).catch(() => {});
+  const novoAtual = await query(db,
+    `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [existente.SRV_ID]
+  ).catch(() => []);
+  return { srvId: existente.SRV_ID, atual: novoAtual };
+}
+
+/**
+ * Efeito colateral de negócio pós-upsert: pedido virou Realizado no push da filial — gera
+ * as A_RECEBER das parcelas já cadastradas (fire-and-forget). Pagamento não é pré-requisito
+ * para "Realizado": ver gerarContasReceberDoPedido().
+ */
+function dispararEfeitosPosUpsert(schemaName, { nomeTabela, atual, registro }) {
+  if (nomeTabela !== 'PEDIDOS') return;
+  const statusAntes = atual[0]?.STATUS ?? null;
+  const statusNovo  = registro['STATUS'] ?? null;
+  const idPedido    = registro['ID_PEDIDO'];
+  if (statusNovo === 'R' && statusAntes !== 'R' && idPedido != null) {
+    gerarContasReceberDoPedido(schemaName, idPedido).catch(e =>
+      console.warn(`[PEDIDOS] WARN geração de A_RECEBER ao realizar: ${e.message}`)
+    );
+  }
+}
+
+/**
  * POST /datasnap/rest/TSMSincronizacao/ReceberRegistro
  * Query params: token, idLoja
  * Body JSON: { tabela, pk, registro, ultimaVersaoConhecida, forcar }
@@ -480,7 +760,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
   try {
     await withTenantConnection(req.schemaName, async (db) => {
-      try { await registrarFilial(db, idLoja, null); } catch { /* não bloqueia a resposta */ }
+      try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
 
       if (await isFilialBloqueada(idLoja, db)) {
         res.status(401).send();
@@ -490,185 +770,23 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       const pks = Array.isArray(pk) ? pk : [pk];
 
       // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
-      // Sequence por-tabela (seq_srv_id_<tabela>) evita contador global compartilhado.
       let srvId = null;
       if (temSrvId && !deletar) {
-        const pkValorStr = pks.map(p => String(registro[p])).join('|');
-        const seqNome = `seq_srv_id_${nomeTabela.toLowerCase()}`;
-        const seqKey  = `${req.schemaName}:${seqNome}`;
-
-        // SRV_ID já no payload = registro criado via web (PK null) e ecoado no pull —
-        // reusa o ID existente em vez de alocar um novo, evitando duplicatas.
-        const srvIdFilial = registro.SRV_ID != null ? Number(registro.SRV_ID) : null;
-
-        if (srvIdFilial != null) {
-          // Registra id_local → srv_id existente (sem alocar novo valor). Cada filial tem
-          // seu próprio generator Firebird, então (filial_id, tabela, id_local) é a chave
-          // real — o mesmo id_local em filiais diferentes são registros distintos.
-          await execute(db,
-            `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
-             DO UPDATE SET srv_id = EXCLUDED.srv_id`,
-            [idLoja, nomeTabela, pkValorStr, srvIdFilial]
-          ).catch(() => {});
-          srvId = srvIdFilial;
-        } else {
-          const criarSequence = async () => {
-            // Começa a sequence após o maior SRV_ID já atribuído à tabela,
-            // para não colidir com valores de instalações existentes.
-            const [maxRow] = await query(db,
-              `SELECT COALESCE(MAX(srv_id), 0) + 1 AS inicio FROM srv_id_map WHERE tabela = $1`,
-              [nomeTabela]
-            ).catch(() => [{ INICIO: 1 }]);
-            const inicio = maxRow?.INICIO ?? 1;
-            await execute(db, `CREATE SEQUENCE IF NOT EXISTS ${seqNome} START WITH ${inicio}`).catch(() => {});
-            seqsSrvIdInicializadas.add(seqKey);
-          };
-
-          if (!seqsSrvIdInicializadas.has(seqKey)) await criarSequence();
-
-          const inserirMapa = () => query(db,
-            `INSERT INTO srv_id_map (filial_id, tabela, id_local, srv_id)
-             VALUES ($1, $2, $3, nextval('${seqNome}'))
-             ON CONFLICT (filial_id, tabela, id_local) WHERE filial_id IS NOT NULL
-             DO UPDATE SET srv_id = srv_id_map.srv_id
-             RETURNING srv_id`,
-            [idLoja, nomeTabela, pkValorStr]
-          );
-
-          // Retry único: reset-empresa.js pode ter apagado esta sequence com o servidor
-          // no ar, deixando o cache em memória desatualizado (42P01). Recria e tenta de novo.
-          let mapa;
-          try {
-            [mapa] = await inserirMapa();
-          } catch (eSeq) {
-            if (!isMissingTableError(eSeq)) throw eSeq;
-            seqsSrvIdInicializadas.delete(seqKey);
-            await criarSequence();
-            [mapa] = await inserirMapa();
-          }
-
-          srvId = mapa?.SRV_ID ?? null;
-        }
+        srvId = await alocarSrvId(db, { schemaName: req.schemaName, idLoja, nomeTabela, pks, registro });
       }
 
       if (deletar) {
-        if (temSrvId) {
-          const pkValorStr = pks.map(p => registro[p]).join('|');
-          const [mapa] = await query(db,
-            `SELECT srv_id FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
-            [nomeTabela, pkValorStr, idLoja]
-          ).catch(() => [null]);
-          const srvIdDel = mapa?.SRV_ID;
-          try {
-            if (srvIdDel) {
-              await execute(db, `DELETE FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvIdDel]);
-              await execute(db,
-                `DELETE FROM srv_id_map WHERE tabela = $1 AND id_local = $2 AND filial_id = $3`,
-                [nomeTabela, pkValorStr, idLoja]
-              );
-            }
-            await execute(db,
-              `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
-              [nomeTabela, pkValorStr]
-            );
-          } catch (e) {
-            if (!isMissingTableError(e)) throw e;
-          }
-        } else {
-          const whereValores = pks.map(p => registro[p]);
-          const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-          try {
-            await execute(db, `DELETE FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
-            await execute(db,
-              `INSERT INTO registros_deletados (nome_da_tabela, id_registros, criado_em) VALUES ($1, $2, NOW())`,
-              [nomeTabela, whereValores.join('|')]
-            );
-          } catch (e) {
-            if (!isMissingTableError(e)) throw e;
-          }
-        }
+        await processarDelecao(db, { nomeTabela, temSrvId, pks, registro, idLoja });
         res.json({ ok: true });
         return;
       }
 
       // Garante que a tabela existe antes de qualquer query nela.
       // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.
-      const computadas = await getColunasComputadas(db, nomeTabela, req.schemaName);
-      let colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
-      const tabelaJaExistia = colunasServidor.size > 0;
+      let { colunasServidor, computadas, tabelaJaExistia } =
+        await garantirColunasServidor(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
 
-      if (!tabelaJaExistia) {
-        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
-        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
-      } else if (temSrvId && !colunasServidor.has('SRV_ID')) {
-        // Migração: tabela existe (criada antes do srvId ser ativado) sem coluna SRV_ID.
-        // Adiciona como coluna comum nullable — não destrói a PK original da tabela.
-        await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS srv_id INTEGER`);
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cachePkServidor[cacheKey];
-        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
-      }
-
-      // Migração one-time: tabelas criadas antes do multi-filial têm a UNIQUE só em (pks),
-      // sem ID_LOJA — rejeita como duplicata pushes legítimos de outra filial com o mesmo
-      // id_local. Detecta e recria; constraintsUqAdicionadas evita repetir a cada push.
-      if (tabelaJaExistia && temSrvId && pks.length > 0) {
-        const cqKey = `${req.schemaName}:${nomeTabela}`;
-        if (!constraintsUqAdicionadas.has(cqKey)) {
-          constraintsUqAdicionadas.add(cqKey);
-          const constraintName = `uq_${nomeTabela.toLowerCase()}_bk`;
-          const chaveNegocio = chaveNegocioTabela(pks, colunasServidor);
-
-          const colunasAtuais = await query(db, `
-            SELECT kcu.column_name AS "COLUNA"
-            FROM information_schema.table_constraints tc
-            JOIN information_schema.key_column_usage kcu
-              ON tc.constraint_name = kcu.constraint_name
-             AND tc.table_schema    = kcu.table_schema
-             AND tc.table_name      = kcu.table_name
-            WHERE tc.table_schema = lower($1) AND tc.table_name = lower($2) AND tc.constraint_name = $3
-          `, [req.schemaName, nomeTabela, constraintName]).catch(() => []);
-
-          const setAtual = new Set(colunasAtuais.map(r => (r.COLUNA || '').toUpperCase()));
-          const setEsperado = new Set(chaveNegocio.map(c => c.toUpperCase()));
-          const constraintDesatualizada = setAtual.size > 0 &&
-            (setAtual.size !== setEsperado.size || [...setEsperado].some(c => !setAtual.has(c)));
-
-          if (constraintDesatualizada) {
-            console.log(`[${req.schemaName}] ${nomeTabela}: atualizando ${constraintName} de (${[...setAtual].join(', ')}) para (${chaveNegocio.join(', ')})`);
-            await execute(db, `ALTER TABLE ${nomeTabela} DROP CONSTRAINT ${constraintName}`).catch(e => {
-              // 42704 = constraint não existe (corrida com outra instância) — inofensivo.
-              // Qualquer outro erro impede a correção e precisa aparecer no log.
-              if (e.code !== '42704') {
-                console.warn(`[${req.schemaName}] ${nomeTabela}: falha ao remover ${constraintName} antigo: ${e.message}`);
-              }
-            });
-          }
-
-          if (setAtual.size === 0 || constraintDesatualizada) {
-            await execute(db,
-              `ALTER TABLE ${nomeTabela} ADD CONSTRAINT ${constraintName} UNIQUE (${chaveNegocio.join(', ')})`
-            ).catch(e => {
-              if (e.code === '42710' || e.code === '42P07') return; // constraint ou índice de backing já existe — normal
-              // Falso positivo: tabelaJaExistia veio de cache desatualizado (reset-empresa.js
-              // apagou a tabela com o servidor no ar). _selecionarAtual detecta e recria depois.
-              if (isMissingTableError(e)) return;
-              if (e.code === '23505') {        // existem duplicatas — limpeza manual necessária
-                console.warn(`[${req.schemaName}] ${nomeTabela}: duplicatas em (${chaveNegocio.join(', ')}) impedem UNIQUE constraint. Execute a limpeza de duplicatas antes de reaplicar.`);
-                return;
-              }
-              throw e;
-            });
-          }
-        }
-      }
+      await garantirConstraintUnica(db, { schemaName: req.schemaName, nomeTabela, tabelaJaExistia, temSrvId, pks, colunasServidor });
 
       // srvIdEhPk: SRV_ID é a PK real, detectado via information_schema (cacheado) — não
       // via tabelaJaExistia, que dava falso no 1º push e causava ON CONFLICT inválido em
@@ -678,53 +796,15 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
 
       // Detecção de conflito: SRV_ID como chave só quando é a PK real da tabela.
       // Se a tabela não existir (cache obsoleto), limpa, recria e continua com atual=[].
-      const _selecionarAtual = async () => {
-        if (srvIdEhPk) {
-          return query(db, `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]);
-        }
-        const whereValores = pks.map(p => registro[p]);
-        const whereParts   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-        return query(db, `SELECT * FROM ${nomeTabela} WHERE ${whereParts}`, whereValores);
-      };
-
       let atual;
-      try {
-        atual = await _selecionarAtual();
-      } catch (eSel) {
-        if (!isMissingTableError(eSel)) throw eSel;
-        // Cache obsoleto: tabela foi dropada após ser cacheada — recria agora mesmo.
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
-        await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
-        colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
-        atual = [];
-      }
+      ({ atual, colunasServidor } = await selecionarRegistroAtual(db,
+        { schemaName: req.schemaName, nomeTabela, srvIdEhPk, srvId, pks, registro, temSrvId, colunasServidor }));
 
       // Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha (srv_id_map foi
       // limpo/resetado), mas já existe registro com a mesma chave de negócio — reusa o
       // SRV_ID existente em vez de duplicar.
-      if (srvIdEhPk && atual.length === 0 && tabelaJaExistia) {
-        const pkWhere = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-        const pkVals  = pks.map(p => registro[p]);
-        const [existente] = await query(db,
-          `SELECT SRV_ID FROM ${nomeTabela} WHERE ${pkWhere} LIMIT 1`,
-          pkVals
-        ).catch(() => [null]);
-
-        if (existente?.SRV_ID != null) {
-          const pkValorStrLocal = pks.map(p => String(registro[p])).join('|');
-          await execute(db,
-            `UPDATE srv_id_map SET srv_id = $1 WHERE tabela = $2 AND id_local = $3 AND filial_id = $4`,
-            [existente.SRV_ID, nomeTabela, pkValorStrLocal, idLoja]
-          ).catch(() => {});
-          srvId = existente.SRV_ID;
-          atual = await query(db,
-            `SELECT * FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]
-          ).catch(() => []);
-        }
-      }
+      ({ srvId, atual } = await recuperarSrvIdPerdido(db,
+        { schemaName: req.schemaName, nomeTabela, srvIdEhPk, atual, tabelaJaExistia, pks, registro, idLoja, srvId }));
 
       if (!forcar && atual.length > 0) {
         const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
@@ -790,84 +870,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
           valoresFinais
         );
 
-        if (nomeTabela === 'A_RECEBER') {
-          const idAR = registro['ID_A_RECEBER'];
-          if (idAR != null) {
-            // Busca nome do cliente via SRV_ID (ID_CLIENTE já foi traduzido para SRV_ID pelo push)
-            const idClienteSrv = registro['ID_CLIENTE'];
-            let nomeCliente = null;
-            if (idClienteSrv != null) {
-              const [cliRow] = await query(db,
-                `SELECT razao_social FROM clientes WHERE srv_id = $1 LIMIT 1`, [idClienteSrv]
-              ).catch(() => [null]);
-              nomeCliente = cliRow?.razao_social ?? null;
-            }
-            const vencimento      = registro['VENCIMENTO']          ?? registro['DATA_VENCIMENTO']  ?? null;
-            const dataRealizado   = registro['DATA_REALIZADO']       ?? registro['DATA_RECEBIMENTO'] ?? null;
-            const formaPagamento  = String(registro['FORMA_PAGAMENTO'] ?? registro['ID_FORMA_DE_PAGAMENTO'] ?? '').trim() || null;
-            const parcela         = parseInt(registro['PARCELA'])       || 1;
-            const totalParcelas   = parseInt(registro['TOTAL_PARCELAS']) || parcela;
-            const idLoja          = registro['ID_LOJA'] != null ? (parseInt(registro['ID_LOJA']) || null) : null;
-            const statusRaw       = String(registro['STATUS'] ?? '').toLowerCase();
-            const status          = (statusRaw === 'recebido' || statusRaw === 'recebida' || statusRaw === 'realizada' || statusRaw === 'realizado')
-                                      ? 'recebido'
-                                      : (statusRaw === 'cancelado' || statusRaw === 'cancelada')
-                                        ? 'cancelado'
-                                        : 'pendente';
-            const observacao      = registro['OBSERVACAO'] ?? registro['OBS'] ?? null;
-
-            const espelharAR = () => execute(db, `
-              INSERT INTO financeiro_contas_receber (
-                id_a_receber, descricao, nome_cliente, valor, data_vencimento,
-                data_recebimento, status, forma_pagamento, parcela, total_parcelas,
-                observacao, id_loja
-              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-              ON CONFLICT (id_a_receber) DO UPDATE SET
-                descricao        = EXCLUDED.descricao,
-                nome_cliente     = EXCLUDED.nome_cliente,
-                valor            = EXCLUDED.valor,
-                data_vencimento  = EXCLUDED.data_vencimento,
-                data_recebimento = EXCLUDED.data_recebimento,
-                status           = EXCLUDED.status,
-                forma_pagamento  = EXCLUDED.forma_pagamento,
-                parcela          = EXCLUDED.parcela,
-                total_parcelas   = EXCLUDED.total_parcelas,
-                observacao       = EXCLUDED.observacao,
-                id_loja          = EXCLUDED.id_loja
-            `, [
-              idAR, registro['DESCRICAO'] ?? null, nomeCliente,
-              registro['VALOR'] ?? null, vencimento, dataRealizado,
-              status, formaPagamento, parcela, totalParcelas, observacao, idLoja,
-            ]);
-
-            try {
-              await espelharAR();
-            } catch (eEspelho) {
-              // financeiro_contas_receber não vem do fluxo genérico de sync — só é criada por
-              // initializeTenantSchema (na criação da empresa). reset-empresa.js a apaga sem
-              // recriar; se sumiu, reprovisiona o schema do tenant e tenta espelhar de novo.
-              if (!isMissingTableError(eEspelho)) {
-                console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${eEspelho.message}`);
-              } else {
-                await initializeTenantSchema(req.schemaName).catch(() => {});
-                await espelharAR().catch(e2 => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e2.message}`));
-              }
-            }
-          }
-        }
-
-        if (nomeTabela === 'PEDIDOS') {
-          const statusAntes = atual[0]?.STATUS ?? null;
-          const statusNovo  = registro['STATUS'] ?? null;
-          const idPedido    = registro['ID_PEDIDO'];
-          // Pedido virou Realizado — gera as A_RECEBER das parcelas já cadastradas
-          // (fire-and-forget). Pagamento não é pré-requisito: ver gerarContasReceberDoPedido().
-          if (statusNovo === 'R' && statusAntes !== 'R' && idPedido != null) {
-            gerarContasReceberDoPedido(req.schemaName, idPedido).catch(e =>
-              console.warn(`[PEDIDOS] WARN geração de A_RECEBER ao realizar: ${e.message}`)
-            );
-          }
-        }
+        dispararEfeitosPosUpsert(req.schemaName, { nomeTabela, atual, registro });
 
         // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
         if (srvIdEhPk) {
@@ -893,10 +896,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       // Garante que o próximo push vai recriar a tabela (limpa cache obsoleto).
       const nomeTabela = ((req.body?.tabela) || '').toUpperCase().trim();
       if (nomeTabela && req.schemaName) {
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
+        colunasCache.invalidate(req.schemaName, nomeTabela);
       }
     }
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
@@ -949,10 +949,7 @@ router.post('/GarantirTabela', auth, async (req, res) => {
       const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       if (colunasServidor.size === 0) {
         await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadas, pksArr, temSrvId);
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
+        colunasCache.invalidate(req.schemaName, nomeTabela);
       }
     });
     res.json({ ok: true });

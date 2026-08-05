@@ -1,7 +1,7 @@
 const readline = require('readline');
 const fs       = require('fs');
 const path     = require('path');
-const Firebird = require('node-firebird');
+const { attachComTimeout } = require('./firebird-attach');
 async function pergunta(rl, texto) {
   return new Promise(resolve => rl.question(texto, answer => resolve(answer.trim())));
 }
@@ -92,56 +92,61 @@ async function buscarFiliaisServidor(serverUrl, syncToken) {
   return await httpGetJson(url);
 }
 
-function lerParametro(connOpts, idParametro) {
+async function lerParametro(connOpts, idParametro) {
+  let db;
+  try {
+    db = await attachComTimeout(connOpts);
+  } catch {
+    return null;
+  }
   return new Promise((resolve) => {
-    Firebird.attach(connOpts, (err, db) => {
-      if (err) return resolve(null);
-      db.query(
-        'SELECT PARAMETRO FROM PARAMETROS WHERE ID_PARAMETRO = ?',
-        [idParametro],
-        (err2, rows) => {
-          db.detach(() => {});
-          if (err2 || !rows || !rows.length) return resolve(null);
-          resolve(rows[0].PARAMETRO ?? null);
-        }
-      );
-    });
-  });
-}
-
-function testarConexaoFirebird(connOpts) {
-  return new Promise((resolve) => {
-    Firebird.attach(connOpts, (err, db) => {
-      if (err) return resolve({ ok: false, erro: err.message });
-      db.detach(() => {});
-      resolve({ ok: true });
-    });
-  });
-}
-
-function gravarParametro(connOpts, idParametro, valor) {
-  return new Promise((resolve) => {
-    Firebird.attach(connOpts, (err, db) => {
-      if (err) {
-        console.log(`  [!] Nao foi possivel conectar ao Firebird: ${err.message}`);
-        console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
-        return resolve();
+    db.query(
+      'SELECT PARAMETRO FROM PARAMETROS WHERE ID_PARAMETRO = ?',
+      [idParametro],
+      (err2, rows) => {
+        db.detach(() => {});
+        if (err2 || !rows || !rows.length) return resolve(null);
+        resolve(rows[0].PARAMETRO ?? null);
       }
-      db.query(
-        'UPDATE OR INSERT INTO PARAMETROS (ID_PARAMETRO, PARAMETRO) VALUES (?, ?) MATCHING (ID_PARAMETRO)',
-        [idParametro, valor],
-        (err2) => {
-          db.detach(() => {});
-          if (err2) {
-            console.log(`  [!] Erro ao atualizar PARAMETROS: ${err2.message}`);
-            console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
-          } else {
-            console.log(`  [OK] PARAMETROS(${idParametro}) atualizado: ${valor}`);
-          }
-          resolve();
+    );
+  });
+}
+
+async function testarConexaoFirebird(connOpts) {
+  let db;
+  try {
+    db = await attachComTimeout(connOpts);
+  } catch (err) {
+    return { ok: false, erro: err.message };
+  }
+  db.detach(() => {});
+  return { ok: true };
+}
+
+async function gravarParametro(connOpts, idParametro, valor) {
+  let db;
+  try {
+    db = await attachComTimeout(connOpts);
+  } catch (err) {
+    console.log(`  [!] Nao foi possivel conectar ao Firebird: ${err.message}`);
+    console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
+    return;
+  }
+  return new Promise((resolve) => {
+    db.query(
+      'UPDATE OR INSERT INTO PARAMETROS (ID_PARAMETRO, PARAMETRO) VALUES (?, ?) MATCHING (ID_PARAMETRO)',
+      [idParametro, valor],
+      (err2) => {
+        db.detach(() => {});
+        if (err2) {
+          console.log(`  [!] Erro ao atualizar PARAMETROS: ${err2.message}`);
+          console.log(`      Configure manualmente: PARAMETROS onde ID_PARAMETRO=${idParametro}, PARAMETRO=<valor>\n`);
+        } else {
+          console.log(`  [OK] PARAMETROS(${idParametro}) atualizado: ${valor}`);
         }
-      );
-    });
+        resolve();
+      }
+    );
   });
 }
 

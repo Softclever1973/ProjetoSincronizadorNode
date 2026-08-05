@@ -234,7 +234,7 @@ const TABELAS = [
     filtroFilial: 'ID_LOJA',
     generator: 'GEN_A_PAGAR',  // confirmar nome no Firebird
     colunaData: 'VENCIMENTO',
-    defaultAtivo: false,
+    defaultAtivo: true,
     srvId: true,
     fks: [
       { coluna: 'ID_FORNECEDOR', tabela: 'FORNECEDORES', traduzirSrvId: true, pkRef: 'ID_FORNECEDOR' },

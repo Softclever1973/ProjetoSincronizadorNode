@@ -114,6 +114,25 @@ function isColunaIgnorada(coluna) {
   return COLUNAS_IGNORADAS_AUDITORIA.has((coluna ?? '').toUpperCase());
 }
 
+// Aplica um registro (versão do servidor, mesclado, ou servidor com PK renomeado) no
+// Firebird local via UPDATE OR INSERT — usado pelos 3 dos 4 fluxos de resolução de
+// conflito ('servidor', 'mesclar', 'manter_ambos') que precisam gravar localmente antes
+// de (re)enviar ao servidor. 'local' não usa isso — só reenvia o que já está no Firebird.
+async function aplicarRegistroLocal(db, tabela, pk, registro) {
+  const computadas      = await getColunasComputadas(db, tabela);
+  const colunasFirebird = await getColunasFirebird(db, tabela);
+  const colunas = Object.keys(registro).filter(k =>
+    registro[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
+  );
+  const placeholders = colunas.map(() => '?').join(', ');
+  const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
+  const pks = Array.isArray(pk) ? pk : [pk];
+  await dbExecute(db,
+    `UPDATE OR INSERT INTO ${tabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
+    valores
+  );
+}
+
 function normalizarBlobs(row) {
   if (!row || typeof row !== 'object') return row;
   return Object.fromEntries(
@@ -826,18 +845,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       const db = await getConnection();
       try {
         const reg = conflito.versaoServidor;
-        const computadas = await getColunasComputadas(db, conflito.tabela);
-        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
-        const colunas = Object.keys(reg).filter(k =>
-          reg[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
-        );
-        const placeholders = colunas.map(() => '?').join(', ');
-        const valores = colunas.map(c => (reg[c] === undefined ? null : reg[c]));
-        const pks = Array.isArray(conflito.pk) ? conflito.pk : [conflito.pk];
-        await dbExecute(db,
-          `UPDATE OR INSERT INTO ${conflito.tabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
-          valores
-        );
+        await aplicarRegistroLocal(db, conflito.tabela, conflito.pk, reg);
         // Atualiza versão conhecida do servidor
         if (reg.ID_ULTIMA_ATUALIZACAO_MATRIZ) {
           await dbExecute(db,
@@ -863,18 +871,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       // 1. Aplica o registro mesclado no banco local (igual ao fluxo 'servidor')
       const db = await getConnection();
       try {
-        const computadas = await getColunasComputadas(db, conflito.tabela);
-        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
-        const colunas = Object.keys(base).filter(k =>
-          base[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
-        );
-        const placeholders = colunas.map(() => '?').join(', ');
-        const valores = colunas.map(c => (base[c] === undefined ? null : base[c]));
-        const pks = Array.isArray(conflito.pk) ? conflito.pk : [conflito.pk];
-        await dbExecute(db,
-          `UPDATE OR INSERT INTO ${conflito.tabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
-          valores
-        );
+        await aplicarRegistroLocal(db, conflito.tabela, conflito.pk, base);
       } catch (e) {
         return res.status(500).json({ ok: false, message: `Falha ao aplicar mesclagem localmente: ${e.message}` });
       } finally {
@@ -932,16 +929,8 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
         novoPKValorStr = pks.map((p, i) => p === pkPrincipal ? String(novoValorPK) : pkValores[i]).join('|');
 
         // 2. Insere o registro do servidor localmente com o novo PK
-        const regServidor     = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
-        const computadas      = await getColunasComputadas(db, conflito.tabela);
-        const colunasFirebird = await getColunasFirebird(db, conflito.tabela);
-        const colunasServ     = Object.keys(regServidor).filter(k =>
-          regServidor[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
-        );
-        await dbExecute(db,
-          `UPDATE OR INSERT INTO ${conflito.tabela} (${colunasServ.join(', ')}) VALUES (${colunasServ.map(() => '?').join(', ')}) MATCHING (${pks.join(', ')})`,
-          colunasServ.map(c => (regServidor[c] === undefined ? null : regServidor[c]))
-        );
+        const regServidor = { ...conflito.versaoServidor, [pkPrincipal]: novoValorPK };
+        await aplicarRegistroLocal(db, conflito.tabela, conflito.pk, regServidor);
 
         // 3. Remove pendente do PK original (será resolvido pelo force-push abaixo)
         await dbExecute(db,

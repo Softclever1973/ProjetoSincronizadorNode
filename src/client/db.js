@@ -1,4 +1,4 @@
-const Firebird = require('node-firebird');
+const { attachComTimeout } = require('./firebird-attach');
 
 if (!process.env.FIREBIRD_DATABASE) {
   throw new Error('FIREBIRD_DATABASE não definido no .env (ex: C:\\FDBS\\FILIAL.FDB)');
@@ -24,19 +24,15 @@ const opcoes = {
 // este attach(). Retry curto só pra essa mensagem específica; qualquer outro erro
 // (credencial de fato errada, banco fora do ar) rejeita na primeira tentativa mesmo.
 function getConnection(tentativasRestantes = 2) {
-  return new Promise((resolve, reject) => {
-    Firebird.attach(opcoes, (err, db) => {
-      if (err) {
-        if (tentativasRestantes > 0 && /user name and password are not defined/i.test(err.message)) {
-          setTimeout(() => {
-            getConnection(tentativasRestantes - 1).then(resolve, reject);
-          }, 500);
-          return;
-        }
-        return reject(err);
-      }
-      resolve(db);
-    });
+  return attachComTimeout(opcoes).catch(err => {
+    if (tentativasRestantes > 0 && /user name and password are not defined/i.test(err.message)) {
+      return new Promise((resolve, reject) => {
+        setTimeout(() => {
+          getConnection(tentativasRestantes - 1).then(resolve, reject);
+        }, 500);
+      });
+    }
+    throw err;
   });
 }
 
