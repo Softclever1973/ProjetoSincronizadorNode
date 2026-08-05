@@ -11,8 +11,9 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
-const { erroServidor, colunasTabela, resolveIdLoja, resolverNomeVendedor, pedidoEstaCancelado, registrarAuditLog, gerarContasReceberDoPedido } = require('./helpers');
+const { erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog } = require('./helpers');
 const { getCurrentTime } = require('../../services/timeService');
+const HOOKS = require('./hooks');
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
 router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req, res) => {
@@ -259,6 +260,8 @@ async function handleSave(req, res, forceUpdate) {
   const pks = Array.isArray(pk) ? pk : [pk];
   if (pks.some(p => !NOME_VALIDO.test(p))) return res.status(400).json({ erro: 'pk inválido' });
 
+  const hooks = HOOKS[tabela.toUpperCase()];
+
   // Verificação e injeção de loja para gerente/vendedor — só em tabelas transacionais
   if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
     const userRole   = req.userRoles?.[schema];
@@ -286,35 +289,13 @@ async function handleSave(req, res, forceUpdate) {
   if (erroValidacao) return res.status(400).json({ erro: erroValidacao });
 
   // Campos automáticos para pedidos criados via web
-  if (tabela.toUpperCase() === 'PEDIDOS') {
-    const now        = new Date();
-    const hojeIso    = now.toISOString().slice(0, 10);
-    const horaUtcZ   = now.toISOString().slice(11, 19) + 'Z';
-    const dataPedido = registro.DATA_DO_PEDIDO || hojeIso;
-    const nomeUser   = req.userName || null;
-
-    if (!registro.HORA_DO_PEDIDO)     registro.HORA_DO_PEDIDO    = horaUtcZ;
-    if (!registro.TIPO_OPERACAO)      registro.TIPO_OPERACAO     = 'VD';
-    if (!registro.DATA_DE_EMISSAO)    registro.DATA_DE_EMISSAO   = dataPedido;
-    if (!registro.DATA_DE_EMISSAO_NF) registro.DATA_DE_EMISSAO_NF = dataPedido;
-    if (!registro.USUARIO && nomeUser)      registro.USUARIO      = nomeUser;
-    if (!registro.USUARIO_NOME && nomeUser) registro.USUARIO_NOME = nomeUser;
-    if (!registro.AUTORIZADO_POR && nomeUser) registro.AUTORIZADO_POR = nomeUser;
-    if (!registro.DATA_REALIZACAO && registro.STATUS === 'R')
-      registro.DATA_REALIZACAO = dataPedido;
-  }
+  hooks?.aplicarCamposAutomaticos?.(req, registro);
 
   try {
     const { isUpdate, dadosAntes, srvId } = await withTenantConnection(schema, async db => {
       // Pedido cancelado trava itens e parcelas — insert ou update, não só transição
       // de status do próprio PEDIDOS (checado mais abaixo, depois que dadosAntes existe).
-      if ((tabela.toUpperCase() === 'PEDIDOS_ITENS' || tabela.toUpperCase() === 'PEDIDOS_PARCELAS_PAGAMENTOS')
-          && await pedidoEstaCancelado(db, registro.ID_PEDIDO)) {
-        throw Object.assign(
-          new Error('Pedido cancelado — não é possível alterar itens ou parcelas de pagamento.'),
-          { isValidation: true }
-        );
-      }
+      await hooks?.antesDaTransacao?.(db, registro);
 
       const serverCols = await query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
@@ -324,63 +305,12 @@ async function handleSave(req, res, forceUpdate) {
       const pksUpper = pks.map(p => p.toUpperCase());
 
       // Garante colunas da web que podem não existir no schema Firebird sincronizado
-      if (tabela.toUpperCase() === 'PEDIDOS') {
-        // ENDERECO_ENTREGA_JSON é web-only: ENDERECO_ESCOLHIDO (sincronizado) é VARCHAR(8)
-        // na filial, só cabe o CEP — não comporta o JSON completo (ver _assemblarEndereco
-        // no frontend).
-        for (const [col, type] of [['OUTRAS_DESPESAS', 'NUMERIC(15,2)'], ['MODALIDADE_FRETE', 'VARCHAR(1)'], ['ENDERECO_ENTREGA_JSON', 'TEXT']]) {
-          if (!allowed.has(col)) {
-            await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS ${col} ${type}`).catch(() => {});
-            allowed.add(col);
-          }
-        }
-      } else if (tabela.toUpperCase() === 'PEDIDOS_PARCELAS_PAGAMENTOS') {
-        if (!allowed.has('STATUS')) {
-          await execute(db, `ALTER TABLE ${tabela} ADD COLUMN IF NOT EXISTS STATUS TEXT`).catch(() => {});
-          allowed.add('STATUS');
-        }
-      }
+      await hooks?.migrarSchema?.(db, schema, tabela, allowed);
 
       // Denormaliza NOME_VENDEDOR/DESCRICAO_PRODUTO/FRETE_EMITENTE_DESTINATARIO: colunas
       // sincronizadas que o formulário web nunca preenchia (ou usava outro nome), ficando
       // NULL na filial apesar do dado de origem existir.
-      if (tabela.toUpperCase() === 'PEDIDOS') {
-        // O select do frontend chama-se MODALIDADE_FRETE, mas o campo real sincronizado
-        // com o Firebird é FRETE_EMITENTE_DESTINATARIO (VARCHAR(1), mesmos códigos S/E/D/T/R/P).
-        if (registro.MODALIDADE_FRETE && allowed.has('FRETE_EMITENTE_DESTINATARIO'))
-          registro.FRETE_EMITENTE_DESTINATARIO = registro.MODALIDADE_FRETE;
-
-        if (registro.ID_VENDEDOR && !registro.NOME_VENDEDOR && allowed.has('NOME_VENDEDOR')) {
-          const nomeVendedor = await resolverNomeVendedor(db, schema, registro.ID_VENDEDOR);
-          if (nomeVendedor) registro.NOME_VENDEDOR = nomeVendedor;
-        }
-      } else if (tabela.toUpperCase() === 'MOVIMENTACOES') {
-        // Frontend manda "Web - <conta>" em USUARIO; se a conta tem vendedor vinculado, usa
-        // o nome do vendedor (mesma convenção do desktop, sem prefixo "Web -"). Contas sem
-        // vendedor (ex.: dono) mantêm o valor já enviado.
-        const idVendedor = req.userVendedores?.[schema] ?? null;
-        if (idVendedor != null && allowed.has('USUARIO')) {
-          const nomeVendedor = await resolverNomeVendedor(db, schema, idVendedor);
-          if (nomeVendedor) registro.USUARIO = nomeVendedor;
-        }
-      } else if (tabela.toUpperCase() === 'PEDIDOS_ITENS') {
-        if (registro.ID_PRODUTO && !registro.DESCRICAO_PRODUTO && allowed.has('DESCRICAO_PRODUTO')) {
-          const colsProd = await colunasTabela(db, schema, 'PRODUTOS').catch(() => []);
-          const descCol = ['DESCRICAO_PRODUTO', 'DESCRICAO', 'NOME']
-            .find(c => colsProd.some(cc => cc.COLUMN_NAME === c));
-          if (descCol) {
-            const [prod] = await query(db,
-              `SELECT ${descCol} AS DESCRICAO FROM PRODUTOS WHERE ID_PRODUTO = $1 LIMIT 1`,
-              [registro.ID_PRODUTO]
-            ).catch(() => []);
-            if (prod?.DESCRICAO) registro.DESCRICAO_PRODUTO = prod.DESCRICAO;
-          }
-        }
-        // A web só trabalha com QUANTIDADE (não vende por metragem/peça fracionada) —
-        // QUANTIDADE_DE_PECAS espelha o mesmo valor para o ERP, que exibe os dois campos.
-        if (registro.QUANTIDADE != null && registro.QUANTIDADE_DE_PECAS == null && allowed.has('QUANTIDADE_DE_PECAS'))
-          registro.QUANTIDADE_DE_PECAS = registro.QUANTIDADE;
-      }
+      await hooks?.denormalizar?.(db, schema, registro, allowed, req);
 
       // Se todos os PKs estão ausentes (registro novo sem ID), vai direto pra INSERT —
       // evita SELECT com NULL que nunca encontra linhas.
@@ -403,89 +333,11 @@ async function handleSave(req, res, forceUpdate) {
         dadosAntes = before[0] ?? null;
       }
 
-      // Pedido cancelado trava qualquer edição, não só uma tentativa de mudar o status —
-      // não existe caminho de volta a partir de Cancelado.
-      if (tabela.toUpperCase() === 'PEDIDOS' && update && dadosAntes?.STATUS === 'C') {
-        throw Object.assign(
-          new Error('Pedido cancelado não pode ser editado.'),
-          { isValidation: true }
-        );
-      }
+      // PEDIDOS: pedido cancelado trava edição; Realizado não pode ir direto pra Cancelado
+      await hooks?.validarTransicao?.(db, { registro, update, dadosAntes });
 
-      // PEDIDOS: Realizado não pode ir direto pra Cancelado (precisa voltar a Pendente
-      // antes); nenhuma das duas transições é permitida se alguma parcela já tiver
-      // pagamento registrado.
-      if (tabela.toUpperCase() === 'PEDIDOS' && update && dadosAntes &&
-          registro.STATUS && registro.STATUS !== dadosAntes.STATUS) {
-        const statusAntigo = dadosAntes.STATUS;
-        const statusNovo   = registro.STATUS;
-        if (statusAntigo === 'R' && statusNovo === 'C') {
-          throw Object.assign(
-            new Error('Pedido realizado não pode ser cancelado diretamente — volte para pendente primeiro.'),
-            { isValidation: true }
-          );
-        }
-        if ((statusAntigo === 'R' && statusNovo === 'P') || (statusAntigo === 'P' && statusNovo === 'C')) {
-          const pago = await query(db,
-            `SELECT 1 FROM PEDIDOS_PARCELAS_PAGAMENTOS WHERE ID_PEDIDO = $1 AND STATUS = 'R' LIMIT 1`,
-            [registro.ID_PEDIDO]
-          ).catch(() => []);
-          if (pago.length > 0) throw Object.assign(
-            new Error('Não é possível alterar o status: já existe pagamento registrado para este pedido.'),
-            { isValidation: true }
-          );
-        }
-      }
-
-      // Unicidade de CODIGO em PRODUTOS quando parâmetro 122 = 'S' no Firebird da filial
-      if (tabela.toUpperCase() === 'PRODUTOS') {
-        const codigoKey = Object.keys(registro).find(k => k.toUpperCase() === 'CODIGO');
-        const codigoVal = codigoKey ? String(registro[codigoKey] ?? '').trim() : '';
-        if (codigoVal) {
-          const [cfg] = await query(db,
-            `SELECT valor FROM sync_config WHERE chave = 'codigo_interno_unico'`
-          ).catch(() => [null]);
-          if (cfg?.VALOR === 'S') {
-            const srvIdKey = Object.keys(registro).find(k => k.toUpperCase() === 'SRV_ID');
-            const srvIdAtual = srvIdKey !== undefined ? registro[srvIdKey] : null;
-            const qParams = [codigoVal];
-            const excludeClause = srvIdAtual != null ? ' AND SRV_ID != $2' : '';
-            if (srvIdAtual != null) qParams.push(srvIdAtual);
-            const [dup] = await query(db,
-              `SELECT 1 FROM PRODUTOS WHERE UPPER(TRIM(CODIGO)) = UPPER(TRIM($1))${excludeClause} LIMIT 1`,
-              qParams
-            ).catch(() => [null]);
-            if (dup) throw Object.assign(
-              new Error(`Código "${codigoVal}" já está em uso por outro produto.`),
-              { isValidation: true }
-            );
-          }
-        }
-      }
-
-      // Unicidade de CPF/CNPJ em CLIENTES — pk é 'SRV_ID' no frontend, então pkVals[0] é
-      // sempre o SRV_ID do servidor (nunca nulo em edição), independente do ID_CLIENTE do ERP local.
-      if (tabela.toUpperCase() === 'CLIENTES') {
-        const srvIdAtual = pkVals[0] != null ? pkVals[0] : null;
-        for (const campo of ['CPF', 'CNPJ']) {
-          const key = Object.keys(registro).find(k => k.toUpperCase() === campo);
-          const rawVal = key ? String(registro[key] ?? '').trim() : '';
-          if (!rawVal) continue;
-          const digits = rawVal.replace(/\D/g, '');
-          if (!digits) continue;
-          const excludeClause = srvIdAtual != null ? ' AND SRV_ID != $2' : '';
-          const qParams = [digits];
-          if (srvIdAtual != null) qParams.push(srvIdAtual);
-          const [dup] = await query(db,
-            `SELECT 1 FROM CLIENTES WHERE regexp_replace(${campo}::TEXT, '[^0-9]', '', 'g') = $1${excludeClause} LIMIT 1`,
-            qParams
-          ).catch(() => [null]);
-          if (dup) throw Object.assign(
-            new Error(`${campo} já está cadastrado para outro cliente.`),
-            { isValidation: true }
-          );
-        }
-      }
+      // PRODUTOS: unicidade de CODIGO; CLIENTES: unicidade de CPF/CNPJ
+      await hooks?.validarUnicidade?.(db, { registro, pkVals });
 
       // Injeta timestamps via API de tempo externa (America/Sao_Paulo)
       const agora = (await getCurrentTime()).toISOString();
@@ -582,13 +434,8 @@ async function handleSave(req, res, forceUpdate) {
     const pkStr = pks.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p.toUpperCase())]).join('|');
     registrarAuditLog(req, schema, tabela, isUpdate ? 'UPDATE' : 'INSERT', pkStr, registro, dadosAntes);
 
-    // Pedido virou Realizado — gera as A_RECEBER das parcelas já cadastradas (fire-and-forget).
-    // Pagamento não é pré-requisito para "Realizado": ver gerarContasReceberDoPedido().
-    if (tabela.toUpperCase() === 'PEDIDOS' && registro.STATUS === 'R' && dadosAntes?.STATUS !== 'R') {
-      gerarContasReceberDoPedido(schema, registro.ID_PEDIDO).catch(e =>
-        console.error('[CRUD-pedidoRealizado] Falha ao gerar A_RECEBER:', e.message)
-      );
-    }
+    // Pedido virou Realizado — gera as A_RECEBER das parcelas já cadastradas (fire-and-forget)
+    hooks?.aposSalvar?.(schema, { registro, dadosAntes });
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
