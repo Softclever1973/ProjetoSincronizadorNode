@@ -5,14 +5,34 @@ const { withTenantConnection, query, execute, isMissingTableError, pool } = requ
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
 
-// Cache de colunas computadas do servidor
-const cacheComputadas = {};
+/**
+ * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções
+ * (colunas existentes, colunas computadas, colunas da PK) que sempre precisavam ser
+ * invalidadas em conjunto quando a estrutura de uma tabela muda — antes eram 3 dicts
+ * separados, repetindo o mesmo trio de `delete` em ~4 pontos espalhados do arquivo.
+ */
+function criarTenantCache(tipos) {
+  const stores = Object.fromEntries(tipos.map(t => [t, {}]));
+  const key = (schema, tabela) => `${schema}:${tabela}`;
 
-// Cache de colunas existentes no servidor por tabela
-const cacheColunasServidor = {};
+  return {
+    get(schema, tabela, tipo) {
+      return stores[tipo][key(schema, tabela)];
+    },
+    set(schema, tabela, tipo, valor) {
+      stores[tipo][key(schema, tabela)] = valor;
+      return valor;
+    },
+    // tiposParaLimpar: por padrão invalida todos os tipos; passe um subconjunto pra
+    // preservar algum (ex.: migração de coluna isolada que não muda colunas computadas).
+    invalidate(schema, tabela, tiposParaLimpar = tipos) {
+      const k = key(schema, tabela);
+      for (const tipo of tiposParaLimpar) delete stores[tipo][k];
+    },
+  };
+}
 
-// Cache da PK real de cada tabela (schema:tabela → string[])
-const cachePkServidor = {};
+const colunasCache = criarTenantCache(['colunas', 'pk', 'computadas']);
 
 // Cache de sequences por-tabela já criadas nesta execução do servidor.
 // Evita DDL (CREATE SEQUENCE IF NOT EXISTS) em toda requisição de push.
@@ -105,27 +125,27 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipada
 }
 
 async function getColunasServidor(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cacheColunasServidor[key]) return cacheColunasServidor[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'colunas');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
      WHERE table_name = lower($1) AND table_schema = lower($2)`,
     [nomeTabela, schemaName]
   );
-  cacheColunasServidor[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheColunasServidor[key];
+  return colunasCache.set(schemaName, nomeTabela, 'colunas', new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase())));
 }
 
 /**
  * Retorna as colunas que compõem a PRIMARY KEY real da tabela no PostgreSQL.
  * Para tabelas srvId criadas pelo servidor, isso retorna ['SRV_ID'].
  * Para tabelas legadas (PK original), retorna as colunas da PK Firebird.
- * Resultado cacheado por schema:tabela — invalidar junto com cacheColunasServidor.
+ * Resultado cacheado por schema:tabela — invalidado junto com o cache de colunas (mesma
+ * TenantCache, tipo 'pk').
  */
 async function getPkServidor(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cachePkServidor[key]) return cachePkServidor[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'pk');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT kcu.column_name AS "COLUNA"
      FROM information_schema.key_column_usage kcu
@@ -140,8 +160,7 @@ async function getPkServidor(db, nomeTabela, schemaName) {
     [schemaName, nomeTabela]
   );
   const pkCols = rows.map(r => (r.COLUNA || '').trim().toUpperCase());
-  cachePkServidor[key] = pkCols.length > 0 ? pkCols : null;
-  return cachePkServidor[key];
+  return colunasCache.set(schemaName, nomeTabela, 'pk', pkCols.length > 0 ? pkCols : null);
 }
 
 function normalizarBlobs(row) {
@@ -155,8 +174,8 @@ function normalizarBlobs(row) {
 }
 
 async function getColunasComputadas(db, nomeTabela, schemaName) {
-  const key = `${schemaName}:${nomeTabela}`;
-  if (cacheComputadas[key]) return cacheComputadas[key];
+  const cached = colunasCache.get(schemaName, nomeTabela, 'computadas');
+  if (cached) return cached;
   const rows = await query(db,
     `SELECT column_name AS "COLUNA"
      FROM information_schema.columns
@@ -165,8 +184,7 @@ async function getColunasComputadas(db, nomeTabela, schemaName) {
        AND is_generated = 'ALWAYS'`,
     [nomeTabela, schemaName]
   );
-  cacheComputadas[key] = new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase()));
-  return cacheComputadas[key];
+  return colunasCache.set(schemaName, nomeTabela, 'computadas', new Set(rows.map(r => (r.COLUNA || '').trim().toUpperCase())));
 }
 
 async function registrarFilial(db, idLoja, nomeFilial) {
@@ -568,18 +586,15 @@ async function garantirColunasServidor(db, nomeTabela, schemaName, registro, pks
 
   if (!tabelaJaExistia) {
     await criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
-    const cacheKey = `${schemaName}:${nomeTabela}`;
-    delete cacheColunasServidor[cacheKey];
-    delete cacheComputadas[cacheKey];
-    delete cachePkServidor[cacheKey];
+    colunasCache.invalidate(schemaName, nomeTabela);
     colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
   } else if (temSrvId && !colunasServidor.has('SRV_ID')) {
     // Migração: tabela existe (criada antes do srvId ser ativado) sem coluna SRV_ID.
     // Adiciona como coluna comum nullable — não destrói a PK original da tabela.
     await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS srv_id INTEGER`);
-    const cacheKey = `${schemaName}:${nomeTabela}`;
-    delete cacheColunasServidor[cacheKey];
-    delete cachePkServidor[cacheKey];
+    // Só colunas e pk — computadas não muda numa migração de coluna comum (mesmo
+    // comportamento de antes da TenantCache, preservado de propósito).
+    colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
     colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
   }
 
@@ -664,10 +679,7 @@ async function selecionarRegistroAtual(db, { schemaName, nomeTabela, srvIdEhPk, 
   } catch (eSel) {
     if (!isMissingTableError(eSel)) throw eSel;
     // Cache obsoleto: tabela foi dropada após ser cacheada — recria agora mesmo.
-    const cacheKey = `${schemaName}:${nomeTabela}`;
-    delete cacheColunasServidor[cacheKey];
-    delete cacheComputadas[cacheKey];
-    delete cachePkServidor[cacheKey];
+    colunasCache.invalidate(schemaName, nomeTabela);
     await criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
     return { atual: [], colunasServidor: await getColunasServidor(db, nomeTabela, schemaName) };
   }
@@ -884,10 +896,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       // Garante que o próximo push vai recriar a tabela (limpa cache obsoleto).
       const nomeTabela = ((req.body?.tabela) || '').toUpperCase().trim();
       if (nomeTabela && req.schemaName) {
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
+        colunasCache.invalidate(req.schemaName, nomeTabela);
       }
     }
     res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
@@ -940,10 +949,7 @@ router.post('/GarantirTabela', auth, async (req, res) => {
       const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       if (colunasServidor.size === 0) {
         await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadas, pksArr, temSrvId);
-        const cacheKey = `${req.schemaName}:${nomeTabela}`;
-        delete cacheColunasServidor[cacheKey];
-        delete cacheComputadas[cacheKey];
-        delete cachePkServidor[cacheKey];
+        colunasCache.invalidate(req.schemaName, nomeTabela);
       }
     });
     res.json({ ok: true });
