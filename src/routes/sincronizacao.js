@@ -4,7 +4,6 @@ const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
-const { initializeTenantSchema } = require('../db-init');
 
 // Cache de colunas computadas do servidor
 const cacheComputadas = {};
@@ -789,72 +788,6 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
            ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`,
           valoresFinais
         );
-
-        if (nomeTabela === 'A_RECEBER') {
-          const idAR = registro['ID_A_RECEBER'];
-          if (idAR != null) {
-            // Busca nome do cliente via SRV_ID (ID_CLIENTE já foi traduzido para SRV_ID pelo push)
-            const idClienteSrv = registro['ID_CLIENTE'];
-            let nomeCliente = null;
-            if (idClienteSrv != null) {
-              const [cliRow] = await query(db,
-                `SELECT razao_social FROM clientes WHERE srv_id = $1 LIMIT 1`, [idClienteSrv]
-              ).catch(() => [null]);
-              nomeCliente = cliRow?.razao_social ?? null;
-            }
-            const vencimento      = registro['VENCIMENTO']          ?? registro['DATA_VENCIMENTO']  ?? null;
-            const dataRealizado   = registro['DATA_REALIZADO']       ?? registro['DATA_RECEBIMENTO'] ?? null;
-            const formaPagamento  = String(registro['FORMA_PAGAMENTO'] ?? registro['ID_FORMA_DE_PAGAMENTO'] ?? '').trim() || null;
-            const parcela         = parseInt(registro['PARCELA'])       || 1;
-            const totalParcelas   = parseInt(registro['TOTAL_PARCELAS']) || parcela;
-            const idLoja          = registro['ID_LOJA'] != null ? (parseInt(registro['ID_LOJA']) || null) : null;
-            const statusRaw       = String(registro['STATUS'] ?? '').toLowerCase();
-            const status          = (statusRaw === 'recebido' || statusRaw === 'recebida' || statusRaw === 'realizada' || statusRaw === 'realizado')
-                                      ? 'recebido'
-                                      : (statusRaw === 'cancelado' || statusRaw === 'cancelada')
-                                        ? 'cancelado'
-                                        : 'pendente';
-            const observacao      = registro['OBSERVACAO'] ?? registro['OBS'] ?? null;
-
-            const espelharAR = () => execute(db, `
-              INSERT INTO financeiro_contas_receber (
-                id_a_receber, descricao, nome_cliente, valor, data_vencimento,
-                data_recebimento, status, forma_pagamento, parcela, total_parcelas,
-                observacao, id_loja
-              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-              ON CONFLICT (id_a_receber) DO UPDATE SET
-                descricao        = EXCLUDED.descricao,
-                nome_cliente     = EXCLUDED.nome_cliente,
-                valor            = EXCLUDED.valor,
-                data_vencimento  = EXCLUDED.data_vencimento,
-                data_recebimento = EXCLUDED.data_recebimento,
-                status           = EXCLUDED.status,
-                forma_pagamento  = EXCLUDED.forma_pagamento,
-                parcela          = EXCLUDED.parcela,
-                total_parcelas   = EXCLUDED.total_parcelas,
-                observacao       = EXCLUDED.observacao,
-                id_loja          = EXCLUDED.id_loja
-            `, [
-              idAR, registro['DESCRICAO'] ?? null, nomeCliente,
-              registro['VALOR'] ?? null, vencimento, dataRealizado,
-              status, formaPagamento, parcela, totalParcelas, observacao, idLoja,
-            ]);
-
-            try {
-              await espelharAR();
-            } catch (eEspelho) {
-              // financeiro_contas_receber não vem do fluxo genérico de sync — só é criada por
-              // initializeTenantSchema (na criação da empresa). reset-empresa.js a apaga sem
-              // recriar; se sumiu, reprovisiona o schema do tenant e tenta espelhar de novo.
-              if (!isMissingTableError(eEspelho)) {
-                console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${eEspelho.message}`);
-              } else {
-                await initializeTenantSchema(req.schemaName).catch(() => {});
-                await espelharAR().catch(e2 => console.warn(`[A_RECEBER] WARN espelho financeiro_contas_receber: ${e2.message}`));
-              }
-            }
-          }
-        }
 
         if (nomeTabela === 'PEDIDOS') {
           const statusAntes = atual[0]?.STATUS ?? null;

@@ -1,4 +1,12 @@
+const dns = require('dns');
 const Firebird = require('node-firebird');
+
+// Desde o Node 17, dns.lookup() por padrão devolve os endereços na ordem "verbatim" que o
+// SO retornar, em vez de IPv4 primeiro — em muita máquina Windows isso faz 'localhost'
+// resolver pra ::1 (IPv6) antes de 127.0.0.1. Se o Firebird só escuta em IPv4, a tentativa
+// em ::1 não erra na hora, fica pendurada (é isso que o timeout abaixo cobre, mas é melhor
+// nem depender dele) até estourar. Restaura o comportamento pré-17 pra esse processo inteiro.
+dns.setDefaultResultOrder('ipv4first');
 
 const TIMEOUT_PADRAO_MS = 10000;
 

@@ -24,7 +24,14 @@ const CR_SORT_MAP = {
   status:          'ar.status',
   srv_id:          'ar.srv_id',
 };
-const CP_SORTABLE = new Set(['data_vencimento','fornecedor','descricao','categoria','valor','status']);
+const CP_SORT_MAP = {
+  data_vencimento: 'ap.vencimento',
+  fornecedor:      'ap.credor',
+  descricao:       'ap.descricao',
+  valor:           'ap.valor',
+  status:          'ap.status',
+  srv_id:          'ap.srv_id',
+};
 
 router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   const s = req.params.schema;
@@ -300,11 +307,11 @@ router.get('/:schema/financeiro/filiais', ...guard, async (req, res) => {
 
 router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
-  const { status, data_inicio, data_fim, q, categoria, sortCol, sortDir } = req.query;
+  const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
   const pageSize = Math.min(100, parseInt(req.query.pageSize || '50'));
   const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
-  const orderCol = CP_SORTABLE.has(sortCol) ? sortCol : 'data_vencimento';
+  const orderCol = CP_SORT_MAP[sortCol] ?? 'ap.vencimento';
   const orderDir = sortDir === 'DESC' ? 'DESC' : 'ASC';
 
   const conds = ['TRUE'];
@@ -312,29 +319,50 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
   if (status && status !== 'todos') {
     if (status === 'vencido') {
-      conds.push(`status = 'pendente' AND data_vencimento < CURRENT_DATE`);
+      conds.push(`LOWER(ap.status::text) NOT IN ('pago','paga','realizado','realizada','cancelado','cancelada') AND ap.vencimento < CURRENT_DATE`);
+    } else if (status === 'pago') {
+      conds.push(`LOWER(ap.status::text) IN ('pago','paga','realizado','realizada')`);
+    } else if (status === 'cancelado') {
+      conds.push(`LOWER(ap.status::text) LIKE 'cancelad%'`);
     } else {
       params.push(status);
-      conds.push(`status = $${params.length}`);
+      conds.push(`ap.status ILIKE $${params.length}`);
     }
   }
-  if (data_inicio) { params.push(data_inicio); conds.push(`data_vencimento >= $${params.length}`); }
-  if (data_fim)    { params.push(data_fim);    conds.push(`data_vencimento <= $${params.length}`); }
-  if (q)           { params.push(`%${q}%`);    conds.push(`(descricao ILIKE $${params.length} OR fornecedor ILIKE $${params.length} OR categoria ILIKE $${params.length})`); }
-  if (categoria)   { params.push(categoria);   conds.push(`categoria = $${params.length}`); }
-  if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`id_loja = $${params.length}`); }
+  if (data_inicio) { params.push(data_inicio); conds.push(`ap.vencimento >= $${params.length}`); }
+  if (data_fim)    { params.push(data_fim);    conds.push(`ap.vencimento <= $${params.length}`); }
+  if (q)           { params.push(`%${q}%`);    conds.push(`(ap.descricao ILIKE $${params.length} OR ap.credor ILIKE $${params.length})`); }
+  if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`ap.id_loja = $${params.length}`); }
 
   const where = conds.join(' AND ');
+  const fromAP = `FROM ${s}.a_pagar ap`;
 
   try {
     const [rows, total] = await Promise.all([
       pool.query(
-        `SELECT * FROM ${s}.financeiro_contas_pagar WHERE ${where}
-         ORDER BY ${orderCol} ${orderDir}, id DESC
+        `SELECT
+           ap.srv_id                      AS id,
+           ap.id_a_pagar,
+           ap.descricao,
+           ap.credor                      AS fornecedor,
+           ap.valor,
+           ap.vencimento                  AS data_vencimento,
+           ap.data_realizado              AS data_pagamento,
+           CASE
+             WHEN LOWER(ap.status::text) IN ('pago','paga','realizado','realizada') THEN 'pago'
+             WHEN LOWER(ap.status::text) LIKE 'cancelad%' THEN 'cancelado'
+             ELSE 'pendente'
+           END                            AS status,
+           ap.id_forma_de_pagamento::text AS forma_pagamento,
+           ap.observacao,
+           ap.id_loja
+         ${fromAP}
+         WHERE ${where}
+         ORDER BY ${orderCol} ${orderDir} NULLS LAST, ap.srv_id DESC
          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
         params
       ),
-      pool.query(`SELECT COUNT(*)::INTEGER AS total FROM ${s}.financeiro_contas_pagar WHERE ${where}`, params),
+      pool.query(`SELECT COUNT(*)::INTEGER AS total ${fromAP} WHERE ${where}`, params),
     ]);
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
@@ -346,23 +374,63 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
 router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
-  const { descricao, fornecedor, categoria, valor, data_vencimento, data_pagamento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
+  const { descricao, fornecedor, valor, data_vencimento, data_pagamento,
+          status, forma_pagamento, observacao } = req.body;
+  // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
+  const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
   if (!descricao || !valor || !data_vencimento)
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
 
   try {
-    const { rows: [r] } = await pool.query(
-      `INSERT INTO ${s}.financeiro_contas_pagar
-         (descricao, fornecedor, categoria, valor, data_vencimento, data_pagamento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [descricao, fornecedor || null, categoria || null, valor, data_vencimento,
-       data_pagamento || null, status || 'pendente', forma_pagamento || null,
-       parcela || 1, total_parcelas || 1, observacao || null, id_loja || null]
+    let id_fornecedor = null;
+    if (fornecedor) {
+      const { rows: forn } = await pool.query(
+        `SELECT srv_id FROM ${s}.fornecedores
+         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         LIMIT 1`,
+        [fornecedor]
+      );
+      id_fornecedor = forn[0]?.srv_id ?? null;
+    }
+
+    // O sync usa uma sequence por tabela: seq_srv_id_a_pagar.
+    // Criamos se não existir e avançamos para além do max atual antes de alocar.
+    await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_pagar START WITH 1`);
+    await pool.query(`
+      SELECT setval(
+        '${s}.seq_srv_id_a_pagar',
+        GREATEST(
+          (SELECT last_value FROM ${s}.seq_srv_id_a_pagar),
+          (SELECT COALESCE(MAX(srv_id), 0) FROM ${s}.a_pagar)
+        )
+      )
+    `);
+    const { rows: [{ next_srv_id }] } = await pool.query(
+      `SELECT nextval('${s}.seq_srv_id_a_pagar') AS next_srv_id`
     );
-    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'INSERT', String(r.id), req.body, null);
+    // Registra no srv_id_map com chave sintética para que o sync não reutilize este srv_id.
+    await pool.query(
+      `INSERT INTO ${s}.srv_id_map (tabela, id_local, srv_id)
+       VALUES ('A_PAGAR', $1, $2)
+       ON CONFLICT (tabela, id_local) WHERE filial_id IS NULL DO NOTHING`,
+      [`web:${next_srv_id}`, next_srv_id]
+    );
+
+    const { rows: [r] } = await pool.query(
+      `INSERT INTO ${s}.a_pagar
+         (srv_id, descricao, credor, id_fornecedor, valor, vencimento, data_realizado,
+          status, id_forma_de_pagamento, observacao, id_loja)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       RETURNING
+         srv_id AS id, descricao, credor AS fornecedor, valor,
+         vencimento AS data_vencimento, data_realizado AS data_pagamento,
+         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
+      [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, data_vencimento,
+       data_pagamento || null, status || 'pendente', parseInt(forma_pagamento) || null,
+       observacao || null, id_loja || null]
+    );
+    registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -374,41 +442,55 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) => {
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
-  const { descricao, fornecedor, categoria, valor, data_vencimento, data_pagamento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
+  const { descricao, fornecedor, valor, data_vencimento, data_pagamento,
+          status, forma_pagamento, observacao, id_loja } = req.body;
 
   try {
     // Impede reativação de registro cancelado
     const { rows: [atual] } = await pool.query(
-      `SELECT * FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
+      `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
-    if (atual.status === 'cancelado' && status && status !== 'cancelado') {
+    const atualCancelado = String(atual.status ?? '').toLowerCase().startsWith('cancelad');
+    const novoCancelado  = String(status ?? '').toLowerCase().startsWith('cancelad');
+    if (atualCancelado && status && !novoCancelado) {
       return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
     }
 
+    let id_fornecedor = null;
+    if (fornecedor) {
+      const { rows: forn } = await pool.query(
+        `SELECT srv_id FROM ${s}.fornecedores
+         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         LIMIT 1`,
+        [fornecedor]
+      );
+      id_fornecedor = forn[0]?.srv_id ?? null;
+    }
+
     const { rows: [r], rowCount } = await pool.query(
-      `UPDATE ${s}.financeiro_contas_pagar SET
-         descricao       = COALESCE($1, descricao),
-         fornecedor      = $2,
-         categoria       = $3,
-         valor           = COALESCE($4, valor),
-         data_vencimento = COALESCE($5, data_vencimento),
-         data_pagamento  = $6,
-         status          = COALESCE($7, status),
-         forma_pagamento = $8,
-         parcela         = COALESCE($9, parcela),
-         total_parcelas  = COALESCE($10, total_parcelas),
-         observacao      = $11,
-         id_loja         = $12
-       WHERE id = $13 RETURNING *`,
-      [descricao || null, fornecedor ?? null, categoria ?? null, valor || null,
+      `UPDATE ${s}.a_pagar SET
+         descricao              = COALESCE($1, descricao),
+         credor                 = COALESCE($2, credor),
+         id_fornecedor          = COALESCE($3, id_fornecedor),
+         valor                  = COALESCE($4, valor),
+         vencimento             = COALESCE($5, vencimento),
+         data_realizado         = $6,
+         status                 = COALESCE($7, status),
+         id_forma_de_pagamento  = COALESCE($8, id_forma_de_pagamento),
+         observacao             = $9,
+         id_loja                = COALESCE($10, id_loja)
+       WHERE srv_id = $11
+       RETURNING
+         srv_id AS id, descricao, credor AS fornecedor, valor,
+         vencimento AS data_vencimento, data_realizado AS data_pagamento,
+         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
+      [descricao || null, fornecedor || null, id_fornecedor, valor || null,
        data_vencimento || null, data_pagamento ?? null, status || null,
-       forma_pagamento ?? null, parcela || null, total_parcelas || null,
-       observacao ?? null, id_loja ?? null, id]
+       parseInt(forma_pagamento) || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
-    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'UPDATE', String(id), req.body, atual);
+    registrarAuditLog(req, s, 'A_PAGAR', 'UPDATE', String(id), req.body, atual);
     res.json(r);
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -422,11 +504,11 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res)
   const id = parseInt(req.params.id);
   try {
     const { rows: [antes] } = await pool.query(
-      `SELECT * FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]
+      `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
     );
     if (!antes) return res.status(404).json({ erro: 'Registro não encontrado' });
-    await pool.query(`DELETE FROM ${s}.financeiro_contas_pagar WHERE id = $1`, [id]);
-    registrarAuditLog(req, s, 'FINANCEIRO_CONTAS_PAGAR', 'DELETE', String(id), null, antes);
+    await pool.query(`DELETE FROM ${s}.a_pagar WHERE srv_id = $1`, [id]);
+    registrarAuditLog(req, s, 'A_PAGAR', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -477,15 +559,15 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
         UNION ALL
 
         SELECT
-          data_pagamento AS data,
+          data_realizado::DATE AS data,
           0::NUMERIC AS entradas,
           SUM(valor) AS saidas
-        FROM ${s}.financeiro_contas_pagar
-        WHERE status = 'pago'
-          AND data_pagamento >= '${mes}-01'
-          AND data_pagamento < ('${mes}-01'::DATE + INTERVAL '1 month')
+        FROM ${s}.a_pagar
+        WHERE LOWER(COALESCE(status::text,'')) IN ('pago','paga','realizado','realizada')
+          AND data_realizado::DATE >= '${mes}-01'::DATE
+          AND data_realizado::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
           ${lojaWhereCR}
-        GROUP BY data_pagamento
+        GROUP BY data_realizado::DATE
 
         ${movCaixaUnion}
       ),

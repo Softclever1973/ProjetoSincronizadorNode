@@ -32,14 +32,9 @@ beforeAll(async () => {
   // mesmo teste nem interfere com as tabelas de crud.integracao.test.js.
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.produtos_sync_teste CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.a_receber CASCADE`);
-  await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.financeiro_contas_receber CASCADE`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_produtos_sync_teste`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_a_receber`);
   await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER')`);
-  // Recria financeiro_contas_receber no estado normal (create-empresa) antes do teste B
-  // dropá-la de propósito — deixa claro que o teste começa do estado correto.
-  const { initializeTenantSchema } = require('../src/db-init');
-  await initializeTenantSchema(TEST_SCHEMA);
 }, 30000);
 
 afterAll(async () => {
@@ -78,62 +73,5 @@ describe('POST /ReceberRegistro — recuperação de sequência seq_srv_id_<tabe
       [push2.body.srvId]
     );
     expect(rows[0].codigo).toBe('P2');
-  });
-});
-
-describe('POST /ReceberRegistro — recuperação de financeiro_contas_receber ao espelhar A_RECEBER', () => {
-  test('tabela apagada com o servidor no ar é recriada automaticamente e o espelho é aplicado', async () => {
-    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.financeiro_contas_receber CASCADE`);
-
-    const push = await receberRegistro({
-      tabela: 'A_RECEBER',
-      pk: 'ID_A_RECEBER',
-      temSrvId: true,
-      registro: {
-        ID_A_RECEBER: 1,
-        DESCRICAO: 'Parcela 1/1',
-        VALOR: 150.5,
-        VENCIMENTO: '2026-08-01',
-        STATUS: 'Pendente',
-        PARCELA: 1,
-        TOTAL_PARCELAS: 1,
-        ID_LOJA: 1,
-      },
-    });
-
-    expect(push.status).toBe(200);
-
-    const { rows } = await pool.query(
-      `SELECT descricao, valor, status FROM ${TEST_SCHEMA}.financeiro_contas_receber WHERE id_a_receber = 1`
-    );
-    expect(rows).toHaveLength(1);
-    expect(rows[0].descricao).toBe('Parcela 1/1');
-    expect(Number(rows[0].valor)).toBeCloseTo(150.5);
-    expect(rows[0].status).toBe('pendente');
-  });
-
-  test('push seguinte (tabela já recriada) atualiza o espelho normalmente, sem novo warning', async () => {
-    const push = await receberRegistro({
-      tabela: 'A_RECEBER',
-      pk: 'ID_A_RECEBER',
-      temSrvId: true,
-      registro: {
-        ID_A_RECEBER: 1,
-        DESCRICAO: 'Parcela 1/1',
-        VALOR: 150.5,
-        VENCIMENTO: '2026-08-01',
-        STATUS: 'Recebido',
-        PARCELA: 1,
-        TOTAL_PARCELAS: 1,
-        ID_LOJA: 1,
-      },
-    });
-
-    expect(push.status).toBe(200);
-
-    const { rows } = await pool.query(
-      `SELECT status FROM ${TEST_SCHEMA}.financeiro_contas_receber WHERE id_a_receber = 1`
-    );
-    expect(rows[0].status).toBe('recebido');
   });
 });
