@@ -4,6 +4,7 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../db');
 const { initializeTenantSchema } = require('../db-init');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('../planos');
+const TABELAS = require('../client/tabelas');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.
@@ -199,7 +200,21 @@ router.post('/empresas/:schema/reset', async (req, res) => {
       await client.query(`DROP SEQUENCE IF EXISTS "${schema}"."${sequencename}"`);
     }
 
-    res.json({ ok: true, tabelasRemovidas: tabelasDados });
+    // O servidor não alcança o Firebird da loja (só o client, que roda lá, fala com os dois
+    // lados) — sem rodar isto na filial, o cursor local (ULTIMOS_REGISTROS_MATRIZ) fica "no
+    // futuro" em relação ao servidor recém-resetado e o pull para de trazer dados novos.
+    // Lista de tabelas com SRV_ID vem de tabelas.js (fonte única, evita divergir de uma cópia
+    // hardcoded — era exatamente o que acontecia em scripts/reset-empresa.js).
+    const tabelasComSrvId = TABELAS.filter(t => t.srvId).map(t => t.nome);
+    const comandosFirebird = [
+      'DELETE FROM SYNC_ALTERACOES_PENDENTES;',
+      'DELETE FROM SYNC_VERSOES_SERVIDOR;',
+      'DELETE FROM SYNC_ERROS;',
+      'UPDATE ULTIMOS_REGISTROS_MATRIZ SET ULTIMO_REGISTRO_ATUALIZADO = 0, ULTIMO_REGISTRO_DELETADO = 0;',
+      ...tabelasComSrvId.map(t => `UPDATE ${t} SET SRV_ID = NULL;`),
+    ].join('\n');
+
+    res.json({ ok: true, tabelasRemovidas: tabelasDados, comandosFirebird });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   } finally {
