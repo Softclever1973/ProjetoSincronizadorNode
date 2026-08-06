@@ -301,11 +301,16 @@ async function handleSave(req, res, forceUpdate) {
       await hooks?.antesDaTransacao?.(db, registro);
 
       const buscarColunasServidor = () => query(db, `
-        SELECT UPPER(column_name) AS col FROM information_schema.columns
+        SELECT UPPER(column_name) AS col, data_type FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
       `, [schema, tabela]);
 
-      let allowed = new Set((await buscarColunasServidor()).map(r => r.COL));
+      let colunasServidor = await buscarColunasServidor();
+      let allowed = new Set(colunasServidor.map(r => r.COL));
+      // Tipo real de cada coluna no Postgres — usado só pra coagir horário "solto" (ver
+      // mais abaixo, antes de montar `vals`); `allowed` continua sendo o Set usado em todo
+      // o resto da função pra checar existência.
+      let tiposColuna = new Map(colunasServidor.map(r => [r.COL, r.DATA_TYPE]));
       const pksUpper = pks.map(p => p.toUpperCase());
 
       // Tabela nunca sincronizada ainda (schema novo, client Firebird nunca rodou um ciclo) —
@@ -321,7 +326,9 @@ async function handleSave(req, res, forceUpdate) {
           Object.keys(registro).filter(c => NOME_VALIDO.test(c)).map(c => [c, registro[c]])
         );
         await criarTabelaSeNecessario(db, tabela, schema, colunasTipadasDeRegistro(registroValido), pksUpper, false);
-        allowed = new Set((await buscarColunasServidor()).map(r => r.COL));
+        colunasServidor = await buscarColunasServidor();
+        allowed = new Set(colunasServidor.map(r => r.COL));
+        tiposColuna = new Map(colunasServidor.map(r => [r.COL, r.DATA_TYPE]));
       }
 
       // Garante colunas da web que podem não existir no schema Firebird sincronizado
@@ -375,6 +382,22 @@ async function handleSave(req, res, forceUpdate) {
         !(c.toUpperCase() === 'SRV_ID' && registro[c] == null)
       );
       if (!cols.length) throw new Error('nenhuma coluna válida para salvar');
+
+      // Horário "solto" (ex.: "09:46:34", sem parte de data) não é aceito pelo Postgres
+      // quando a coluna de destino é TIMESTAMP — acontece quando a tabela foi criada
+      // primeiro pela sincronização do Firebird (um campo TIME chega como objeto Date,
+      // e inferirTipoPg não distingue TIME de TIMESTAMP a partir de um Date, então a
+      // coluna nasce TIMESTAMP) e depois a web tenta escrever só a hora, como string.
+      // Prefixa com a mesma data-artefato (1970-01-01) que os registros sincronizados já
+      // têm nesse tipo de coluna, mantendo o valor consistente com o resto da tabela.
+      const RE_HORA_SOLTA = /^\d{1,2}:\d{2}:\d{2}(\.\d+)?$/;
+      for (const c of cols) {
+        const tipo = tiposColuna.get(c.toUpperCase());
+        const v = registro[c];
+        if (tipo?.startsWith('timestamp') && typeof v === 'string' && RE_HORA_SOLTA.test(v)) {
+          registro[c] = `1970-01-01T${v}`;
+        }
+      }
 
       const vals = cols.map(c => registro[c]);
 
