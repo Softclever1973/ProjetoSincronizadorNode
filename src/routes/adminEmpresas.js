@@ -55,19 +55,31 @@ router.post('/empresas', async (req, res) => {
   if (!planoValido(plano))
     return res.status(400).json({ erro: `Plano inválido: ${plano}` });
 
+  // Checagens de unicidade fora da transação de propósito: são só leitura, e um `return`
+  // cedo aqui nunca deixa uma transação pendurada (ver nota abaixo, no client.connect()).
+  // schema_name/token/email têm constraint UNIQUE no banco (db-init.js) — cobre a corrida
+  // entre o check e o INSERT real, então não perdemos segurança tirando isso da transação.
+  const [tokenCheck, schemaCheck, emailCheck] = await Promise.all([
+    pool.query('SELECT 1 FROM public.sync_tenants WHERE token = $1',       [empresa.token]),
+    pool.query('SELECT 1 FROM public.sync_tenants WHERE schema_name = $1', [empresa.schema]),
+    pool.query('SELECT 1 FROM public.usuarios WHERE email = $1',           [dono.email]),
+  ]);
+  if (tokenCheck.rows.length  > 0) return res.status(409).json({ erro: 'Token já cadastrado' });
+  if (schemaCheck.rows.length > 0) return res.status(409).json({ erro: 'Schema já em uso' });
+  if (emailCheck.rows.length  > 0) return res.status(409).json({ erro: 'E-mail já cadastrado' });
+
+  // A partir daqui só entra quem vai escrever de verdade — nenhum `return` cedo dentro do
+  // try, então BEGIN sempre termina em COMMIT ou ROLLBACK antes do client.release() no
+  // finally. Achado real: a versão anterior fazia essas 3 checagens DEPOIS do BEGIN e dava
+  // `return` direto em caso de 409 sem ROLLBACK — o client voltava pro pool com uma
+  // transação aberta, ficando "idle in transaction" pra sempre e travando lock em
+  // sync_tenants pra qualquer outra query (inclusive as migrações de ALTER TABLE do
+  // db-init.js). Isso já causou um travamento real do banco compartilhado — qualquer
+  // tentativa de recriar uma empresa/token/e-mail já existente (bem comum, não é caso raro)
+  // vazava uma conexão.
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-
-    const [tokenCheck, schemaCheck, emailCheck] = await Promise.all([
-      client.query('SELECT 1 FROM public.sync_tenants WHERE token = $1',       [empresa.token]),
-      client.query('SELECT 1 FROM public.sync_tenants WHERE schema_name = $1', [empresa.schema]),
-      client.query('SELECT 1 FROM public.usuarios WHERE email = $1',           [dono.email]),
-    ]);
-
-    if (tokenCheck.rows.length  > 0) return res.status(409).json({ erro: 'Token já cadastrado' });
-    if (schemaCheck.rows.length > 0) return res.status(409).json({ erro: 'Schema já em uso' });
-    if (emailCheck.rows.length  > 0) return res.status(409).json({ erro: 'E-mail já cadastrado' });
 
     await initializeTenantSchema(empresa.schema);
 
