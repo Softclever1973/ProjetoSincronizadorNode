@@ -211,7 +211,10 @@ router.post('/empresas/:schema/reset', async (req, res) => {
       'DELETE FROM SYNC_VERSOES_SERVIDOR;',
       'DELETE FROM SYNC_ERROS;',
       'UPDATE ULTIMOS_REGISTROS_MATRIZ SET ULTIMO_REGISTRO_ATUALIZADO = 0, ULTIMO_REGISTRO_DELETADO = 0;',
-      ...tabelasComSrvId.map(t => `UPDATE ${t} SET SRV_ID = NULL;`),
+      // WHERE SRV_ID IS NOT NULL evita reescrever (MVCC do Firebird versiona toda linha
+      // tocada por um UPDATE, mesmo sem mudança de valor) as linhas que já estão NULL —
+      // em tabela grande isso é a diferença entre segundos e minutos.
+      ...tabelasComSrvId.map(t => `UPDATE ${t} SET SRV_ID = NULL WHERE SRV_ID IS NOT NULL;`),
     ].join('\n');
 
     res.json({ ok: true, tabelasRemovidas: tabelasDados, comandosFirebird });
