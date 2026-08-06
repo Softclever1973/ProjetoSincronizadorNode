@@ -3,7 +3,11 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
-const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
+const {
+  registrarAuditLog, gerarContasReceberDoPedido,
+  COLUNAS_IGNORADAS_SERVIDOR, chaveNegocioTabela,
+  colunasTipadasDeRegistro, criarTabelaSeNecessario,
+} = require('./resources/helpers');
 
 /**
  * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções
@@ -41,88 +45,6 @@ const seqsSrvIdInicializadas = new Set();
 // Cache de tabelas que já receberam a UNIQUE constraint nas chaves de negócio.
 // Evita DDL repetido em cada push após a constraint já existir.
 const constraintsUqAdicionadas = new Set();
-
-// Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
-// inteiro 100 via node-firebird, e NUMERIC comporta ambos sem perda.
-function inferirTipoPg(valor) {
-  if (Buffer.isBuffer(valor)) return 'BYTEA';
-  if (valor instanceof Date) return 'TIMESTAMP';
-  if (typeof valor === 'boolean') return 'BOOLEAN';
-  if (typeof valor === 'number') return 'NUMERIC';
-  return 'TEXT';
-}
-
-/**
- * Colunas que compõem a chave de negócio usada na constraint UNIQUE (uq_<tabela>_bk).
- * Inclui ID_LOJA quando a tabela tem essa coluna — o ID local do Firebird (generator)
- * só é único DENTRO de uma filial; cada filial tem seu próprio generator, então duas
- * filiais podem gerar o mesmo id_local para registros diferentes. Sem ID_LOJA na chave,
- * essa constraint rejeitaria como duplicata um push legítimo vindo de outra filial.
- */
-function chaveNegocioTabela(pks, colunasDisponiveis) {
-  const chave = [...(Array.isArray(pks) ? pks : [pks])];
-  if (colunasDisponiveis.has('ID_LOJA') && !chave.includes('ID_LOJA')) chave.push('ID_LOJA');
-  return chave;
-}
-
-/**
- * Deriva a lista de colunas tipadas de um registro real recebido via push, inferindo o
- * tipo PostgreSQL de cada valor. Usado por criarTabelaSeNecessario quando a criação parte
- * de um ReceberRegistro (há um registro de verdade pra inferir tipo por valor).
- */
-function colunasTipadasDeRegistro(registro) {
-  return Object.keys(registro).map(nome => ({ nome, tipoPg: inferirTipoPg(registro[nome]) }));
-}
-
-/**
- * Cria a tabela no schema do tenant a partir de uma lista de colunas já tipadas.
- * Chamado tanto quando ReceberRegistro encontra colunasServidor vazio (tabela inexistente,
- * tipos inferidos do primeiro registro via colunasTipadasDeRegistro) quanto por
- * GarantirTabela (tabela vazia na filial — sem registro real, tipos vêm da introspecção do
- * Firebird feita pelo cliente). colunasTipadas: [{ nome, tipoPg }, ...].
- */
-async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadas, pks, useSrvId = false) {
-  const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
-  const colunasTipadasFiltradas = colunasTipadas.filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome));
-  const colunas = colunasTipadasFiltradas
-    .map(({ nome, tipoPg }) => `${nome} ${tipoPg}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`);
-  if (!colunasTipadas.some(c => c.nome === 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
-    colunas.push('ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER');
-  }
-  if (useSrvId) {
-    colunas.unshift('SRV_ID INTEGER NOT NULL');
-    await execute(db,
-      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (SRV_ID))`
-    );
-    // Garante que as chaves de negócio do Firebird sejam únicas no servidor,
-    // impedindo duplicatas caso o srv_id_map perca a entrada e o registro seja re-inserido.
-    const chaveNegocio = chaveNegocioTabela(pks, new Set(colunasTipadas.map(c => c.nome)));
-    if (chaveNegocio.length > 0) {
-      await execute(db,
-        `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${chaveNegocio.join(', ')})`
-      ).catch(e => { if (e.code !== '42710' && e.code !== '42P07') throw e; }); // 42710 = duplicate_object, 42P07 = índice de mesmo nome já existe
-    }
-  } else {
-    await execute(db,
-      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
-    );
-  }
-  const triggerName = `tg_${nomeTabela.toLowerCase()}_seq`;
-  await execute(db, `DROP TRIGGER IF EXISTS ${triggerName} ON ${nomeTabela}`);
-  await execute(db, `
-    CREATE TRIGGER ${triggerName}
-    BEFORE INSERT OR UPDATE ON ${nomeTabela}
-    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_seq_atualizacao()
-  `);
-  const delTriggerName = `tg_${nomeTabela.toLowerCase()}_del`;
-  await execute(db, `DROP TRIGGER IF EXISTS ${delTriggerName} ON ${nomeTabela}`);
-  await execute(db, `
-    CREATE TRIGGER ${delTriggerName}
-    AFTER DELETE ON ${nomeTabela}
-    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_registrar_delecao()
-  `);
-  console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
-}
 
 async function getColunasServidor(db, nomeTabela, schemaName) {
   const cached = colunasCache.get(schemaName, nomeTabela, 'colunas');
@@ -198,13 +120,6 @@ async function registrarFilial(db, idLoja, nomeFilial) {
     [idLoja, nomeFilial || null]
   );
 }
-
-// Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
-const COLUNAS_IGNORADAS_SERVIDOR = new Set([
-  'ID_ULTIMA_ATUALIZACAO_MATRIZ',
-  'ID_ULTIMA_ATUALIZACAO_WEB',
-  'SRV_ID', // rastreado em srv_id_map; não existe como coluna nas tabelas do servidor
-]);
 
 // Tabelas internas do servidor que nunca devem ser lidas ou escritas pela filial
 const TABELAS_INTERNAS = new Set([

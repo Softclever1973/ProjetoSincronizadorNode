@@ -6,6 +6,105 @@
 const { pool, query, execute, withTenantConnection } = require('../../db');
 const { COLS_DATA_PEDIDO } = require('./constants');
 
+// Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
+// nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).
+const COLUNAS_IGNORADAS_SERVIDOR = new Set([
+  'ID_ULTIMA_ATUALIZACAO_MATRIZ',
+  'ID_ULTIMA_ATUALIZACAO_WEB',
+  'SRV_ID', // rastreado em srv_id_map; não existe como coluna nas tabelas do servidor
+]);
+
+// Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
+// inteiro 100 via node-firebird, e NUMERIC comporta ambos sem perda.
+function inferirTipoPg(valor) {
+  if (Buffer.isBuffer(valor)) return 'BYTEA';
+  if (valor instanceof Date) return 'TIMESTAMP';
+  if (typeof valor === 'boolean') return 'BOOLEAN';
+  if (typeof valor === 'number') return 'NUMERIC';
+  return 'TEXT';
+}
+
+/**
+ * Colunas que compõem a chave de negócio usada na constraint UNIQUE (uq_<tabela>_bk).
+ * Inclui ID_LOJA quando a tabela tem essa coluna — o ID local do Firebird (generator)
+ * só é único DENTRO de uma filial; cada filial tem seu próprio generator, então duas
+ * filiais podem gerar o mesmo id_local para registros diferentes. Sem ID_LOJA na chave,
+ * essa constraint rejeitaria como duplicata um push legítimo vindo de outra filial.
+ */
+function chaveNegocioTabela(pks, colunasDisponiveis) {
+  const chave = [...(Array.isArray(pks) ? pks : [pks])];
+  if (colunasDisponiveis.has('ID_LOJA') && !chave.includes('ID_LOJA')) chave.push('ID_LOJA');
+  return chave;
+}
+
+/**
+ * Deriva a lista de colunas tipadas de um registro real (recebido via push, ou enviado por
+ * um formulário web), inferindo o tipo PostgreSQL de cada valor. Usado por
+ * criarTabelaSeNecessario quando a criação parte de um registro de verdade (há um registro
+ * pra inferir tipo por valor, ao contrário de GarantirTabela, que usa introspecção do Firebird).
+ */
+function colunasTipadasDeRegistro(registro) {
+  return Object.keys(registro).map(nome => ({ nome, tipoPg: inferirTipoPg(registro[nome]) }));
+}
+
+/**
+ * Cria a tabela no schema do tenant a partir de uma lista de colunas já tipadas.
+ * Chamado quando ReceberRegistro ou o CRUD genérico da web (crud.js) encontram
+ * colunasServidor vazio (tabela inexistente — tipos inferidos do primeiro registro via
+ * colunasTipadasDeRegistro), e por GarantirTabela (tabela vazia na filial — sem registro
+ * real, tipos vêm da introspecção do Firebird feita pelo cliente).
+ * colunasTipadas: [{ nome, tipoPg }, ...].
+ *
+ * @param {import('pg').PoolClient} db
+ * @param {string} nomeTabela
+ * @param {string} schemaName
+ * @param {Array<{ nome: string, tipoPg: string }>} colunasTipadas
+ * @param {string[]} pks
+ * @param {boolean} [useSrvId]
+ */
+async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadas, pks, useSrvId = false) {
+  const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
+  const colunasTipadasFiltradas = colunasTipadas.filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome));
+  const colunas = colunasTipadasFiltradas
+    .map(({ nome, tipoPg }) => `${nome} ${tipoPg}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`);
+  if (!colunasTipadas.some(c => c.nome === 'ID_ULTIMA_ATUALIZACAO_MATRIZ')) {
+    colunas.push('ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER');
+  }
+  if (useSrvId) {
+    colunas.unshift('SRV_ID INTEGER NOT NULL');
+    await execute(db,
+      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (SRV_ID))`
+    );
+    // Garante que as chaves de negócio do Firebird sejam únicas no servidor,
+    // impedindo duplicatas caso o srv_id_map perca a entrada e o registro seja re-inserido.
+    const chaveNegocio = chaveNegocioTabela(pks, new Set(colunasTipadas.map(c => c.nome)));
+    if (chaveNegocio.length > 0) {
+      await execute(db,
+        `ALTER TABLE ${nomeTabela} ADD CONSTRAINT uq_${nomeTabela.toLowerCase()}_bk UNIQUE (${chaveNegocio.join(', ')})`
+      ).catch(e => { if (e.code !== '42710' && e.code !== '42P07') throw e; }); // 42710 = duplicate_object, 42P07 = índice de mesmo nome já existe
+    }
+  } else {
+    await execute(db,
+      `CREATE TABLE IF NOT EXISTS ${nomeTabela} (${colunas.join(', ')}, PRIMARY KEY (${[...pkSet].join(', ')}))`
+    );
+  }
+  const triggerName = `tg_${nomeTabela.toLowerCase()}_seq`;
+  await execute(db, `DROP TRIGGER IF EXISTS ${triggerName} ON ${nomeTabela}`);
+  await execute(db, `
+    CREATE TRIGGER ${triggerName}
+    BEFORE INSERT OR UPDATE ON ${nomeTabela}
+    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_seq_atualizacao()
+  `);
+  const delTriggerName = `tg_${nomeTabela.toLowerCase()}_del`;
+  await execute(db, `DROP TRIGGER IF EXISTS ${delTriggerName} ON ${nomeTabela}`);
+  await execute(db, `
+    CREATE TRIGGER ${delTriggerName}
+    AFTER DELETE ON ${nomeTabela}
+    FOR EACH ROW EXECUTE FUNCTION ${schemaName}.fn_registrar_delecao()
+  `);
+  console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
+}
+
 /**
  * Loga o erro com um ID rastreável e responde 500 com JSON — nunca expõe e.message
  * (pode conter SQL/detalhe interno) na resposta ao cliente. O ID aparece tanto no log
@@ -366,4 +465,9 @@ module.exports = {
   dateExprFromCols,
   buildWhere,
   gerarContasReceberDoPedido,
+  COLUNAS_IGNORADAS_SERVIDOR,
+  inferirTipoPg,
+  chaveNegocioTabela,
+  colunasTipadasDeRegistro,
+  criarTabelaSeNecessario,
 };

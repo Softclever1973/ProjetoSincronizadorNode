@@ -11,7 +11,10 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
-const { erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog } = require('./helpers');
+const {
+  erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog,
+  criarTabelaSeNecessario, colunasTipadasDeRegistro,
+} = require('./helpers');
 const { getCurrentTime } = require('../../services/timeService');
 const HOOKS = require('./hooks');
 
@@ -297,12 +300,29 @@ async function handleSave(req, res, forceUpdate) {
       // de status do próprio PEDIDOS (checado mais abaixo, depois que dadosAntes existe).
       await hooks?.antesDaTransacao?.(db, registro);
 
-      const serverCols = await query(db, `
+      const buscarColunasServidor = () => query(db, `
         SELECT UPPER(column_name) AS col FROM information_schema.columns
         WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2) AND is_generated <> 'ALWAYS'
       `, [schema, tabela]);
-      const allowed  = new Set(serverCols.map(r => r.COL));
+
+      let allowed = new Set((await buscarColunasServidor()).map(r => r.COL));
       const pksUpper = pks.map(p => p.toUpperCase());
+
+      // Tabela nunca sincronizada ainda (schema novo, client Firebird nunca rodou um ciclo) —
+      // cria agora com tipos inferidos do próprio payload, mesmo mecanismo que /ReceberRegistro
+      // já usa na sincronização. PK vem do pk[] da requisição, não necessariamente o SRV_ID
+      // real da tabela quando ela for sincronizada de verdade depois — garantirColunasServidor
+      // (sincronizacao.js) já sabe migrar SRV_ID como coluna comum numa tabela existente.
+      // Filtra por NOME_VALIDO antes de gerar DDL: diferente do payload do client Firebird
+      // (autenticado por SYNC_TOKEN), este vem direto do navegador — uma chave inválida no
+      // JSON não pode virar identificador de coluna cru dentro do CREATE TABLE.
+      if (allowed.size === 0) {
+        const registroValido = Object.fromEntries(
+          Object.keys(registro).filter(c => NOME_VALIDO.test(c)).map(c => [c, registro[c]])
+        );
+        await criarTabelaSeNecessario(db, tabela, schema, colunasTipadasDeRegistro(registroValido), pksUpper, false);
+        allowed = new Set((await buscarColunasServidor()).map(r => r.COL));
+      }
 
       // Garante colunas da web que podem não existir no schema Firebird sincronizado
       await hooks?.migrarSchema?.(db, schema, tabela, allowed);
