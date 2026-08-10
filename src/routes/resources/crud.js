@@ -390,7 +390,7 @@ async function handleSave(req, res, forceUpdate) {
       // coluna nasce TIMESTAMP) e depois a web tenta escrever só a hora, como string.
       // Prefixa com a mesma data-artefato (1970-01-01) que os registros sincronizados já
       // têm nesse tipo de coluna, mantendo o valor consistente com o resto da tabela.
-      const RE_HORA_SOLTA = /^\d{1,2}:\d{2}:\d{2}(\.\d+)?$/;
+      const RE_HORA_SOLTA = /^\d{1,2}:\d{2}:\d{2}(\.\d+)?Z?$/;
       for (const c of cols) {
         const tipo = tiposColuna.get(c.toUpperCase());
         const v = registro[c];
