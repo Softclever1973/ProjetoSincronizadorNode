@@ -107,14 +107,14 @@ const TABELAS = [
   tabela({ nome: 'UNIDADES', pk: 'UNIDADE', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_CLASSIFICACOES_FISCAIS', pk: 'ID_AUX_CLASSIFICACAO_FISCAL', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_CODIFICACAO_GRUPOS', pk: 'SIGLA_GRUPO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
-  tabela({ nome: 'AUX_ESPECIES_EMBALAGENS', pk: 'ID_AUX_ESPECIE_EMBALAGEM', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_ESPECIES_EMBALAGENS', pk: 'ID_AUX_ESPECIE_EMBALAGEM', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_GENERICA', pk: ['SUB_TABELA', 'ID_SUB_TABELA'], grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
-  tabela({ nome: 'AUX_PAISES_BACEN', pk: 'ID_AUX_PAIS_BACEN', grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_PARCELAS_PAGAMENTOS', pk: 'ID_AUX_PARCELA_PAGAMENTO', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_PAISES_BACEN', pk: 'ID_AUX_PAIS_BACEN', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'AUX_PARCELAS_PAGAMENTOS', pk: 'ID_AUX_PARCELA_PAGAMENTO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS', pk: 'ID_FORMA_DE_PAGAMENTO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
-  tabela({ nome: 'AUX_SITUACOES_TRIBUTARIAS', pk: 'ID_SITUACAO_TRIBUTARIA', grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES }),
-  tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES }),
+  tabela({ nome: 'AUX_SITUACOES_TRIBUTARIAS', pk: 'ID_SITUACAO_TRIBUTARIA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
 
   // ── Cadastros base ──────────────────────────────────────────────────────────
   tabela({ nome: 'CENTROS_DE_CUSTO', pk: 'CODIGO_CENTRO_DE_CUSTO', grupo: GRUPOS.CADASTROS }),
@@ -159,7 +159,7 @@ const TABELAS = [
   tabela({ nome: 'ENDERECOS_DE_RETIRADA', pk: 'ID_ENDERECO_DE_RETIRADA', grupo: GRUPOS.CLIENTES }),
 
   // ── Fornecedores ────────────────────────────────────────────────────────────
-  tabela({ nome: 'FORNECEDORES', pk: 'ID_FORNECEDOR', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR', srvId: true }),
+  tabela({ nome: 'FORNECEDORES', pk: 'ID_FORNECEDOR', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORNECEDOR', defaultAtivo: true, srvId: true }),
   tabela({ nome: 'FORN_CONTATOS_ADICIONAIS', pk: 'ID_FORN_CONTATO_ADICIONAL', grupo: GRUPOS.FORNECEDORES, generator: 'NOVO_FORN_CONTATO_ADICIONAL', srvId: true, fks: [{ coluna: 'ID_FORNECEDOR', tabela: 'FORNECEDORES' }] }),
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS_SISPAG', pk: 'ID_FORMA_DE_PAGAMENTO_SISPAG', grupo: GRUPOS.FORNECEDORES }),
 
@@ -223,7 +223,7 @@ const TABELAS = [
     srvId: true,
     fks: [
       { coluna: 'ID_CLIENTE', tabela: 'CLIENTES', traduzirSrvId: true, pkRef: 'ID_CLIENTE' },
-      { coluna: 'ID_PEDIDO',  tabela: 'PEDIDOS',  traduzirSrvId: true, pkRef: 'ID_PEDIDO'  },
+      { coluna: 'ID_PEDIDO', tabela: 'PEDIDOS', traduzirSrvId: true, pkRef: 'ID_PEDIDO' },
     ],
   }),
 
@@ -238,7 +238,7 @@ const TABELAS = [
     srvId: true,
     fks: [
       { coluna: 'ID_FORNECEDOR', tabela: 'FORNECEDORES', traduzirSrvId: true, pkRef: 'ID_FORNECEDOR' },
-      { coluna: 'ID_PEDIDO',     tabela: 'PEDIDOS',      traduzirSrvId: true, pkRef: 'ID_PEDIDO'     },
+      { coluna: 'ID_PEDIDO', tabela: 'PEDIDOS', traduzirSrvId: true, pkRef: 'ID_PEDIDO' },
     ],
   }),
 
