@@ -1,6 +1,6 @@
 {
   "name": "projeto-sincronizador-node",
-  "version": "4.7.2",
+  "version": "5.0.1",
   "description": "Servidor de sincronização Firebird matriz/filiais",
   "type": "commonjs",
   "main": "src/server.js",
