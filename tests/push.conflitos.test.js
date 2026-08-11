@@ -102,24 +102,27 @@ describe('empurrarTabela — FK referenciando um pai sem SRV_ID ainda (o caso do
     expect(reenfileiramentos[0][2]).toEqual(['PRODUTOS', '777']);
   });
 
-  test('produto pai não existe mais localmente (deletado): loga erro e NÃO reenfileira (evita loop infinito)', async () => {
+  test('produto pai não existe mais localmente (deletado): envia o registro mesmo assim, sem o vínculo (FK=null)', async () => {
     mockQueryPorSql([
       ['SYNC_ALTERACOES_PENDENTES', [{ PK_VALOR: '14760' }]],
       [`SELECT * FROM ${configBase.nome}`, [{ ID_MOVIMENTACAO: 14760, ID_PRODUTO: 777, ID_LOJA: 5 }]],
       ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', []], // produto 777 não existe mais (foi deletado)
+      ['SYNC_VERSOES_SERVIDOR', []],
     ]);
     const { salvarErro } = require('../src/client/erros');
+    enviarRegistro.mockResolvedValue({ novoId: 999 });
 
     await empurrarTabela({}, 'http://servidor-teste', 5, configComFk, noopLog);
 
-    expect(enviarRegistro).not.toHaveBeenCalled();
+    // FK não é obrigatória: o registro é enviado do mesmo jeito, com o campo em branco
+    expect(enviarRegistro).toHaveBeenCalledWith(
+      'http://servidor-teste', 5, 'MOVIMENTACOES', 'ID_MOVIMENTACAO',
+      expect.objectContaining({ ID_MOVIMENTACAO: 14760, ID_PRODUTO: null }),
+      0, false, null, '', false, false
+    );
     // não reenfileira o pai — ele nunca vai existir de novo, reenfileirar causaria loop infinito
     expect(chamadasExecuteComTrecho('UPDATE OR INSERT INTO SYNC_ALTERACOES_PENDENTES')).toHaveLength(0);
-    expect(salvarErro).toHaveBeenCalledWith(expect.objectContaining({
-      tabela: 'MOVIMENTACOES',
-      operacao: 'push',
-      mensagem: expect.stringContaining('PRODUTOS'),
-    }));
+    expect(salvarErro).not.toHaveBeenCalled();
   });
 
   test('FK resolvida: traduz o ID local para SRV_ID antes de enviar', async () => {

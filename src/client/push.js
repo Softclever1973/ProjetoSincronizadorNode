@@ -98,12 +98,11 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
         // Pai não existe mais localmente (foi deletado) — nunca vai ganhar SRV_ID, então
         // reenfileirá-lo (como no caso abaixo) causaria loop infinito: o pai é reenviado
         // como deleção, some da fila, e este filho volta a reenfileirá-lo no próximo
-        // ciclo, para sempre. Registra erro visível em vez de tentar de novo às cegas.
-        const msg = `${pk}=${pkValor}: FK ${fkRef.coluna}=${localId} aponta para ${fkRef.tabela} que não existe mais localmente (foi deletado) — registro não pode ser sincronizado até a referência ser corrigida`;
-        log(`[${nome}] ERRO FK ${pk}=${pkValor}: ${fkRef.coluna} (${fkRef.pkRef}=${localId}) não existe mais em ${fkRef.tabela} — requer revisão manual`);
-        salvarErro({ tabela: nome, operacao: 'push', mensagem: msg });
-        fkNaoResolvida = true;
-        break;
+        // ciclo, para sempre. Em vez de travar o registro esperando revisão manual, envia
+        // mesmo assim sem o vínculo (campo null) — a FK não é tratada como obrigatória.
+        log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} não existe mais em ${fkRef.tabela} — enviando ${pk}=${pkValor} sem vínculo (${fkRef.coluna}=null)`);
+        registroParaEnviar = { ...registroParaEnviar, [fkRef.coluna]: null };
+        continue;
       }
       if (srvRows[0].SRV_ID == null) {
         log(`[${nome}] WARN FK ${fkRef.coluna}: ${fkRef.pkRef}=${localId} sem SRV_ID — enfileirando ${fkRef.tabela} para sync`);
