@@ -4,7 +4,6 @@
  * PUT  /api/:schema/admin/sync-config
  * GET  /api/:schema/filiais
  * GET  /api/:schema/plano
- * GET  /api/:schema/admin/demo-feature
  */
 
 const express = require('express');
@@ -13,7 +12,6 @@ const router  = express.Router();
 const authJwt                  = require('../../middleware/authJwt');
 const { requireRole }          = require('../../middleware/checkRole');
 const { checkSchema }          = require('../../middleware/checkSchema');
-const { requirePlanFeature }   = require('../../middleware/requirePlanFeature');
 const { withTenantConnection, query, execute, isMissingTableError } = require('../../db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('./constants');
 const { registrarAuditLog } = require('./helpers');
@@ -96,15 +94,5 @@ router.get('/:schema/plano', authJwt, checkSchema, (req, res) => {
   const plano = req.userPlanos?.[req.params.schema] || PLANO_PADRAO;
   res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [] });
 });
-
-/* ── GET /api/:schema/admin/demo-feature — prova de wiring de requirePlanFeature.
-   Rota de demonstração, não usada por nenhuma ferramenta existente; hoje presente em
-   todos os planos (src/planos.json), então não tira acesso de ninguém. Scaffolding
-   temporário: remover junto com o link/card "Recurso Demo" no frontend assim que a
-   primeira feature real for gateada por plano. ── */
-router.get('/:schema/admin/demo-feature', authJwt, checkSchema,
-  requirePlanFeature('demo.relatorio_avancado'), (req, res) => {
-    res.json({ ok: true, mensagem: 'Recurso disponível no seu plano atual.' });
-  });
 
 module.exports = router;

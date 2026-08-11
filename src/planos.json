@@ -2,27 +2,27 @@
   "planos": {
     "lite": {
       "nome": "Lite",
-      "features": ["demo.relatorio_avancado"]
+      "features": []
     },
     "bronze": {
       "nome": "Bronze",
-      "features": ["demo.relatorio_avancado"]
+      "features": []
     },
     "prata": {
       "nome": "Prata",
-      "features": ["demo.relatorio_avancado"]
+      "features": []
     },
     "ouro": {
       "nome": "Ouro",
-      "features": ["demo.relatorio_avancado"]
+      "features": []
     },
     "safira": {
       "nome": "Safira",
-      "features": ["demo.relatorio_avancado"]
+      "features": ["financeiro", "exportacao"]
     },
     "diamante": {
       "nome": "Diamante",
-      "features": ["demo.relatorio_avancado"]
+      "features": ["financeiro", "exportacao"]
     }
   }
 }

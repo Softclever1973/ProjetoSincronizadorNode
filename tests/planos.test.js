@@ -28,8 +28,13 @@ describe('listarPlanos', () => {
 });
 
 describe('featuresDoPlano', () => {
-  test.each(Object.keys(PLANOS))('"%s" inclui demo.relatorio_avancado', (plano) => {
-    expect(featuresDoPlano(plano)).toContain('demo.relatorio_avancado');
+  test.each(['safira', 'diamante'])('"%s" inclui financeiro e exportacao', (plano) => {
+    expect(featuresDoPlano(plano)).toContain('financeiro');
+    expect(featuresDoPlano(plano)).toContain('exportacao');
+  });
+
+  test.each(['lite', 'bronze', 'prata', 'ouro'])('"%s" não tem nenhuma feature', (plano) => {
+    expect(featuresDoPlano(plano)).toEqual([]);
   });
 
   test('plano desconhecido retorna [] (fail-closed, não cai para PLANO_PADRAO)', () => {
@@ -43,14 +48,14 @@ describe('featuresDoPlano', () => {
 
 describe('planoTemFeature', () => {
   test('true quando o plano tem a feature', () => {
-    expect(planoTemFeature(PLANO_PADRAO, 'demo.relatorio_avancado')).toBe(true);
+    expect(planoTemFeature('safira', 'financeiro')).toBe(true);
   });
 
   test('false quando o plano não tem a feature', () => {
-    expect(planoTemFeature(PLANO_PADRAO, 'feature_inexistente')).toBe(false);
+    expect(planoTemFeature(PLANO_PADRAO, 'financeiro')).toBe(false);
   });
 
   test('false para plano desconhecido', () => {
-    expect(planoTemFeature('plano_inexistente', 'demo.relatorio_avancado')).toBe(false);
+    expect(planoTemFeature('plano_inexistente', 'financeiro')).toBe(false);
   });
 });

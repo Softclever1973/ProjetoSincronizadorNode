@@ -3,6 +3,7 @@ const router       = express.Router();
 const { pool, withTenantConnection, query } = require('../db');
 const authJwt      = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
+const { requirePlanFeature } = require('../middleware/requirePlanFeature');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
 
 function checkSchema(req, res, next) {
@@ -11,7 +12,7 @@ function checkSchema(req, res, next) {
   next();
 }
 
-const guard = [authJwt, checkSchema, requireRole('gerente', 'dono')];
+const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
 
