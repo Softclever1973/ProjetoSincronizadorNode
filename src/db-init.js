@@ -63,6 +63,16 @@ const DDL_CONTROLE = [
   // ADD COLUMN IF NOT EXISTS acima não reaplica o DEFAULT em bancos onde a coluna já
   // existia com o default antigo ('basico') — força explicitamente o default correto.
   `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'lite'`,
+  // Migração: chaves de plano alinhadas à nomenclatura já usada no PARAMETROS do Firebird
+  // (BRONZE1, PRATA1, OURO1, etc.) — evita ter dois padrões de nome pro mesmo conceito de
+  // plano circulando entre Firebird e Postgres. Idempotente: só afeta linhas com a chave antiga.
+  `UPDATE public.sync_tenants SET plano = 'LITE1'     WHERE plano = 'lite'`,
+  `UPDATE public.sync_tenants SET plano = 'BRONZE1'   WHERE plano = 'bronze'`,
+  `UPDATE public.sync_tenants SET plano = 'PRATA1'    WHERE plano = 'prata'`,
+  `UPDATE public.sync_tenants SET plano = 'OURO1'     WHERE plano = 'ouro'`,
+  `UPDATE public.sync_tenants SET plano = 'SAFIRA1'   WHERE plano = 'safira'`,
+  `UPDATE public.sync_tenants SET plano = 'DIAMANTE1' WHERE plano = 'diamante'`,
+  `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'LITE1'`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)

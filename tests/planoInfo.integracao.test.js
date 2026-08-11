@@ -26,10 +26,10 @@ describe('GET /api/:schema/plano', () => {
   test('retorna plano/nome/features do usuário autenticado', async () => {
     const res = await request(app)
       .get(`/api/${TEST_SCHEMA}/plano`)
-      .set('Authorization', `Bearer ${tokenComPlano('diamante')}`);
+      .set('Authorization', `Bearer ${tokenComPlano('DIAMANTE1')}`);
 
     expect(res.status).toBe(200);
-    expect(res.body.plano).toBe('diamante');
+    expect(res.body.plano).toBe('DIAMANTE1');
     expect(res.body.features).toContain('financeiro');
     expect(res.body.features).toContain('exportacao');
   });
@@ -37,7 +37,7 @@ describe('GET /api/:schema/plano', () => {
   test('plano abaixo de Safira não tem financeiro nem exportacao', async () => {
     const res = await request(app)
       .get(`/api/${TEST_SCHEMA}/plano`)
-      .set('Authorization', `Bearer ${tokenComPlano('ouro')}`);
+      .set('Authorization', `Bearer ${tokenComPlano('OURO1')}`);
 
     expect(res.status).toBe(200);
     expect(res.body.features).not.toContain('financeiro');

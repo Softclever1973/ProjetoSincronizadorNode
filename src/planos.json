@@ -1,26 +1,26 @@
 {
   "planos": {
-    "lite": {
+    "LITE1": {
       "nome": "Lite",
       "features": []
     },
-    "bronze": {
+    "BRONZE1": {
       "nome": "Bronze",
       "features": []
     },
-    "prata": {
+    "PRATA1": {
       "nome": "Prata",
       "features": []
     },
-    "ouro": {
+    "OURO1": {
       "nome": "Ouro",
       "features": []
     },
-    "safira": {
+    "SAFIRA1": {
       "nome": "Safira",
       "features": ["financeiro", "exportacao"]
     },
-    "diamante": {
+    "DIAMANTE1": {
       "nome": "Diamante",
       "features": ["financeiro", "exportacao"]
     }

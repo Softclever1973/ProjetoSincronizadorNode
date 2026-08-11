@@ -30,13 +30,13 @@ describe('GET /api/:schema/financeiro/contas-pagar — gate de plano', () => {
   test('dono num plano abaixo de Safira recebe 403', async () => {
     const res = await request(app)
       .get(`/api/${TEST_SCHEMA}/financeiro/contas-pagar`)
-      .set('Authorization', `Bearer ${tokenPara('dono', 'ouro')}`);
+      .set('Authorization', `Bearer ${tokenPara('dono', 'OURO1')}`);
 
     expect(res.status).toBe(403);
     expect(res.body.erro).toBe('recurso não disponível no plano atual');
   });
 
-  test('dono sem plano no JWT (cai pro padrão "lite") também recebe 403', async () => {
+  test('dono sem plano no JWT (cai pro padrão "LITE1") também recebe 403', async () => {
     const token = jwt.sign(
       { id: 999999, schemas: [TEST_SCHEMA], roles: { [TEST_SCHEMA]: 'dono' }, lojas: {}, vendedores: {}, planos: {} },
       process.env.JWT_SECRET
@@ -51,7 +51,7 @@ describe('GET /api/:schema/financeiro/contas-pagar — gate de plano', () => {
   test('vendedor num plano Safira ainda é bloqueado pelo role (não chega no gate de plano)', async () => {
     const res = await request(app)
       .get(`/api/${TEST_SCHEMA}/financeiro/contas-pagar`)
-      .set('Authorization', `Bearer ${tokenPara('vendedor', 'safira')}`);
+      .set('Authorization', `Bearer ${tokenPara('vendedor', 'SAFIRA1')}`);
 
     expect(res.status).toBe(403);
   });

@@ -28,12 +28,12 @@ describe('listarPlanos', () => {
 });
 
 describe('featuresDoPlano', () => {
-  test.each(['safira', 'diamante'])('"%s" inclui financeiro e exportacao', (plano) => {
+  test.each(['SAFIRA1', 'DIAMANTE1'])('"%s" inclui financeiro e exportacao', (plano) => {
     expect(featuresDoPlano(plano)).toContain('financeiro');
     expect(featuresDoPlano(plano)).toContain('exportacao');
   });
 
-  test.each(['lite', 'bronze', 'prata', 'ouro'])('"%s" não tem nenhuma feature', (plano) => {
+  test.each(['LITE1', 'BRONZE1', 'PRATA1', 'OURO1'])('"%s" não tem nenhuma feature', (plano) => {
     expect(featuresDoPlano(plano)).toEqual([]);
   });
 
@@ -48,7 +48,7 @@ describe('featuresDoPlano', () => {
 
 describe('planoTemFeature', () => {
   test('true quando o plano tem a feature', () => {
-    expect(planoTemFeature('safira', 'financeiro')).toBe(true);
+    expect(planoTemFeature('SAFIRA1', 'financeiro')).toBe(true);
   });
 
   test('false quando o plano não tem a feature', () => {

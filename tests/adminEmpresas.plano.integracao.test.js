@@ -63,7 +63,7 @@ afterAll(async () => {
 }, 30000);
 
 describe('POST /superadmin/empresas — campo plano', () => {
-  test('sem empresa.plano persiste o plano padrão (lite)', async () => {
+  test('sem empresa.plano persiste o plano padrão (LITE1)', async () => {
     const res = await request(app)
       .post('/superadmin/empresas')
       .set('Authorization', AUTH_SUPERADMIN)
@@ -100,14 +100,14 @@ describe('PUT /superadmin/empresas/:schema/plano', () => {
     const put = await request(app)
       .put(`/superadmin/empresas/${SCHEMA}/plano`)
       .set('Authorization', AUTH_SUPERADMIN)
-      .send({ plano: 'diamante' });
+      .send({ plano: 'DIAMANTE1' });
 
     expect(put.status).toBe(200);
     expect(put.body.ok).toBe(true);
 
     const get = await request(app).get('/superadmin/empresas').set('Authorization', AUTH_SUPERADMIN);
     const empresa = get.body.find(e => e.schema_name === SCHEMA);
-    expect(empresa.plano).toBe('diamante');
+    expect(empresa.plano).toBe('DIAMANTE1');
   });
 
   test('plano inválido retorna 400 e não altera o valor atual', async () => {
@@ -119,14 +119,14 @@ describe('PUT /superadmin/empresas/:schema/plano', () => {
     expect(res.status).toBe(400);
 
     const { rows } = await pool.query('SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [SCHEMA]);
-    expect(rows[0].plano).toBe('diamante'); // valor do teste anterior, inalterado
+    expect(rows[0].plano).toBe('DIAMANTE1'); // valor do teste anterior, inalterado
   });
 
   test('schema inexistente retorna 404', async () => {
     const res = await request(app)
       .put('/superadmin/empresas/schema_que_nao_existe/plano')
       .set('Authorization', AUTH_SUPERADMIN)
-      .send({ plano: 'lite' });
+      .send({ plano: 'LITE1' });
 
     expect(res.status).toBe(404);
   });
@@ -138,7 +138,7 @@ describe('GET /superadmin/planos', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.map(p => p.chave)).toEqual(
-      expect.arrayContaining(['lite', 'bronze', 'prata', 'ouro', 'safira', 'diamante'])
+      expect.arrayContaining(['LITE1', 'BRONZE1', 'PRATA1', 'OURO1', 'SAFIRA1', 'DIAMANTE1'])
     );
   });
 });
