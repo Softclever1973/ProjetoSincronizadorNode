@@ -45,10 +45,11 @@
   },
   "nodemonConfig": {
     "ignore": [
-      "*.json",
       "*.ini",
       "conflitos.json",
-      "tabelas-config.json"
+      "tabelas-config.json",
+      "parametros-sync.json",
+      ".update-pending.json"
     ]
   }
 }
