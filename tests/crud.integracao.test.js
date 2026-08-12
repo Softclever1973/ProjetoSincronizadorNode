@@ -224,3 +224,59 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
     expect(res.status).toBe(200);
   });
 });
+
+describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.js: requireRoleOuVendedorEm)', () => {
+  const AUTH_VENDEDOR = `Bearer ${tokenPara('vendedor')}`;
+
+  test('vendedor consegue criar um pedido', async () => {
+    const res = await request(app)
+      .post(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS`)
+      .set('Authorization', AUTH_VENDEDOR)
+      .send({ pk: 'ID_PEDIDO', registro: { ID_PEDIDO: 5001, ID_CLIENTE: 1, STATUS: 'P' } });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('vendedor consegue editar um pedido que ele mesmo criou', async () => {
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5002, 1, 'P')`);
+
+    const res = await request(app)
+      .put(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS`)
+      .set('Authorization', AUTH_VENDEDOR)
+      .send({ pk: 'ID_PEDIDO', registro: { ID_PEDIDO: 5002, STATUS: 'R' } });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('vendedor consegue excluir uma parcela de pagamento (PEDIDOS_PARCELAS_PAGAMENTOS, PK composta)', async () => {
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5003, 1, 'P')`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos_parcelas_pagamentos (id_pedido, parcela, valor) VALUES (5003, 1, 100)`);
+
+    const res = await request(app)
+      .delete(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS_PARCELAS_PAGAMENTOS`)
+      .set('Authorization', AUTH_VENDEDOR)
+      .send({ pk: ['ID_PEDIDO', 'PARCELA'], pkValores: [5003, 1] });
+
+    expect(res.status).toBe(200);
+  });
+
+  test('vendedor NÃO consegue criar/editar PRODUTOS (fora do Set liberado)', async () => {
+    const res = await request(app)
+      .post(`/api/${TEST_SCHEMA}/tabelas/PRODUTOS`)
+      .set('Authorization', AUTH_VENDEDOR)
+      .send({ pk: 'SRV_ID', registro: { CODIGO: 'VEND1', NOME: 'Tentativa vendedor' } });
+
+    expect(res.status).toBe(403);
+  });
+
+  test('vendedor NÃO consegue excluir CLIENTES', async () => {
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.clientes (srv_id, id_cliente, razao_social) VALUES (1, 1, 'Cliente Teste')`);
+
+    const res = await request(app)
+      .delete(`/api/${TEST_SCHEMA}/tabelas/CLIENTES`)
+      .set('Authorization', AUTH_VENDEDOR)
+      .send({ pk: 'SRV_ID', pkValores: [1] });
+
+    expect(res.status).toBe(403);
+  });
+});

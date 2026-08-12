@@ -11,6 +11,13 @@ const TABELAS_FILTRO_LOJA = new Set([
   'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES',
 ]);
 
+/** Vendedor pode criar/editar/excluir só nestas tabelas — ciclo de vida do pedido que ele
+ * mesmo lança (dados, itens, parcelas). CLIENTES fica de fora: escrita continua só
+ * gerente/dono. */
+const TABELAS_VENDEDOR_PODE_ESCREVER = new Set([
+  'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS',
+]);
+
 /** Colunas de controle de sincronização que nunca devem ser exibidas ao usuário. */
 const COLS_OCULTAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ', 'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -175,6 +182,7 @@ function validarRegistro(tabela, registro, { isUpdate = false } = {}) {
 module.exports = {
   NOME_VALIDO,
   TABELAS_FILTRO_LOJA,
+  TABELAS_VENDEDOR_PODE_ESCREVER,
   COLS_OCULTAS,
   COLS_DATA_PEDIDO,
   CHAVES_PERMITIDAS,

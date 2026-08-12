@@ -7,10 +7,10 @@ const express = require('express');
 const router  = express.Router();
 
 const authJwt             = require('../../middleware/authJwt');
-const { requireRole }     = require('../../middleware/checkRole');
+const { requireRoleOuVendedorEm } = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('./constants');
+const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('./constants');
 const {
   erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog,
   criarTabelaSeNecessario, colunasTipadasDeRegistro,
@@ -487,12 +487,12 @@ async function handleSave(req, res, forceUpdate) {
   }
 }
 
-const _saveMw = [authJwt, checkSchema, requireRole('gerente', 'dono')];
+const _saveMw = [authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER)];
 router.post('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, false));
 router.put ('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, true));
 
 /* ── DELETE /api/:schema/tabelas/:tabela ── */
-router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 
