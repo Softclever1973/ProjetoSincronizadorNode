@@ -20,9 +20,9 @@ function capitalizarStatus(status) {
 }
 
 // Próximo dia útil: cai pro próprio vencimento em dia de semana, ou pra segunda-feira seguinte em fim de semana (sem feriados).
-// ::date explícito porque EXTRACT() não resolve o tipo de um parâmetro bind sem cast (erro "função não é única").
+// ::timestamp explícito (mesmo tipo da coluna vencimento) — todo uso de um mesmo parâmetro bind precisa resolver pro mesmo tipo na query inteira.
 function exprProximoDiaUtil(expr) {
-  const v = `((${expr})::date)`;
+  const v = `((${expr})::timestamp)`;
   return `(CASE EXTRACT(DOW FROM ${v})
     WHEN 0 THEN ${v} + INTERVAL '1 day'
     WHEN 6 THEN ${v} + INTERVAL '2 days'
@@ -198,7 +198,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
       `INSERT INTO ${s}.a_receber
          (srv_id, descricao, id_cliente, valor, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, parcela, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11)
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
@@ -463,7 +463,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
       `INSERT INTO ${s}.a_pagar
          (srv_id, descricao, credor, id_fornecedor, valor, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,${exprProximoDiaUtil('$6')},$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6::timestamp,${exprProximoDiaUtil('$6')},$7,$8,$9,$10,$11)
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
