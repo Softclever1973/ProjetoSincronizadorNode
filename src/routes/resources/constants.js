@@ -11,9 +11,7 @@ const TABELAS_FILTRO_LOJA = new Set([
   'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES',
 ]);
 
-/** Vendedor pode criar/editar/excluir só nestas tabelas — ciclo de vida do pedido que ele
- * mesmo lança (dados, itens, parcelas). CLIENTES fica de fora: escrita continua só
- * gerente/dono. */
+/** Tabelas em que vendedor pode escrever (ciclo de vida do próprio pedido). CLIENTES fica de fora. */
 const TABELAS_VENDEDOR_PODE_ESCREVER = new Set([
   'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS',
 ]);

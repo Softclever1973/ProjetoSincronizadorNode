@@ -7,11 +7,7 @@ function requireRole(...allowed) {
   };
 }
 
-/**
- * Como requireRole, mas libera vendedor também quando `req.params.tabela` está no Set
- * `tabelasVendedor` — usado nas rotas genéricas de CRUD (POST/PUT/DELETE /tabelas/:tabela)
- * pra dar a vendedor escrita só em PEDIDOS e suas subtabelas, sem abrir escrita geral.
- */
+// Como requireRole, mas libera vendedor quando req.params.tabela está no Set tabelasVendedor.
 function requireRoleOuVendedorEm(tabelasVendedor) {
   return (req, res, next) => {
     const role = req.userRoles?.[req.params.schema];
