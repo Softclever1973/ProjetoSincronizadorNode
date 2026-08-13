@@ -1,6 +1,6 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool, withTenantConnection, query } = require('../db');
+const { pool, withTenantConnection, query, isMissingTableError } = require('../db');
 const authJwt      = require('../middleware/authJwt');
 const { requireRole } = require('../middleware/checkRole');
 const { requirePlanFeature } = require('../middleware/requirePlanFeature');
@@ -10,6 +10,24 @@ function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))
     return res.status(403).json({ erro: 'acesso negado' });
   next();
+}
+
+// Convenção do Firebird legado: "pago"/"recebido" gravam como "Realizado", não "Pago"/"Recebido" — leitura já normaliza via LOWER().
+function capitalizarStatus(status) {
+  const s = String(status).trim().toLowerCase();
+  if (s === 'pago' || s === 'recebido') return 'Realizado';
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+// Próximo dia útil: cai pro próprio vencimento em dia de semana, ou pra segunda-feira seguinte em fim de semana (sem feriados).
+// ::date explícito porque EXTRACT() não resolve o tipo de um parâmetro bind sem cast (erro "função não é única").
+function exprProximoDiaUtil(expr) {
+  const v = `((${expr})::date)`;
+  return `(CASE EXTRACT(DOW FROM ${v})
+    WHEN 0 THEN ${v} + INTERVAL '1 day'
+    WHEN 6 THEN ${v} + INTERVAL '2 days'
+    ELSE ${v}
+  END)`;
 }
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
@@ -64,10 +82,18 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`ar.id_loja = $${params.length}`); }
 
   const where = conds.join(' AND ');
-  const joinClientes = `FROM ${s}.a_receber ar LEFT JOIN ${s}.clientes c ON c.srv_id = ar.id_cliente`;
 
-  try {
-    const [rows, total] = await Promise.all([
+  // Vendedor/condição de pagamento: cai pra NULL se VENDEDORES/AUX_PARCELAS_PAGAMENTOS ainda não sincronizaram, em vez de 500.
+  async function buscarContasReceber(comVendedorCondicao) {
+    const joins = `FROM ${s}.a_receber ar
+      LEFT JOIN ${s}.clientes c ON c.srv_id = ar.id_cliente` +
+      (comVendedorCondicao ? `
+      LEFT JOIN ${s}.vendedores v ON v.id_vendedor = ar.id_vendedor
+      LEFT JOIN ${s}.aux_parcelas_pagamentos cp ON cp.id_aux_parcela_pagamento = ar.id_condicao_pagamento` : '');
+    const colVendedor = comVendedorCondicao ? 'v.nome' : 'NULL';
+    const colCondicao = comVendedorCondicao ? 'cp.descricao' : 'NULL';
+
+    return Promise.all([
       pool.query(
         `SELECT
            ar.srv_id                                         AS id,
@@ -91,18 +117,30 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
              ELSE 1
            END                                               AS total_parcelas,
            ar.observacao,
-           ar.id_loja
-         ${joinClientes}
+           ar.id_loja,
+           ${colVendedor}                                    AS vendedor,
+           ${colCondicao}                                    AS condicao_pagamento
+         ${joins}
          WHERE ${where}
          ORDER BY ${orderCol} ${orderDir} NULLS LAST, ar.srv_id DESC
          LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}`,
         params
       ),
       pool.query(
-        `SELECT COUNT(*)::INTEGER AS total ${joinClientes} WHERE ${where}`,
+        `SELECT COUNT(*)::INTEGER AS total ${joins} WHERE ${where}`,
         params
       ),
     ]);
+  }
+
+  try {
+    let rows, total;
+    try {
+      [rows, total] = await buscarContasReceber(true);
+    } catch (e) {
+      if (!isMissingTableError(e)) throw e;
+      [rows, total] = await buscarContasReceber(false);
+    }
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -158,15 +196,15 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_receber
-         (srv_id, descricao, id_cliente, valor, vencimento, data_realizado,
+         (srv_id, descricao, id_cliente, valor, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, parcela, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11)
        RETURNING
          srv_id AS id, descricao, valor,
-         vencimento AS data_vencimento, data_realizado AS data_recebimento,
+         vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
       [next_srv_id, descricao, id_cliente, valor, data_vencimento, data_recebimento || null,
-       status || 'pendente', parseInt(forma_pagamento) || null, parcela || 1,
+       capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null, parcela || 1,
        observacao || null, id_loja || null]
     );
     registrarAuditLog(req, s, 'A_RECEBER', 'INSERT', String(r.id), req.body, null);
@@ -190,7 +228,9 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
       `SELECT * FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
-    if (atual.status === 'cancelado' && status && status !== 'cancelado') {
+    const atualCanceladoCR = String(atual.status ?? '').toLowerCase().startsWith('cancelad');
+    const novoCanceladoCR  = String(status ?? '').toLowerCase().startsWith('cancelad');
+    if (atualCanceladoCR && status && !novoCanceladoCR) {
       return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
     }
 
@@ -211,6 +251,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          id_cliente      = COALESCE($2, id_cliente),
          valor           = COALESCE($3, valor),
          vencimento      = COALESCE($4, vencimento),
+         proximo_dia_util = ${exprProximoDiaUtil('COALESCE($4, vencimento)')},
          data_realizado       = $5,
          status               = COALESCE($6, status),
          id_forma_de_pagamento = COALESCE($7, id_forma_de_pagamento),
@@ -220,10 +261,10 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
        WHERE srv_id = $11
        RETURNING
          srv_id AS id, descricao, valor,
-         vencimento AS data_vencimento, data_realizado AS data_recebimento,
+         vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
       [descricao || null, id_cliente, valor || null, data_vencimento || null,
-       data_recebimento ?? null, status || null, parseInt(forma_pagamento) || null,
+       data_recebimento ?? null, status ? capitalizarStatus(status) : null, parseInt(forma_pagamento) || null,
        parcela || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
@@ -239,7 +280,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
           await pool.query(
             `ALTER TABLE ${s}.pedidos_parcelas_pagamentos ADD COLUMN IF NOT EXISTS status TEXT`
           );
-          if (r.status === 'recebido') {
+          if (String(status ?? '').toLowerCase() === 'recebido') {
             await pool.query(
               `UPDATE ${s}.pedidos_parcelas_pagamentos SET status = 'R' WHERE id_pedido = $1 AND parcela = $2`,
               [idPedido, parcela]
@@ -420,15 +461,15 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_pagar
-         (srv_id, descricao, credor, id_fornecedor, valor, vencimento, data_realizado,
+         (srv_id, descricao, credor, id_fornecedor, valor, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,${exprProximoDiaUtil('$6')},$7,$8,$9,$10,$11)
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor,
-         vencimento AS data_vencimento, data_realizado AS data_pagamento,
+         vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
       [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, data_vencimento,
-       data_pagamento || null, status || 'pendente', parseInt(forma_pagamento) || null,
+       data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
        observacao || null, id_loja || null]
     );
     registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
@@ -476,6 +517,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          id_fornecedor          = COALESCE($3, id_fornecedor),
          valor                  = COALESCE($4, valor),
          vencimento             = COALESCE($5, vencimento),
+         proximo_dia_util       = ${exprProximoDiaUtil('COALESCE($5, vencimento)')},
          data_realizado         = $6,
          status                 = COALESCE($7, status),
          id_forma_de_pagamento  = COALESCE($8, id_forma_de_pagamento),
@@ -484,10 +526,10 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
        WHERE srv_id = $11
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor,
-         vencimento AS data_vencimento, data_realizado AS data_pagamento,
+         vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
       [descricao || null, fornecedor || null, id_fornecedor, valor || null,
-       data_vencimento || null, data_pagamento ?? null, status || null,
+       data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
        parseInt(forma_pagamento) || null, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });

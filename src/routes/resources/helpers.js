@@ -400,7 +400,7 @@ async function gerarContasReceberDoPedido(schema, idPedido) {
       `INSERT INTO ${schema}.a_receber
          (srv_id, descricao, id_cliente, id_pedido, valor, vencimento, status,
           id_forma_de_pagamento, parcela, observacao, id_loja, id_vendedor)
-       VALUES ($1,$2,$3,$4,$5,$6,'pendente',$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,'Pendente',$7,$8,$9,$10,$11)
        RETURNING srv_id AS id, descricao, valor, vencimento AS data_vencimento, status, parcela`,
       [next_id, desc, id_cliente_srv, idPedido, p.valor, p.data_para_pagamento,
        p.id_forma_de_pagamento ? Number(p.id_forma_de_pagamento) : null,
