@@ -186,6 +186,14 @@ function buscarParametros(baseURI) {
   return get(`${baseURI}/datasnap/rest/TSMSincronizacao/BuscarParametros?token=${TOKEN}`);
 }
 
+// Envia o plano contratado (param 45004) ao servidor — mesmo padrão de atualizarRegime.
+function atualizarPlano(baseURI, plano) {
+  return post(
+    `${baseURI}/datasnap/rest/TSMSincronizacao/AtualizarPlano?token=${TOKEN}`,
+    { plano }
+  );
+}
+
 module.exports = {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
@@ -195,4 +203,5 @@ module.exports = {
   atualizarRegime,
   atualizarParametros,
   buscarParametros,
+  atualizarPlano,
 };

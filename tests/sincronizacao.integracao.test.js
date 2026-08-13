@@ -75,3 +75,51 @@ describe('POST /ReceberRegistro — recuperação de sequência seq_srv_id_<tabe
     expect(rows[0].codigo).toBe('P2');
   });
 });
+
+describe('POST /AtualizarPlano — PARAMETROS(45004) do Firebird → sync_tenants.plano', () => {
+  afterEach(async () => {
+    await pool.query(`UPDATE public.sync_tenants SET plano = 'LITE1' WHERE schema_name = $1`, [TEST_SCHEMA]);
+  });
+
+  function atualizarPlano(plano) {
+    return request(app)
+      .post('/datasnap/rest/TSMSincronizacao/AtualizarPlano')
+      .query({ token: TEST_TOKEN })
+      .send({ plano });
+  }
+
+  test('plano válido é gravado em sync_tenants.plano', async () => {
+    const res = await atualizarPlano('SAFIRA1');
+
+    expect(res.status).toBe(200);
+    const { rows } = await pool.query(
+      'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [TEST_SCHEMA]
+    );
+    expect(rows[0].plano).toBe('SAFIRA1');
+  });
+
+  test('normaliza minúsculas/espaços antes de gravar', async () => {
+    const res = await atualizarPlano('  diamante1  ');
+
+    expect(res.status).toBe(200);
+    const { rows } = await pool.query(
+      'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [TEST_SCHEMA]
+    );
+    expect(rows[0].plano).toBe('DIAMANTE1');
+  });
+
+  test('plano desconhecido é rejeitado e não altera o valor atual', async () => {
+    const res = await atualizarPlano('PLATINA_QUE_NAO_EXISTE');
+
+    expect(res.status).toBe(400);
+    const { rows } = await pool.query(
+      'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [TEST_SCHEMA]
+    );
+    expect(rows[0].plano).toBe('LITE1');
+  });
+
+  test('body sem plano retorna 400', async () => {
+    const res = await atualizarPlano(undefined);
+    expect(res.status).toBe(400);
+  });
+});

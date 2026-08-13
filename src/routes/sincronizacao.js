@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../db');
 const { isFilialBloqueada } = require('../middleware/filialBloqueada');
+const { planoValido } = require('../planos');
 const {
   registrarAuditLog, gerarContasReceberDoPedido,
   COLUNAS_IGNORADAS_SERVIDOR, chaveNegocioTabela,
@@ -895,6 +896,26 @@ router.post('/AtualizarRegime', auth, async (req, res) => {
     await pool.query(
       'UPDATE public.sync_tenants SET regime_tributario = $1 WHERE schema_name = $2',
       [regime, req.schemaName]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// Plano contratado (PARAMETROS(45004) no Firebird) → sync_tenants.plano, com validação própria (controla acesso pago).
+router.post('/AtualizarPlano', auth, async (req, res) => {
+  const { plano } = req.body || {};
+  const planoNorm = typeof plano === 'string' ? plano.trim().toUpperCase() : '';
+  if (!planoNorm) return res.status(400).json({ erro: 'plano obrigatório' });
+  if (!planoValido(planoNorm)) {
+    console.warn(`[AtualizarPlano] plano desconhecido recebido de ${req.schemaName}: "${plano}" — ignorado`);
+    return res.status(400).json({ erro: `plano inválido: ${plano}` });
+  }
+  try {
+    await pool.query(
+      'UPDATE public.sync_tenants SET plano = $1 WHERE schema_name = $2',
+      [planoNorm, req.schemaName]
     );
     res.json({ ok: true });
   } catch (e) {

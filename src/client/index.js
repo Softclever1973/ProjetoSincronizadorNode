@@ -197,7 +197,7 @@ async function main() {
   const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
-  const { atualizarRegime, garantirTabela } = require('./http');
+  const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
   const { getColunasTipadas } = require('./db-utils');
   const { syncParametrosGlobais } = require('./syncParametrosGlobais');
   const { setup } = require('./setup');
@@ -357,6 +357,10 @@ async function main() {
       const regimeFirebird = await getParam(db, 40026).catch(() => null);
       if (regimeFirebird && baseURI) {
         atualizarRegime(baseURI, regimeFirebird).catch(() => {});
+      }
+      const planoFirebird = await getParam(db, 45004).catch(() => null);
+      if (planoFirebird && baseURI) {
+        atualizarPlano(baseURI, planoFirebird).catch(() => {});
       }
       if (baseURI) {
         // Parâmetros globais (paramsSyncMap[].global) reconciliam pro mesmo valor em
