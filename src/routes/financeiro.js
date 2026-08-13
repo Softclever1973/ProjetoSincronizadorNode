@@ -32,6 +32,16 @@ function exprProximoDiaUtil(expr) {
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
 
+// "valor_pago" foi adicionado depois da criação inicial de a_pagar (existe no Sirius Delphi
+// original, faltava aqui) — garante a coluna antes de qualquer SELECT/INSERT/UPDATE. Cache por
+// processo evita reexecutar o ALTER (idempotente) a cada request.
+const colunaValorPagoGarantida = new Set();
+async function garantirColunaValorPago(s) {
+  if (colunaValorPagoGarantida.has(s)) return;
+  await pool.query(`ALTER TABLE ${s}.a_pagar ADD COLUMN IF NOT EXISTS valor_pago NUMERIC(15,2)`);
+  colunaValorPagoGarantida.add(s);
+}
+
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
 
 const CR_SORT_MAP = {
@@ -380,6 +390,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const fromAP = `FROM ${s}.a_pagar ap`;
 
   try {
+    await garantirColunaValorPago(s);
     const [rows, total] = await Promise.all([
       pool.query(
         `SELECT
@@ -388,6 +399,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
            ap.descricao,
            ap.credor                      AS fornecedor,
            ap.valor,
+           ap.valor_pago,
            ap.vencimento                  AS data_vencimento,
            ap.data_realizado              AS data_pagamento,
            CASE
@@ -416,7 +428,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
 router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
-  const { descricao, fornecedor, valor, data_vencimento, data_pagamento,
+  const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
           status, forma_pagamento, observacao } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
   const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
@@ -425,6 +437,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
 
   try {
+    await garantirColunaValorPago(s);
     let id_fornecedor = null;
     if (fornecedor) {
       const { rows: forn } = await pool.query(
@@ -461,15 +474,15 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_pagar
-         (srv_id, descricao, credor, id_fornecedor, valor, vencimento, proximo_dia_util, data_realizado,
+         (srv_id, descricao, credor, id_fornecedor, valor, valor_pago, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6::timestamp,${exprProximoDiaUtil('$6')},$7,$8,$9,$10,$11)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12)
        RETURNING
-         srv_id AS id, descricao, credor AS fornecedor, valor,
+         srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
-      [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, data_vencimento,
-       data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
+      [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, parseFloat(valor_pago) || null,
+       data_vencimento, data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
        observacao || null, id_loja || null]
     );
     registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
@@ -484,10 +497,11 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) => {
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
-  const { descricao, fornecedor, valor, data_vencimento, data_pagamento,
+  const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
           status, forma_pagamento, observacao, id_loja } = req.body;
 
   try {
+    await garantirColunaValorPago(s);
     // Impede reativação de registro cancelado
     const { rows: [atual] } = await pool.query(
       `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
@@ -516,19 +530,20 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          credor                 = COALESCE($2, credor),
          id_fornecedor          = COALESCE($3, id_fornecedor),
          valor                  = COALESCE($4, valor),
-         vencimento             = COALESCE($5, vencimento),
-         proximo_dia_util       = ${exprProximoDiaUtil('COALESCE($5, vencimento)')},
-         data_realizado         = $6,
-         status                 = COALESCE($7, status),
-         id_forma_de_pagamento  = COALESCE($8, id_forma_de_pagamento),
-         observacao             = $9,
-         id_loja                = COALESCE($10, id_loja)
-       WHERE srv_id = $11
+         valor_pago             = COALESCE($5, valor_pago),
+         vencimento             = COALESCE($6, vencimento),
+         proximo_dia_util       = ${exprProximoDiaUtil('COALESCE($6, vencimento)')},
+         data_realizado         = $7,
+         status                 = COALESCE($8, status),
+         id_forma_de_pagamento  = COALESCE($9, id_forma_de_pagamento),
+         observacao             = $10,
+         id_loja                = COALESCE($11, id_loja)
+       WHERE srv_id = $12
        RETURNING
-         srv_id AS id, descricao, credor AS fornecedor, valor,
+         srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
-      [descricao || null, fornecedor || null, id_fornecedor, valor || null,
+      [descricao || null, fornecedor || null, id_fornecedor, valor || null, parseFloat(valor_pago) || null,
        data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
        parseInt(forma_pagamento) || null, observacao ?? null, id_loja ?? null, id]
     );
