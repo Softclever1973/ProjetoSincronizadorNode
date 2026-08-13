@@ -12,7 +12,7 @@ const router  = express.Router();
 const authJwt                  = require('../../middleware/authJwt');
 const { requireRole }          = require('../../middleware/checkRole');
 const { checkSchema }          = require('../../middleware/checkSchema');
-const { withTenantConnection, query, execute, isMissingTableError } = require('../../db');
+const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('./constants');
 const { registrarAuditLog } = require('./helpers');
 const { PLANOS, PLANO_PADRAO } = require('../../planos');
@@ -89,10 +89,18 @@ router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
   }
 });
 
-/* ── GET /api/:schema/plano — info do plano atual, sem gate de feature ── */
-router.get('/:schema/plano', authJwt, checkSchema, (req, res) => {
-  const plano = req.userPlanos?.[req.params.schema] || PLANO_PADRAO;
-  res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [] });
+// GET /api/:schema/plano — info do plano atual. Lê de sync_tenants, não do claim do JWT (evita staleness até o token renovar).
+router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
+  const { schema } = req.params;
+  try {
+    const { rows } = await pool.query(
+      'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [schema]
+    );
+    const plano = rows[0]?.plano || PLANO_PADRAO;
+    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [] });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 module.exports = router;
