@@ -19,8 +19,7 @@ function capitalizarStatus(status) {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-// Próximo dia útil: cai pro próprio vencimento em dia de semana, ou pra segunda-feira seguinte em fim de semana (sem feriados).
-// ::timestamp explícito (mesmo tipo da coluna vencimento) — todo uso de um mesmo parâmetro bind precisa resolver pro mesmo tipo na query inteira.
+// Próximo dia útil (sem feriados); ::timestamp explícito pra bind resolver o mesmo tipo na query toda.
 function exprProximoDiaUtil(expr) {
   const v = `((${expr})::timestamp)`;
   return `(CASE EXTRACT(DOW FROM ${v})
@@ -32,8 +31,7 @@ function exprProximoDiaUtil(expr) {
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
 
-// Mesma regra do Sirius desktop: "Não utilize data realizado maior que hoje" — aplicada só a
-// contas a pagar (data_pagamento), não a contas a receber, por enquanto.
+// Mesma regra do Sirius desktop: data de pagamento não pode ser futura (só contas a pagar por enquanto).
 function dataFutura(data) {
   if (!data) return false;
   const hoje = new Date();
@@ -41,14 +39,18 @@ function dataFutura(data) {
   return String(data).slice(0, 10) > hojeStr;
 }
 
-// "valor_pago" foi adicionado depois da criação inicial de a_pagar (existe no Sirius Delphi
-// original, faltava aqui) — garante a coluna antes de qualquer SELECT/INSERT/UPDATE. Cache por
-// processo evita reexecutar o ALTER (idempotente) a cada request.
-const colunaValorPagoGarantida = new Set();
-async function garantirColunaValorPago(s) {
-  if (colunaValorPagoGarantida.has(s)) return;
-  await pool.query(`ALTER TABLE ${s}.a_pagar ADD COLUMN IF NOT EXISTS valor_pago NUMERIC(15,2)`);
-  colunaValorPagoGarantida.add(s);
+// Colunas do formulário A_PAGAR do Sirius Delphi que faltavam aqui — garante antes de usar (cache por processo).
+const colunasParidadeGarantidas = new Set();
+async function garantirColunasParidade(s) {
+  if (colunasParidadeGarantidas.has(s)) return;
+  await pool.query(`
+    ALTER TABLE ${s}.a_pagar
+      ADD COLUMN IF NOT EXISTS valor_pago NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS dt_lancamento DATE,
+      ADD COLUMN IF NOT EXISTS venc_original DATE,
+      ADD COLUMN IF NOT EXISTS faturamento_direto VARCHAR(1)
+  `);
+  colunasParidadeGarantidas.add(s);
 }
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
@@ -190,8 +192,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
       id_cliente = cli[0]?.srv_id ?? null;
     }
 
-    // O sync usa uma sequence por tabela: seq_srv_id_a_receber.
-    // Criamos se não existir e avançamos para além do max atual antes de alocar.
+    // sequence por tabela (seq_srv_id_a_receber): cria se não existir, avança além do max atual.
     await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
     await pool.query(`
       SELECT setval(
@@ -399,7 +400,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const fromAP = `FROM ${s}.a_pagar ap`;
 
   try {
-    await garantirColunaValorPago(s);
+    await garantirColunasParidade(s);
     const [rows, total] = await Promise.all([
       pool.query(
         `SELECT
@@ -418,7 +419,10 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
            END                            AS status,
            ap.id_forma_de_pagamento::text AS forma_pagamento,
            ap.observacao,
-           ap.id_loja
+           ap.id_loja,
+           ap.dt_lancamento,
+           ap.venc_original,
+           ap.faturamento_direto
          ${fromAP}
          WHERE ${where}
          ORDER BY ${orderCol} ${orderDir} NULLS LAST, ap.srv_id DESC
@@ -448,7 +452,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
 
   try {
-    await garantirColunaValorPago(s);
+    await garantirColunasParidade(s);
     let id_fornecedor = null;
     if (fornecedor) {
       const { rows: forn } = await pool.query(
@@ -460,8 +464,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
       id_fornecedor = forn[0]?.srv_id ?? null;
     }
 
-    // O sync usa uma sequence por tabela: seq_srv_id_a_pagar.
-    // Criamos se não existir e avançamos para além do max atual antes de alocar.
+    // sequence por tabela (seq_srv_id_a_pagar): cria se não existir, avança além do max atual.
     await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_pagar START WITH 1`);
     await pool.query(`
       SELECT setval(
@@ -486,12 +489,13 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_pagar
          (srv_id, descricao, credor, id_fornecedor, valor, valor_pago, vencimento, proximo_dia_util, data_realizado,
-          status, id_forma_de_pagamento, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12)
+          status, id_forma_de_pagamento, observacao, id_loja, dt_lancamento, venc_original, faturamento_direto)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12,CURRENT_DATE,$7::timestamp,'N')
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja,
+         dt_lancamento, venc_original, faturamento_direto`,
       [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, parseFloat(valor_pago) || null,
        data_vencimento, data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
        observacao || null, id_loja || null]
@@ -515,7 +519,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
     return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
 
   try {
-    await garantirColunaValorPago(s);
+    await garantirColunasParidade(s);
     // Impede reativação de registro cancelado
     const { rows: [atual] } = await pool.query(
       `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
@@ -551,12 +555,16 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          status                 = COALESCE($8, status),
          id_forma_de_pagamento  = COALESCE($9, id_forma_de_pagamento),
          observacao             = $10,
-         id_loja                = COALESCE($11, id_loja)
+         id_loja                = COALESCE($11, id_loja),
+         dt_lancamento          = COALESCE(dt_lancamento, CURRENT_DATE),
+         venc_original          = COALESCE(venc_original, COALESCE($6, vencimento)),
+         faturamento_direto     = COALESCE(faturamento_direto, 'N')
        WHERE srv_id = $12
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja,
+         dt_lancamento, venc_original, faturamento_direto`,
       [descricao || null, fornecedor || null, id_fornecedor, valor || null, parseFloat(valor_pago) || null,
        data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
        parseInt(forma_pagamento) || null, observacao ?? null, id_loja ?? null, id]
@@ -668,12 +676,7 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
 });
 
 // ── POST /api/:schema/financeiro/parcelas-pedido ─────────────────────────────
-// Gera as A_RECEBER pendentes de um pedido a partir de PEDIDOS_PARCELAS_PAGAMENTOS.
-// Só cria algo se o pedido já estiver STATUS = 'R' (Realizado) — ver
-// gerarContasReceberDoPedido() em resources/helpers.js. Chamado após gerar as
-// parcelas no modal de Pagamento; se o pedido ainda não foi realizado, é um no-op
-// seguro (o gate real acontece na transição de STATUS para 'R').
-// Acessível a qualquer usuário autenticado (sem restrição de role).
+// Gera A_RECEBER pendentes de um pedido (só se STATUS='R'); no-op seguro se ainda não realizado.
 
 router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (req, res) => {
   const s = req.params.schema;
