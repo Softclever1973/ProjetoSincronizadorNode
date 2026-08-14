@@ -32,6 +32,15 @@ function exprProximoDiaUtil(expr) {
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
 
+// Mesma regra do Sirius desktop: "Não utilize data realizado maior que hoje" — aplicada só a
+// contas a pagar (data_pagamento), não a contas a receber, por enquanto.
+function dataFutura(data) {
+  if (!data) return false;
+  const hoje = new Date();
+  const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
+  return String(data).slice(0, 10) > hojeStr;
+}
+
 // "valor_pago" foi adicionado depois da criação inicial de a_pagar (existe no Sirius Delphi
 // original, faltava aqui) — garante a coluna antes de qualquer SELECT/INSERT/UPDATE. Cache por
 // processo evita reexecutar o ALTER (idempotente) a cada request.
@@ -174,7 +183,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     if (nome_cliente) {
       const { rows: cli } = await pool.query(
         `SELECT srv_id FROM ${s}.clientes
-         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
          LIMIT 1`,
         [nome_cliente]
       );
@@ -248,7 +257,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
     if (nome_cliente) {
       const { rows: cli } = await pool.query(
         `SELECT srv_id FROM ${s}.clientes
-         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
          LIMIT 1`,
         [nome_cliente]
       );
@@ -435,6 +444,8 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
   if (!descricao || !valor || !data_vencimento)
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
+  if (dataFutura(data_pagamento))
+    return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
 
   try {
     await garantirColunaValorPago(s);
@@ -442,7 +453,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     if (fornecedor) {
       const { rows: forn } = await pool.query(
         `SELECT srv_id FROM ${s}.fornecedores
-         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
          LIMIT 1`,
         [fornecedor]
       );
@@ -500,6 +511,9 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
           status, forma_pagamento, observacao, id_loja } = req.body;
 
+  if (dataFutura(data_pagamento))
+    return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
+
   try {
     await garantirColunaValorPago(s);
     // Impede reativação de registro cancelado
@@ -517,7 +531,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
     if (fornecedor) {
       const { rows: forn } = await pool.query(
         `SELECT srv_id FROM ${s}.fornecedores
-         WHERE razao_social ILIKE $1 OR fantasia ILIKE $1
+         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
          LIMIT 1`,
         [fornecedor]
       );
