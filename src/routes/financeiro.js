@@ -31,6 +31,22 @@ function exprProximoDiaUtil(expr) {
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
 
+// Resolve vendedor/condição de pagamento por nome (dropdown de busca), igual ao padrão já usado pra cliente/fornecedor.
+async function resolverIdVendedor(s, nome) {
+  if (!nome) return null;
+  const { rows } = await pool.query(
+    `SELECT id_vendedor FROM ${s}.vendedores WHERE TRIM(nome) ILIKE TRIM($1) LIMIT 1`, [nome]
+  );
+  return rows[0]?.id_vendedor ?? null;
+}
+async function resolverIdCondicaoPagamento(s, descricao) {
+  if (!descricao) return null;
+  const { rows } = await pool.query(
+    `SELECT id_aux_parcela_pagamento FROM ${s}.aux_parcelas_pagamentos WHERE TRIM(descricao) ILIKE TRIM($1) LIMIT 1`, [descricao]
+  );
+  return rows[0]?.id_aux_parcela_pagamento ?? null;
+}
+
 // Mesma regra do Sirius desktop: data de pagamento não pode ser futura (só contas a pagar por enquanto).
 function dataFutura(data) {
   if (!data) return false;
@@ -173,7 +189,7 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
 router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   const s = req.params.schema;
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, observacao, vendedor, condicao_pagamento } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
   const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
@@ -191,6 +207,8 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
       );
       id_cliente = cli[0]?.srv_id ?? null;
     }
+    const id_vendedor = await resolverIdVendedor(s, vendedor);
+    const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     // sequence por tabela (seq_srv_id_a_receber): cria se não existir, avança além do max atual.
     await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
@@ -217,16 +235,18 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_receber
          (srv_id, descricao, id_cliente, valor, vencimento, proximo_dia_util, data_realizado,
-          status, id_forma_de_pagamento, parcela, observacao, id_loja)
-       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11)
+          status, id_forma_de_pagamento, parcela, observacao, id_loja, id_vendedor, id_condicao_pagamento)
+       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
       [next_srv_id, descricao, id_cliente, valor, data_vencimento, data_recebimento || null,
        capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null, parcela || 1,
-       observacao || null, id_loja || null]
+       observacao || null, id_loja || null, id_vendedor, id_condicao_pagamento]
     );
+    r.vendedor = vendedor || null;
+    r.condicao_pagamento = condicao_pagamento || null;
     registrarAuditLog(req, s, 'A_RECEBER', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
@@ -240,7 +260,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja, vendedor, condicao_pagamento } = req.body;
 
   try {
     // Impede reativação de registro cancelado
@@ -264,6 +284,8 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
       );
       id_cliente = cli[0]?.srv_id ?? null;
     }
+    const id_vendedor = await resolverIdVendedor(s, vendedor);
+    const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     const { rows: [r], rowCount } = await pool.query(
       `UPDATE ${s}.a_receber SET
@@ -277,7 +299,9 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          id_forma_de_pagamento = COALESCE($7, id_forma_de_pagamento),
          parcela              = COALESCE($8, parcela),
          observacao           = COALESCE($9, observacao),
-         id_loja              = COALESCE($10, id_loja)
+         id_loja              = COALESCE($10, id_loja),
+         id_vendedor           = COALESCE($12, id_vendedor),
+         id_condicao_pagamento = COALESCE($13, id_condicao_pagamento)
        WHERE srv_id = $11
        RETURNING
          srv_id AS id, descricao, valor,
@@ -285,9 +309,11 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
       [descricao || null, id_cliente, valor || null, data_vencimento || null,
        data_recebimento ?? null, status ? capitalizarStatus(status) : null, parseInt(forma_pagamento) || null,
-       parcela || null, observacao ?? null, id_loja ?? null, id]
+       parcela || null, observacao ?? null, id_loja ?? null, id, id_vendedor, id_condicao_pagamento]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (vendedor !== undefined) r.vendedor = vendedor || null;
+    if (condicao_pagamento !== undefined) r.condicao_pagamento = condicao_pagamento || null;
     registrarAuditLog(req, s, 'A_RECEBER', 'UPDATE', String(id), req.body, atual);
 
     // Sincroniza status de CR de pedido com PEDIDOS_PARCELAS_PAGAMENTOS (em ambas as direções)
