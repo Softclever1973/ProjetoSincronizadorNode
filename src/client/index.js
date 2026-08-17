@@ -199,8 +199,8 @@ async function main() {
   const { empurrarTabela } = require('./application/syncEngine/push');
   const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
   const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
-  const { syncParametrosGlobais } = require('./syncParametrosGlobais');
-  const { verificarResetServidor } = require('./resetLocal');
+  const { syncParametrosGlobais } = require('./application/syncParametrosGlobais');
+  const { verificarResetServidor } = require('./application/resetLocal');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
@@ -209,7 +209,7 @@ async function main() {
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
-  } = require('./updater');
+  } = require('./application/updater');
   const { notificarToast } = require('./infrastructure/notificar');
   const { version: VERSAO_ATUAL } = require('../../package.json');
 
@@ -506,7 +506,7 @@ async function main() {
 // Segunda camada de rollback (Camada 2): cobre o caso de um build recém-atualizado que
 // lança exceção síncrona antes mesmo de chegar ao primeiro executarCiclo() — mais lento
 // que o watchdog de liveness em updater.js (Camada 1), mas ainda dentro deste laço de
-// retry. Deliberadamente NÃO usa require('./updater') — se o bug estiver dentro desse
+// retry. Deliberadamente NÃO usa require('./application/updater') — se o bug estiver dentro desse
 // módulo, importá-lo aqui durante o rollback poderia falhar também. Só fs/path/child_process.
 function _temAtualizacaoPendenteBruto() {
   try {

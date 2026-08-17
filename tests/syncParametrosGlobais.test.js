@@ -18,7 +18,7 @@ jest.mock('../src/client/parametrosGlobaisState', () => ({
 const { getParam, setParam } = require('../src/client/infrastructure/firebird/db');
 const { buscarParametros, atualizarParametros } = require('../src/client/http');
 const { lerEstado, salvarEstado } = require('../src/client/parametrosGlobaisState');
-const { syncParametrosGlobais } = require('../src/client/syncParametrosGlobais');
+const { syncParametrosGlobais } = require('../src/client/application/syncParametrosGlobais');
 
 const db = {}; // opaco pro módulo — só repassado pra getParam/setParam mockados
 const baseURI = 'http://servidor.teste';

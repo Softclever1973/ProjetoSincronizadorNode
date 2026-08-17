@@ -11,7 +11,7 @@ jest.mock('../src/client/http', () => ({
 
 const { query, execute, tabelaExiste } = require('../src/client/infrastructure/firebird/db');
 const { verificarStatusReset } = require('../src/client/http');
-const { verificarResetServidor, aplicarResetLocal, emitter } = require('../src/client/resetLocal');
+const { verificarResetServidor, aplicarResetLocal, emitter } = require('../src/client/application/resetLocal');
 const TABELAS = require('../src/client/domain/tabelas');
 
 const db = {}; // opaco pro módulo — só repassado pra query/execute/tabelaExiste mockados

@@ -19,7 +19,7 @@ const {
   lerEstadoPendente,
   confirmarAtualizacao,
   emitter,
-} = require('../src/client/updater');
+} = require('../src/client/application/updater');
 
 const TAMANHO_VALIDO = 1024 * 1024 + 1024; // > 1MB, passa no sanity check de aplicarAtualizacaoComRespawn
 

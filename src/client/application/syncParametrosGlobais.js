@@ -4,10 +4,10 @@
  * ninguém mudou local; este PDV grava de volta via setParam quando outro PDV mudou primeiro.
  * Parâmetros não-globais seguem o comportamento legado: envio unidirecional, sem reconciliação.
  */
-const { getParam, setParam } = require('./infrastructure/firebird/db');
-const { atualizarParametros, buscarParametros } = require('./http');
-const { paramsSyncMap } = require('./infrastructure/config/paramsSyncMap');
-const { lerEstado, salvarEstado, decidirAcao } = require('./parametrosGlobaisState');
+const { getParam, setParam } = require('../infrastructure/firebird/db');
+const { atualizarParametros, buscarParametros } = require('../http');
+const { paramsSyncMap } = require('../infrastructure/config/paramsSyncMap');
+const { lerEstado, salvarEstado, decidirAcao } = require('../parametrosGlobaisState');
 
 async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
   let parametrosServidor = {};
