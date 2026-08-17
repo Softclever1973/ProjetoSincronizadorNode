@@ -1,8 +1,8 @@
-const { query, execute } = require('./infrastructure/firebird/db');
-const { enviarRegistro } = require('./http');
-const { atualizarOuSalvarConflito } = require('./infrastructure/persistence/conflitos');
+const { query, execute } = require('../../infrastructure/firebird/db');
+const { enviarRegistro } = require('../../http');
+const { atualizarOuSalvarConflito } = require('../../infrastructure/persistence/conflitos');
 const { registrarEcho } = require('./echos');
-const { salvarErro } = require('./infrastructure/persistence/erros');
+const { salvarErro } = require('../../infrastructure/persistence/erros');
 
 /**
  * Envia ao servidor os registros locais que foram alterados desde o último sync.

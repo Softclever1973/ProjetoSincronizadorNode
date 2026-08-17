@@ -10,7 +10,7 @@ jest.mock('../src/client/http', () => ({
 jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({
   atualizarOuSalvarConflito: jest.fn(),
 }));
-jest.mock('../src/client/echos', () => ({
+jest.mock('../src/client/application/syncEngine/echos', () => ({
   registrarEcho: jest.fn(),
 }));
 jest.mock('../src/client/infrastructure/persistence/erros', () => ({
@@ -20,8 +20,8 @@ jest.mock('../src/client/infrastructure/persistence/erros', () => ({
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro } = require('../src/client/http');
 const { atualizarOuSalvarConflito } = require('../src/client/infrastructure/persistence/conflitos');
-const { registrarEcho } = require('../src/client/echos');
-const { empurrarTabela } = require('../src/client/push');
+const { registrarEcho } = require('../src/client/application/syncEngine/echos');
+const { empurrarTabela } = require('../src/client/application/syncEngine/push');
 const { mockQueryPorSql: mockQueryPorSqlHelper } = require('./helpers/mockQuery');
 
 const noopLog = () => {};

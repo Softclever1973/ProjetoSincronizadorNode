@@ -5,12 +5,12 @@ jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
 }));
-jest.mock('../src/client/cursor', () => ({
+jest.mock('../src/client/application/syncEngine/cursor', () => ({
   getUltimaAtualizacao: jest.fn(),
   getUltimaDelecao: jest.fn(),
   salvarCursor: jest.fn(),
 }));
-jest.mock('../src/client/echos', () => ({
+jest.mock('../src/client/application/syncEngine/echos', () => ({
   consumirEcho: jest.fn(),
   registrarEcho: jest.fn(),
 }));
@@ -29,11 +29,11 @@ jest.mock('../src/client/infrastructure/firebird/db-utils', () => ({
 }));
 
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
-const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('../src/client/cursor');
-const { consumirEcho } = require('../src/client/echos');
+const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('../src/client/application/syncEngine/cursor');
+const { consumirEcho } = require('../src/client/application/syncEngine/echos');
 const { buscarRegistrosParaAtualizar, buscarRegistrosParaDeletar } = require('../src/client/http');
 const { salvarConflito } = require('../src/client/infrastructure/persistence/conflitos');
-const { sincronizarTabela, _resetCachesParaTeste } = require('../src/client/sync');
+const { sincronizarTabela, _resetCachesParaTeste } = require('../src/client/application/syncEngine/sync');
 
 const noopLog = () => {};
 

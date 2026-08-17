@@ -195,8 +195,8 @@ async function main() {
   }
 
   const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./infrastructure/firebird/db');
-  const { sincronizarTabela } = require('./sync');
-  const { empurrarTabela } = require('./push');
+  const { sincronizarTabela } = require('./application/syncEngine/sync');
+  const { empurrarTabela } = require('./application/syncEngine/push');
   const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
   const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
   const { syncParametrosGlobais } = require('./syncParametrosGlobais');
