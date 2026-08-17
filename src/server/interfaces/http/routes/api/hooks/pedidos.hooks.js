@@ -1,7 +1,8 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS.
  */
-const { query, execute } = require('../../../../../infrastructure/db');
+const { execute } = require('../../../../../infrastructure/db');
+const { existePagamentoRealizado } = require('../../../../../infrastructure/repositories/pedidosRepository');
 const { resolverNomeVendedor, gerarContasReceberDoPedido } = require('../helpers');
 
 function aplicarCamposAutomaticos(req, registro) {
@@ -69,11 +70,7 @@ async function validarTransicao(db, { registro, update, dadosAntes }) {
       );
     }
     if ((statusAntigo === 'R' && statusNovo === 'P') || (statusAntigo === 'P' && statusNovo === 'C')) {
-      const pago = await query(db,
-        `SELECT 1 FROM PEDIDOS_PARCELAS_PAGAMENTOS WHERE ID_PEDIDO = $1 AND STATUS = 'R' LIMIT 1`,
-        [registro.ID_PEDIDO]
-      ).catch(() => []);
-      if (pago.length > 0) throw Object.assign(
+      if (await existePagamentoRealizado(db, registro.ID_PEDIDO)) throw Object.assign(
         new Error('Não é possível alterar o status: já existe pagamento registrado para este pedido.'),
         { isValidation: true }
       );
