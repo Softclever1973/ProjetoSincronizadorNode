@@ -6,28 +6,13 @@ const { requireRole } = require('../../middleware/checkRole');
 const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const { gerarContasReceberDoPedido } = require('../../../../application/financeiro/gerarContasReceberDoPedido');
+const { gerarFluxoCaixa } = require('../../../../application/financeiro/fluxoCaixa');
+const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('../../../../domain/financeiro');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))
     return res.status(403).json({ erro: 'acesso negado' });
   next();
-}
-
-// Convenção do Firebird legado: "pago"/"recebido" gravam como "Realizado", não "Pago"/"Recebido" — leitura já normaliza via LOWER().
-function capitalizarStatus(status) {
-  const s = String(status).trim().toLowerCase();
-  if (s === 'pago' || s === 'recebido') return 'Realizado';
-  return s.charAt(0).toUpperCase() + s.slice(1);
-}
-
-// Próximo dia útil (sem feriados); ::timestamp explícito pra bind resolver o mesmo tipo na query toda.
-function exprProximoDiaUtil(expr) {
-  const v = `((${expr})::timestamp)`;
-  return `(CASE EXTRACT(DOW FROM ${v})
-    WHEN 0 THEN ${v} + INTERVAL '1 day'
-    WHEN 6 THEN ${v} + INTERVAL '2 days'
-    ELSE ${v}
-  END)`;
 }
 
 const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
@@ -46,14 +31,6 @@ async function resolverIdCondicaoPagamento(s, descricao) {
     `SELECT id_aux_parcela_pagamento FROM ${s}.aux_parcelas_pagamentos WHERE TRIM(descricao) ILIKE TRIM($1) LIMIT 1`, [descricao]
   );
   return rows[0]?.id_aux_parcela_pagamento ?? null;
-}
-
-// Mesma regra do Sirius desktop: data de pagamento não pode ser futura (só contas a pagar por enquanto).
-function dataFutura(data) {
-  if (!data) return false;
-  const hoje = new Date();
-  const hojeStr = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}-${String(hoje.getDate()).padStart(2, '0')}`;
-  return String(data).slice(0, 10) > hojeStr;
 }
 
 // Colunas do formulário A_PAGAR do Sirius Delphi que faltavam aqui — garante antes de usar (cache por processo).
@@ -630,72 +607,8 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
   const mes = req.query.mes || new Date().toISOString().slice(0, 7); // YYYY-MM
   const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
 
-  const lojaWhereCR = filtroLoja !== null && !isNaN(filtroLoja) ? `AND id_loja = ${filtroLoja}` : '';
-
   try {
-    const temMovCaixa = await pool.query(`
-      SELECT 1 FROM information_schema.tables
-      WHERE table_schema = $1 AND table_name = 'mov_caixa'
-    `, [s.toLowerCase()]);
-
-    const movCaixaUnion = temMovCaixa.rows.length > 0 ? `
-      UNION ALL
-      SELECT
-        COALESCE(DATA_MOV::DATE, DATE_TRUNC('month', '${mes}-01'::DATE)) AS data,
-        SUM(CASE WHEN TIPO IN ('E','ENTRADA') THEN COALESCE(VALOR,0) ELSE 0 END) AS entradas,
-        SUM(CASE WHEN TIPO IN ('S','SAIDA','SAÍDA') THEN COALESCE(VALOR,0) ELSE 0 END) AS saidas
-      FROM ${s}.MOV_CAIXA
-      WHERE DATA_MOV::DATE >= '${mes}-01'::DATE AND DATA_MOV::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
-        ${filtroLoja !== null && !isNaN(filtroLoja) ? `AND ID_LOJA = ${filtroLoja}` : ''}
-      GROUP BY DATA_MOV::DATE
-    ` : '';
-
-    const { rows } = await pool.query(`
-      WITH base AS (
-        SELECT
-          data_realizado::DATE AS data,
-          SUM(valor) AS entradas,
-          0::NUMERIC AS saidas
-        FROM ${s}.a_receber
-        WHERE LOWER(COALESCE(status::text,'')) IN ('recebido','recebida','realizada','realizado')
-          AND data_realizado::DATE >= '${mes}-01'::DATE
-          AND data_realizado::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
-          ${lojaWhereCR}
-        GROUP BY data_realizado::DATE
-
-        UNION ALL
-
-        SELECT
-          data_realizado::DATE AS data,
-          0::NUMERIC AS entradas,
-          SUM(valor) AS saidas
-        FROM ${s}.a_pagar
-        WHERE LOWER(COALESCE(status::text,'')) IN ('pago','paga','realizado','realizada')
-          AND data_realizado::DATE >= '${mes}-01'::DATE
-          AND data_realizado::DATE < ('${mes}-01'::DATE + INTERVAL '1 month')
-          ${lojaWhereCR}
-        GROUP BY data_realizado::DATE
-
-        ${movCaixaUnion}
-      ),
-      agrupado AS (
-        SELECT
-          data,
-          SUM(entradas) AS entradas,
-          SUM(saidas)   AS saidas
-        FROM base
-        GROUP BY data
-        ORDER BY data
-      )
-      SELECT
-        data,
-        entradas,
-        saidas,
-        SUM(entradas - saidas) OVER (ORDER BY data ROWS UNBOUNDED PRECEDING) AS saldo_acumulado
-      FROM agrupado
-      ORDER BY data
-    `);
-
+    const rows = await gerarFluxoCaixa(s, mes, filtroLoja);
     res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
