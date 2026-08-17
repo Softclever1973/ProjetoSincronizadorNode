@@ -4,7 +4,8 @@ const { pool, withTenantConnection, query, isMissingTableError } = require('../.
 const authJwt      = require('../../middleware/authJwt');
 const { requireRole } = require('../../middleware/checkRole');
 const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
-const { registrarAuditLog, gerarContasReceberDoPedido } = require('../api/helpers');
+const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
+const { gerarContasReceberDoPedido } = require('../api/helpers');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))

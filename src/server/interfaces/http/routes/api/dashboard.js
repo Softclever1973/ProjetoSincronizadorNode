@@ -17,7 +17,8 @@ const { requireRole }     = require('../../middleware/checkRole');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
 const { COLS_DATA_PEDIDO } = require('../../../../domain/validacao');
-const { erroServidor, colunasTabela, resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
+const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { erroServidor, resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
 
 /* ── GET /api/:schema/dashboard ── */
 router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {

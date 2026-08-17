@@ -12,9 +12,10 @@ const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('../../../../domain/validacao');
 const { colunasTipadasDeRegistro } = require('../../../../domain/schema');
+const { colunasTabela, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
+const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const {
-  erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog,
-  criarTabelaSeNecessario,
+  erroServidor, resolveIdLoja, pedidoEstaCancelado,
 } = require('./helpers');
 const { getCurrentTime } = require('../../../../infrastructure/timeService');
 const HOOKS = require('./hooks');

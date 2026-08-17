@@ -14,7 +14,7 @@ const { requireRole }          = require('../../middleware/checkRole');
 const { checkSchema }          = require('../../middleware/checkSchema');
 const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao');
-const { registrarAuditLog } = require('./helpers');
+const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
 
 /* ── GET /api/:schema/admin/sync-config ── */

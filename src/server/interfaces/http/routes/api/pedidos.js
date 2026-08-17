@@ -13,7 +13,8 @@ const authJwt             = require('../../middleware/authJwt');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
 const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('../../../../domain/validacao');
-const { erroServidor, colunasTabela, resolveIdLoja } = require('./helpers');
+const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { erroServidor, resolveIdLoja } = require('./helpers');
 
 /* ── GET /api/:schema/pedidos-completo — JOIN das 3 tabelas de pedido ── */
 router.get('/:schema/pedidos-completo', authJwt, checkSchema, async (req, res) => {
