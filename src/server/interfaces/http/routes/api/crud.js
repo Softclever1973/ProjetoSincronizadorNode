@@ -14,8 +14,9 @@ const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, valida
 const { colunasTipadasDeRegistro } = require('../../../../domain/schema');
 const { colunasTabela, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
+const { erroServidor } = require('../../erroServidor');
 const {
-  erroServidor, resolveIdLoja, pedidoEstaCancelado,
+  resolveIdLoja, pedidoEstaCancelado,
 } = require('./helpers');
 const { getCurrentTime } = require('../../../../infrastructure/timeService');
 const HOOKS = require('./hooks');
