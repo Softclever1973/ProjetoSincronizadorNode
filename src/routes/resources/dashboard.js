@@ -16,7 +16,7 @@ const authJwt             = require('../../server/interfaces/http/middleware/aut
 const { requireRole }     = require('../../server/interfaces/http/middleware/checkRole');
 const { checkSchema }     = require('../../server/interfaces/http/middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../server/infrastructure/db');
-const { COLS_DATA_PEDIDO } = require('./constants');
+const { COLS_DATA_PEDIDO } = require('../../server/domain/validacao');
 const { erroServidor, colunasTabela, resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
 
 /* ── GET /api/:schema/dashboard ── */

@@ -12,7 +12,7 @@ const router  = express.Router();
 const authJwt             = require('../../server/interfaces/http/middleware/authJwt');
 const { checkSchema }     = require('../../server/interfaces/http/middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../server/infrastructure/db');
-const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('./constants');
+const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('../../server/domain/validacao');
 const { erroServidor, colunasTabela, resolveIdLoja } = require('./helpers');
 
 /* ── GET /api/:schema/pedidos-completo — JOIN das 3 tabelas de pedido ── */

@@ -13,7 +13,7 @@ const authJwt                  = require('../../server/interfaces/http/middlewar
 const { requireRole }          = require('../../server/interfaces/http/middleware/checkRole');
 const { checkSchema }          = require('../../server/interfaces/http/middleware/checkSchema');
 const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../server/infrastructure/db');
-const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('./constants');
+const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../server/domain/validacao');
 const { registrarAuditLog } = require('./helpers');
 const { PLANOS, PLANO_PADRAO } = require('../../server/domain/planos');
 

@@ -10,7 +10,7 @@ const authJwt             = require('../../server/interfaces/http/middleware/aut
 const { requireRoleOuVendedorEm } = require('../../server/interfaces/http/middleware/checkRole');
 const { checkSchema }     = require('../../server/interfaces/http/middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../server/infrastructure/db');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('./constants');
+const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('../../server/domain/validacao');
 const {
   erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog,
   criarTabelaSeNecessario, colunasTipadasDeRegistro,

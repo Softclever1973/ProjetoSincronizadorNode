@@ -1,4 +1,4 @@
-const { validarRegistro, campo } = require('../src/routes/resources/constants');
+const { validarRegistro, campo } = require('../src/server/domain/validacao');
 
 // Registro CLIENTES válido usado como base — cada teste sobrescreve só o que quer quebrar.
 const clienteValido = {

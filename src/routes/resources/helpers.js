@@ -4,7 +4,7 @@
  */
 
 const { pool, query, execute, withTenantConnection } = require('../../server/infrastructure/db');
-const { COLS_DATA_PEDIDO } = require('./constants');
+const { COLS_DATA_PEDIDO } = require('../../server/domain/validacao');
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 // nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).

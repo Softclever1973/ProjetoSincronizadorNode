@@ -2,8 +2,7 @@
  * Ponto de entrada das rotas de tabelas.
  * Compõe os sub-routers em um único express.Router exportado para src/server.js.
  *
- * Estrutura do módulo:
- *   constants.js  — constantes e validações de negócio
+ * Estrutura do módulo (validações de negócio ficam em src/server/domain/validacao.js):
  *   helpers.js    — colunasTabela, resolveIdLoja, registrarAuditLog, buildNomeLojaExpr,
  *                   dateExprFromCols, buildWhere
  *   crud.js       — GET/POST/DELETE /tabelas/:tabela + /colunas, /next-pk, /by-pk, /distinct
