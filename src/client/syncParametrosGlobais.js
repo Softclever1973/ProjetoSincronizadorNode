@@ -6,7 +6,7 @@
  */
 const { getParam, setParam } = require('./db');
 const { atualizarParametros, buscarParametros } = require('./http');
-const { paramsSyncMap } = require('./paramsSyncMap');
+const { paramsSyncMap } = require('./infrastructure/config/paramsSyncMap');
 const { lerEstado, salvarEstado, decidirAcao } = require('./parametrosGlobaisState');
 
 async function syncParametrosGlobais(db, baseURI, contextoSync, log) {

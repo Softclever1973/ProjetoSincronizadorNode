@@ -10,10 +10,10 @@ const { aplicarResetLocal, emitter: resetEmitter } = require('./resetLocal');
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
 const { getUltimaAtualizacao } = require('./cursor');
-const TABELAS = require('./tabelas');
-const { lerConfig, salvarConfig, defaultAtivo } = require('./tabelasConfig');
+const TABELAS = require('./domain/tabelas');
+const { lerConfig, salvarConfig, defaultAtivo } = require('./infrastructure/config/tabelasConfig');
 const { gerarNovoPK: utilGerarPK } = require('./db-utils');
-const { paramsSyncMap } = require('./paramsSyncMap');
+const { paramsSyncMap } = require('./infrastructure/config/paramsSyncMap');
 
 const TOKEN = process.env.SYNC_TOKEN;
 

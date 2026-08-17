@@ -4,7 +4,7 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../server/infrastructure/db');
 const { initializeTenantSchema } = require('../server/infrastructure/db-init');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('../planos');
-const TABELAS = require('../client/tabelas');
+const TABELAS = require('../client/domain/tabelas');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.

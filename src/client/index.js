@@ -203,8 +203,8 @@ async function main() {
   const { verificarResetServidor } = require('./resetLocal');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
-  const TABELAS = require('./tabelas');
-  const { tabelaAtiva } = require('./tabelasConfig');
+  const TABELAS = require('./domain/tabelas');
+  const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
   const { salvarErro } = require('./erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,

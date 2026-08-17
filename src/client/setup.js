@@ -1,5 +1,5 @@
 const { query, execute, tabelaExiste } = require('./db');
-const TABELAS = require('./tabelas');
+const TABELAS = require('./domain/tabelas');
 
 async function generatorExiste(db, nome) {
   const rows = await query(
