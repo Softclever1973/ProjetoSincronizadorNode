@@ -3,6 +3,36 @@ const { query, execute } = require('./db');
 const cacheFKRefs  = {};
 const cacheCharLen = {};
 const cacheColunasTipadas = {};
+const cacheColunasComputadas = {};
+const cacheColunasFirebird = {};
+
+// Colunas computadas (read-only) de uma tabela — nunca entram em UPDATE/INSERT locais.
+async function getColunasComputadas(db, nomeTabela) {
+  if (cacheColunasComputadas[nomeTabela]) return cacheColunasComputadas[nomeTabela];
+  const rows = await query(db,
+    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+     FROM RDB$RELATION_FIELDS rf
+     JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+     WHERE TRIM(rf.RDB$RELATION_NAME) = ?
+       AND f.RDB$COMPUTED_SOURCE IS NOT NULL`,
+    [nomeTabela]
+  );
+  cacheColunasComputadas[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  return cacheColunasComputadas[nomeTabela];
+}
+
+// Todas as colunas existentes de uma tabela no Firebird (computadas incluídas).
+async function getColunasFirebird(db, nomeTabela) {
+  if (cacheColunasFirebird[nomeTabela]) return cacheColunasFirebird[nomeTabela];
+  const rows = await query(db,
+    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+     FROM RDB$RELATION_FIELDS rf
+     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
+    [nomeTabela]
+  );
+  cacheColunasFirebird[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  return cacheColunasFirebird[nomeTabela];
+}
 
 // RDB$FIELD_TYPE do Firebird → tag de tipo enviada ao servidor (GarantirTabela mapeia a
 // tag pro mesmo bucket grosseiro que inferirTipoPg usa a partir de valor real: BYTEA,
@@ -179,4 +209,4 @@ async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
   await execute(db, `DELETE FROM ${nome} WHERE ${whereParts}`, whereValores);
 }
 
-module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas };
+module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas, getColunasComputadas, getColunasFirebird };

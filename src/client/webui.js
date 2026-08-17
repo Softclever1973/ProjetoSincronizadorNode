@@ -10,10 +10,12 @@ const { aplicarResetLocal, emitter: resetEmitter } = require('./application/rese
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./infrastructure/firebird/db');
 const { getUltimaAtualizacao } = require('./application/syncEngine/cursor');
+const { aplicarRegistroLocal } = require('./application/syncEngine/resolverConflito');
 const TABELAS = require('./domain/tabelas');
 const { lerConfig, salvarConfig, defaultAtivo } = require('./infrastructure/config/tabelasConfig');
-const { gerarNovoPK: utilGerarPK } = require('./infrastructure/firebird/db-utils');
+const { gerarNovoPK: utilGerarPK, getColunasComputadas } = require('./infrastructure/firebird/db-utils');
 const { paramsSyncMap } = require('./infrastructure/config/paramsSyncMap');
+const { isColunaIgnorada, toNaiveDateTime } = require('./domain/auditoria');
 
 const TOKEN = process.env.SYNC_TOKEN;
 
@@ -52,86 +54,6 @@ function _getSession(req) {
   if (!s) return null;
   if (Date.now() > s.expira) { _sessions.delete(sid); return null; }
   return s;
-}
-
-// Cache de colunas computadas (read-only) por tabela
-const cacheColunasComputadas = {};
-
-async function getColunasComputadas(db, nomeTabela) {
-  if (cacheColunasComputadas[nomeTabela]) return cacheColunasComputadas[nomeTabela];
-  const rows = await dbQuery(db,
-    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
-     FROM RDB$RELATION_FIELDS rf
-     JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
-     WHERE TRIM(rf.RDB$RELATION_NAME) = ?
-       AND f.RDB$COMPUTED_SOURCE IS NOT NULL`,
-    [nomeTabela]
-  );
-  cacheColunasComputadas[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
-  return cacheColunasComputadas[nomeTabela];
-}
-
-// Cache de todas as colunas existentes no Firebird por tabela
-const cacheColunasFirebird = {};
-
-async function getColunasFirebird(db, nomeTabela) {
-  if (cacheColunasFirebird[nomeTabela]) return cacheColunasFirebird[nomeTabela];
-  const rows = await dbQuery(db,
-    `SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
-     FROM RDB$RELATION_FIELDS rf
-     WHERE TRIM(rf.RDB$RELATION_NAME) = ?`,
-    [nomeTabela]
-  );
-  cacheColunasFirebird[nomeTabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
-  return cacheColunasFirebird[nomeTabela];
-}
-
-// Colunas excluídas da comparação de auditoria e das escritas locais — controle de
-// sincronização ou metadados de triggers locais com generator próprio (sobrescrever
-// causaria divergência de GEN).
-const COLUNAS_IGNORADAS_AUDITORIA = new Set([
-  'ID_ULTIMA_ATUALIZACAO_MATRIZ',
-  'ID_ULTIMA_ATUALIZACAO_WEB',
-  'ID_ULTIMA_ATT_IFOOD',
-  'DATA_HORA',
-  'DATA_HORA_ATUALIZACAO',
-  'DATA_ALTERACAO',
-  'DATA_ULTIMA_ALTERACAO',
-  'DATA_ULTIMA_ATUALIZACAO',
-  'TIMESTAMP_ALTERACAO',
-  'ID_ULTIMA_ATUALIZACAO',
-  'DATA_ULTIMA_MOVIMENTACAO',
-  'DATA_ULTIMA_ENTRADA',
-  'DATA_ULTIMA_SAIDA',
-  'DATA_INCLUSAO_SIRIUS',
-  'DATA_ALTERACAO_SIRIUS',
-  'ULTIMA_ALTERACAO',
-  'DATA_PRECO_VENDA',
-  'DATA_ULTIMA_ATUAL_IMP_ENTRADA',
-  'DATA_PRECO_CUSTO',
-]);
-
-function isColunaIgnorada(coluna) {
-  return COLUNAS_IGNORADAS_AUDITORIA.has((coluna ?? '').toUpperCase());
-}
-
-// Aplica um registro (versão do servidor, mesclado, ou servidor com PK renomeado) no
-// Firebird local via UPDATE OR INSERT — usado pelos 3 dos 4 fluxos de resolução de
-// conflito ('servidor', 'mesclar', 'manter_ambos') que precisam gravar localmente antes
-// de (re)enviar ao servidor. 'local' não usa isso — só reenvia o que já está no Firebird.
-async function aplicarRegistroLocal(db, tabela, pk, registro) {
-  const computadas      = await getColunasComputadas(db, tabela);
-  const colunasFirebird = await getColunasFirebird(db, tabela);
-  const colunas = Object.keys(registro).filter(k =>
-    registro[k] !== undefined && !COLUNAS_IGNORADAS_AUDITORIA.has(k) && !computadas.has(k) && colunasFirebird.has(k)
-  );
-  const placeholders = colunas.map(() => '?').join(', ');
-  const valores = colunas.map(c => (registro[c] === undefined ? null : registro[c]));
-  const pks = Array.isArray(pk) ? pk : [pk];
-  await dbExecute(db,
-    `UPDATE OR INSERT INTO ${tabela} (${colunas.join(', ')}) VALUES (${placeholders}) MATCHING (${pks.join(', ')})`,
-    valores
-  );
 }
 
 function normalizarBlobs(row) {
@@ -203,27 +125,6 @@ function formatDisplay(v) {
   if (v === null || v === undefined) return '<span style="color:#aaa;font-style:italic">NULL</span>';
   if (typeof v === 'string' && v.trim() === '') return '<span style="color:#aaa;font-style:italic">"" (vazio)</span>';
   return v;
-}
-
-/**
- * Extrai a representação "ingênua" de uma data/timestamp — sem timezone.
- * Firebird armazena timestamps sem timezone; node-firebird retorna Date objects
- * no cliente (usando horário local da máquina) e ISO strings UTC no servidor.
- * Comparar getTime() causa falsos positivos de 3h (UTC-3). Comparar apenas
- * os dígitos de data/hora ignora o fuso e reflete o valor real armazenado.
- */
-function toNaiveDateTime(v) {
-  const pad = n => String(n).padStart(2, '0');
-  if (v instanceof Date) {
-    // Usa horário LOCAL da máquina — é o que o Firebird armazenou
-    return `${v.getFullYear()}-${pad(v.getMonth() + 1)}-${pad(v.getDate())}` +
-           `T${pad(v.getHours())}:${pad(v.getMinutes())}:${pad(v.getSeconds())}`;
-  }
-  if (typeof v === 'string') {
-    // Remove frações de segundo e sufixo de timezone ("Z", "+00:00", "-03:00" …)
-    return v.replace(/\.\d+/, '').replace(/([+-]\d{2}:\d{2}|Z)$/, '').replace(' ', 'T');
-  }
-  return String(v);
 }
 
 function saoIguais(v1, v2) {
