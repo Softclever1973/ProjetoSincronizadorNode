@@ -6,7 +6,7 @@ const {
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
 } = require('./http');
-const { salvarConflito } = require('./conflitos');
+const { salvarConflito } = require('./infrastructure/persistence/conflitos');
 const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('./infrastructure/firebird/db-utils');
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez

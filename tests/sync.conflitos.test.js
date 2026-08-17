@@ -19,7 +19,7 @@ jest.mock('../src/client/http', () => ({
   buscarRegistrosParaDeletar: jest.fn(),
   buscarProdutosParaAtualizar: jest.fn(),
 }));
-jest.mock('../src/client/conflitos', () => ({
+jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({
   salvarConflito: jest.fn(),
 }));
 jest.mock('../src/client/infrastructure/firebird/db-utils', () => ({
@@ -32,7 +32,7 @@ const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('../src/client/cursor');
 const { consumirEcho } = require('../src/client/echos');
 const { buscarRegistrosParaAtualizar, buscarRegistrosParaDeletar } = require('../src/client/http');
-const { salvarConflito } = require('../src/client/conflitos');
+const { salvarConflito } = require('../src/client/infrastructure/persistence/conflitos');
 const { sincronizarTabela, _resetCachesParaTeste } = require('../src/client/sync');
 
 const noopLog = () => {};

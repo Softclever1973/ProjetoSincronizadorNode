@@ -107,12 +107,12 @@ if (process.env.SINCRONIZADOR_BG) {
 // ---------------------------------------------------------------------------
 process.on('uncaughtException', e => {
   console.error(`[uncaughtException] ${e.stack || e.message}`);
-  try { require('./erros').salvarErro({ operacao: 'uncaughtException', mensagem: e.stack || e.message }); } catch {}
+  try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'uncaughtException', mensagem: e.stack || e.message }); } catch {}
 });
 process.on('unhandledRejection', e => {
   const msg = e instanceof Error ? (e.stack || e.message) : String(e);
   console.error(`[unhandledRejection] ${msg}`);
-  try { require('./erros').salvarErro({ operacao: 'unhandledRejection', mensagem: msg }); } catch {}
+  try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'unhandledRejection', mensagem: msg }); } catch {}
 });
 
 // ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ async function main() {
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
   const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
-  const { salvarErro } = require('./erros');
+  const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
@@ -554,7 +554,7 @@ function _rollbackAtualizacaoFatalBruto() {
     } catch (e) {
       tentativas++;
       const msg = e.stack || e.message;
-      try { require('./erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
+      try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
 
       const pendente = isPackaged && _temAtualizacaoPendenteBruto();
 
