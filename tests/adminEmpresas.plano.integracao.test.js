@@ -12,7 +12,7 @@ const jwt = require('jsonwebtoken');
 
 const { pool } = require('../src/server/infrastructure/db');
 const { initializeDatabase } = require('../src/server/infrastructure/db-init');
-const { PLANO_PADRAO } = require('../src/planos');
+const { PLANO_PADRAO } = require('../src/server/domain/planos');
 const adminEmpresasRouter = require('../src/routes/adminEmpresas');
 const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
 const requireSuperAdmin = require('../src/server/interfaces/http/middleware/requireSuperAdmin');
@@ -133,7 +133,7 @@ describe('PUT /superadmin/empresas/:schema/plano', () => {
 });
 
 describe('GET /superadmin/planos', () => {
-  test('lista os planos definidos em src/planos.json', async () => {
+  test('lista os planos definidos em src/server/domain/planos.json', async () => {
     const res = await request(app).get('/superadmin/planos').set('Authorization', AUTH_SUPERADMIN);
 
     expect(res.status).toBe(200);

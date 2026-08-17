@@ -15,7 +15,7 @@ const { checkSchema }          = require('../../server/interfaces/http/middlewar
 const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../server/infrastructure/db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('./constants');
 const { registrarAuditLog } = require('./helpers');
-const { PLANOS, PLANO_PADRAO } = require('../../planos');
+const { PLANOS, PLANO_PADRAO } = require('../../server/domain/planos');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {

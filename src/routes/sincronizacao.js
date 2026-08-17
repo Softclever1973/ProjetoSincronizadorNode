@@ -3,7 +3,7 @@ const router = express.Router();
 const auth = require('../server/interfaces/http/middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../server/infrastructure/db');
 const { isFilialBloqueada } = require('../server/interfaces/http/middleware/filialBloqueada');
-const { planoValido } = require('../planos');
+const { planoValido } = require('../server/domain/planos');
 const {
   registrarAuditLog, gerarContasReceberDoPedido,
   COLUNAS_IGNORADAS_SERVIDOR, chaveNegocioTabela,

@@ -6,7 +6,7 @@ const jwt = require('jsonwebtoken');
 
 const adminRouter = require('../src/routes/resources/admin');
 const { pool } = require('../src/server/infrastructure/db');
-const { PLANO_PADRAO } = require('../src/planos');
+const { PLANO_PADRAO } = require('../src/server/domain/planos');
 
 const SCHEMA = 'empresa_teste_plano_info';
 

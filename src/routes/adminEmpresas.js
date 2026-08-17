@@ -3,7 +3,7 @@ const router   = express.Router();
 const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../server/infrastructure/db');
 const { initializeTenantSchema } = require('../server/infrastructure/db-init');
-const { planoValido, listarPlanos, PLANO_PADRAO } = require('../planos');
+const { planoValido, listarPlanos, PLANO_PADRAO } = require('../server/domain/planos');
 const TABELAS = require('../client/domain/tabelas');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
@@ -26,7 +26,7 @@ router.get('/empresas', async (req, res) => {
 });
 
 // ── GET /superadmin/planos ────────────────────────────────────────────────────
-// Lista os planos disponíveis (src/planos.json) — admin.html usa isso pra nunca
+// Lista os planos disponíveis (src/server/domain/planos.json) — admin.html usa isso pra nunca
 // hardcodar nomes/labels de tier.
 
 router.get('/planos', (req, res) => {
