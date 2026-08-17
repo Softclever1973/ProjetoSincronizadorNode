@@ -194,6 +194,13 @@ function atualizarPlano(baseURI, plano) {
   );
 }
 
+// Consulta se o tenant foi resetado no servidor — usado por resetLocal.js. get() sempre
+// envolve o JSON num array, então desembrulha aqui.
+function verificarStatusReset(baseURI) {
+  return get(`${baseURI}/datasnap/rest/TSMSincronizacao/StatusReset?token=${TOKEN}`)
+    .then(rows => rows[0] || {});
+}
+
 module.exports = {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
@@ -204,4 +211,5 @@ module.exports = {
   atualizarParametros,
   buscarParametros,
   atualizarPlano,
+  verificarStatusReset,
 };

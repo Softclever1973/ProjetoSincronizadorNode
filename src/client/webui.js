@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { listarPendentes, resolverConflito, lerTodos, salvarConflito, salvarLoteConflitos, clearConflitos, emitter: conflitosEmitter } = require('./conflitos');
 const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./erros');
 const { emitter: atualizacaoEmitter } = require('./updater');
+const { aplicarResetLocal, emitter: resetEmitter } = require('./resetLocal');
 const { enviarRegistro } = require('./http');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
 const { getUltimaAtualizacao } = require('./cursor');
@@ -393,6 +394,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.locals.abasPermitidas       = ABAS_POR_ROLE[sess.role] || new Set();
     res.locals.atualizacaoDisponivel = contexto.atualizacaoDisponivel || null;
     res.locals.atualizacaoStatus = contexto.atualizacaoStatus || null;
+    res.locals.resetPendente = contexto.resetPendente || null;
     next();
   });
 
@@ -1167,6 +1169,23 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     }
   });
 
+  // Limpeza local após reset no servidor — ver src/client/resetLocal.js e o banner 'novo-reset-pendente'.
+  app.post('/reset-local/aplicar', async (req, res) => {
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
+    try {
+      const resultado = await aplicarResetLocal(db, contexto.baseURI, console.log);
+      contexto.resetPendente = null;
+      res.json({ ok: true, ...resultado });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
+    } finally {
+      await closeConnection(db);
+    }
+  });
+
   app.post('/configuracoes/toggle-todos', async (req, res) => {
     const { ativo } = req.body || {};
     if (typeof ativo !== 'boolean') {
@@ -1207,15 +1226,21 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
       res.write(`event: atualizacao-status\ndata: ${JSON.stringify(status)}\n\n`);
     };
 
+    const onResetPendente = (info) => {
+      res.write(`event: novo-reset-pendente\ndata: ${JSON.stringify(info)}\n\n`);
+    };
+
     errosEmitter.on('novo-erro', onErro);
     conflitosEmitter.on('novo-conflito', onConflito);
     atualizacaoEmitter.on('status', onAtualizacaoStatus);
+    resetEmitter.on('novo-reset-pendente', onResetPendente);
 
     req.on('close', () => {
       clearInterval(keepAlive);
       errosEmitter.off('novo-erro', onErro);
       conflitosEmitter.off('novo-conflito', onConflito);
       atualizacaoEmitter.off('status', onAtualizacaoStatus);
+      resetEmitter.off('novo-reset-pendente', onResetPendente);
     });
   });
 

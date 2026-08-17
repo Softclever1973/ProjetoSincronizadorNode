@@ -235,6 +235,17 @@ async function setup(db, log = console.log, token = null) {
     }
   }
 
+  // 9. Status do último reset de servidor conhecido localmente (tabela de 1 linha)
+  if (!(await tabelaExiste(db, 'SYNC_RESET_STATUS'))) {
+    await execute(db, `
+      CREATE TABLE SYNC_RESET_STATUS (
+        ID                     INTEGER   NOT NULL PRIMARY KEY,
+        ULTIMO_RESET_CONHECIDO TIMESTAMP
+      )
+    `);
+    log('[SETUP] Tabela SYNC_RESET_STATUS criada');
+  }
+
   log('[SETUP] Infraestrutura de sync bidirecional pronta');
 }
 

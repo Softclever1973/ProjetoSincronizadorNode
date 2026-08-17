@@ -200,6 +200,7 @@ async function main() {
   const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
   const { getColunasTipadas } = require('./db-utils');
   const { syncParametrosGlobais } = require('./syncParametrosGlobais');
+  const { verificarResetServidor } = require('./resetLocal');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./tabelas');
@@ -229,6 +230,7 @@ async function main() {
   const contextoSync = {
     baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
     versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null, atualizacaoStatus: null,
+    resetPendente: null,
   };
 
   function log(msg) {
@@ -370,6 +372,11 @@ async function main() {
           await syncParametrosGlobais(db, baseURI, contextoSync, log);
         } catch (e) {
           log(`[Parametros] erro ao sincronizar parametros: ${e.message}`);
+        }
+        try {
+          await verificarResetServidor(db, baseURI, contextoSync, log);
+        } catch (e) {
+          log(`[Reset] erro ao verificar status de reset: ${e.message}`);
         }
       }
 

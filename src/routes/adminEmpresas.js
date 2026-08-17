@@ -229,6 +229,10 @@ router.post('/empresas/:schema/reset', async (req, res) => {
       ...tabelasComSrvId.map(t => `UPDATE ${t} SET SRV_ID = NULL WHERE SRV_ID IS NOT NULL;`),
     ].join('\n');
 
+    await client.query(
+      `UPDATE public.sync_tenants SET resetado_em = NOW() WHERE schema_name = $1`, [schema]
+    );
+
     res.json({ ok: true, tabelasRemovidas: tabelasDados, comandosFirebird });
   } catch (e) {
     res.status(500).json({ erro: e.message });

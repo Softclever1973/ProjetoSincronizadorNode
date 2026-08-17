@@ -165,6 +165,43 @@
     wrap.innerHTML = '';
   }
 
+  function renderBannerReset(resetPendente) {
+    var wrap = document.getElementById('banner-reset-wrap');
+    if (!wrap) return;
+
+    if (resetPendente) {
+      wrap.innerHTML =
+        '<div id="banner-reset" style="background:#fee2e2;border-bottom:1px solid #fca5a5;color:#991b1b;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+        '<span>⚠️ O servidor desta empresa foi resetado. É necessário limpar os dados locais de sincronização.</span>' +
+        '<button id="btn-resetar-local" style="margin-left:auto;padding:4px 14px;font-size:12px;border:1px solid #991b1b;border-radius:var(--radius-sm);background:white;color:#991b1b;cursor:pointer;font-family:var(--font-sans)">Resetar dados locais agora</button>' +
+        '</div>';
+      return;
+    }
+
+    wrap.innerHTML = '';
+  }
+
+  async function _iniciarResetLocal(btn) {
+    if (!confirm('Isso vai apagar a fila de alterações pendentes de envio e o histórico de conflitos/erros locais, e refazer o vínculo dos registros com o servidor. É irreversível. Continuar?')) return;
+    btn.disabled = true;
+    btn.textContent = 'Resetando…';
+    try {
+      var r = await fetch('/reset-local/aplicar', { method: 'POST' });
+      var d = await r.json();
+      if (d.ok) {
+        renderBannerReset(null);
+      } else {
+        _notificarErro(btn, 'Erro ao resetar: ' + (d.message || 'erro desconhecido'));
+        btn.disabled = false;
+        btn.textContent = 'Resetar dados locais agora';
+      }
+    } catch (ex) {
+      _notificarErro(btn, 'Erro ao resetar: ' + ex.message);
+      btn.disabled = false;
+      btn.textContent = 'Resetar dados locais agora';
+    }
+  }
+
   async function _iniciarAtualizacaoManual(btn) {
     if (!confirm('O cliente vai baixar a nova versão, substituir o executável e reiniciar sozinho — isso pode levar até ~10 segundos. Se algo der errado, ele reverte automaticamente para a versão atual. Continuar?')) return;
     btn.disabled = true;
@@ -185,9 +222,11 @@
 
   document.addEventListener('click', function (e) {
     if (e.target && e.target.id === 'btn-atualizar-agora') _iniciarAtualizacaoManual(e.target);
+    if (e.target && e.target.id === 'btn-resetar-local') _iniciarResetLocal(e.target);
   });
 
   renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, window.__atualizacaoStatusInicial);
+  renderBannerReset(window.__resetPendenteInicial);
 
   // ── SSE: badges e notificações em tempo real ─────────────────────────────
   (function () {
@@ -241,6 +280,12 @@
       try {
         var status = JSON.parse(e.data);
         renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, status);
+      } catch (_) {}
+    });
+
+    es.addEventListener('novo-reset-pendente', function(e) {
+      try {
+        renderBannerReset(JSON.parse(e.data));
       } catch (_) {}
     });
 

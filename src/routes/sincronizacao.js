@@ -923,6 +923,19 @@ router.post('/AtualizarPlano', auth, async (req, res) => {
   }
 });
 
+// GET /StatusReset — client usa pra detectar reset do tenant (ver src/client/resetLocal.js).
+router.get('/StatusReset', auth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'SELECT resetado_em FROM public.sync_tenants WHERE schema_name = $1',
+      [req.schemaName]
+    );
+    res.json(rows[0] ?? {});
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // Chaves aceitas em POST /AtualizarParametros (push client -> servidor).
 // Mantenha em sincronia manual com src/client/paramsSyncMap.js (deploys separados).
 const CHAVES_ACEITAS = new Set([

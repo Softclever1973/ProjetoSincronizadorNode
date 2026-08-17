@@ -51,3 +51,10 @@
   window.__atualizacaoDisponivelInicial = <%- JSON.stringify(typeof atualizacaoDisponivel !== 'undefined' ? atualizacaoDisponivel : null) %>;
   window.__atualizacaoStatusInicial = <%- JSON.stringify(typeof atualizacaoStatus !== 'undefined' ? atualizacaoStatus : null) %>;
 </script>
+
+<!-- Preenchido no load e mantido em tempo real via SSE 'novo-reset-pendente' — ver
+     renderBannerReset() em scripts.ejs. Server-side só fornece o estado inicial. -->
+<div id="banner-reset-wrap"></div>
+<script>
+  window.__resetPendenteInicial = <%- JSON.stringify(typeof resetPendente !== 'undefined' ? resetPendente : null) %>;
+</script>

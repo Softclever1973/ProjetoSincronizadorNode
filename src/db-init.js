@@ -73,6 +73,8 @@ const DDL_CONTROLE = [
   `UPDATE public.sync_tenants SET plano = 'SAFIRA1'   WHERE plano = 'safira'`,
   `UPDATE public.sync_tenants SET plano = 'DIAMANTE1' WHERE plano = 'diamante'`,
   `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'LITE1'`,
+  // Timestamp do último reset — client usa pra detectar e disparar o banner de limpeza local.
+  `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS resetado_em TIMESTAMP`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
