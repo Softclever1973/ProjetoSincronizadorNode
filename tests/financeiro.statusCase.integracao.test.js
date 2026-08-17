@@ -5,7 +5,7 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const financeiroRouter = require('../src/routes/financeiro');
+const financeiroRouter = require('../src/server/interfaces/http/routes/datasnap/financeiro');
 const { pool } = require('../src/server/infrastructure/db');
 const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
 

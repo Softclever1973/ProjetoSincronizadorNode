@@ -9,13 +9,13 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt                  = require('../../server/interfaces/http/middleware/authJwt');
-const { requireRole }          = require('../../server/interfaces/http/middleware/checkRole');
-const { checkSchema }          = require('../../server/interfaces/http/middleware/checkSchema');
-const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../server/infrastructure/db');
-const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../server/domain/validacao');
+const authJwt                  = require('../../middleware/authJwt');
+const { requireRole }          = require('../../middleware/checkRole');
+const { checkSchema }          = require('../../middleware/checkSchema');
+const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
+const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao');
 const { registrarAuditLog } = require('./helpers');
-const { PLANOS, PLANO_PADRAO } = require('../../server/domain/planos');
+const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {

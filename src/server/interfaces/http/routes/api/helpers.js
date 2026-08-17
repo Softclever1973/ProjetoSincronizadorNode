@@ -3,8 +3,8 @@
  * Extraídos de tabelas.js (monolítico) para facilitar reutilização e testes.
  */
 
-const { pool, query, execute, withTenantConnection } = require('../../server/infrastructure/db');
-const { COLS_DATA_PEDIDO } = require('../../server/domain/validacao');
+const { pool, query, execute, withTenantConnection } = require('../../../../infrastructure/db');
+const { COLS_DATA_PEDIDO } = require('../../../../domain/validacao');
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 // nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).

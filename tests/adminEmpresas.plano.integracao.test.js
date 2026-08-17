@@ -13,7 +13,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../src/server/infrastructure/db');
 const { initializeDatabase } = require('../src/server/infrastructure/db-init');
 const { PLANO_PADRAO } = require('../src/server/domain/planos');
-const adminEmpresasRouter = require('../src/routes/adminEmpresas');
+const adminEmpresasRouter = require('../src/server/interfaces/http/routes/datasnap/adminEmpresas');
 const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
 const requireSuperAdmin = require('../src/server/interfaces/http/middleware/requireSuperAdmin');
 

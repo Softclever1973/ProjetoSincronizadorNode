@@ -1,10 +1,10 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query, execute } = require('../server/infrastructure/db');
-const authJwt  = require('../server/interfaces/http/middleware/authJwt');
-const { requireRole } = require('../server/interfaces/http/middleware/checkRole');
-const { registrarAuditLog } = require('./resources/helpers');
+const { pool, withTenantConnection, query, execute } = require('../../../../infrastructure/db');
+const authJwt  = require('../../middleware/authJwt');
+const { requireRole } = require('../../middleware/checkRole');
+const { registrarAuditLog } = require('../api/helpers');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 const PODE_CRIAR    = { dono: ['gerente', 'vendedor'], gerente: ['vendedor'] };

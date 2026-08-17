@@ -1,14 +1,14 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../server/interfaces/http/middleware/auth');
-const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../server/infrastructure/db');
-const { isFilialBloqueada } = require('../server/interfaces/http/middleware/filialBloqueada');
-const { planoValido } = require('../server/domain/planos');
+const auth = require('../../middleware/auth');
+const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../../../../infrastructure/db');
+const { isFilialBloqueada } = require('../../middleware/filialBloqueada');
+const { planoValido } = require('../../../../domain/planos');
 const {
   registrarAuditLog, gerarContasReceberDoPedido,
   COLUNAS_IGNORADAS_SERVIDOR, chaveNegocioTabela,
   colunasTipadasDeRegistro, criarTabelaSeNecessario,
-} = require('./resources/helpers');
+} = require('../api/helpers');
 
 /**
  * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções

@@ -11,8 +11,8 @@ const jwt = require('jsonwebtoken');
 
 const { pool } = require('../src/server/infrastructure/db');
 const { initializeDatabase, initializeTenantSchema } = require('../src/server/infrastructure/db-init');
-const sincronizacaoRouter = require('../src/routes/sincronizacao');
-const adminEmpresasRouter = require('../src/routes/adminEmpresas');
+const sincronizacaoRouter = require('../src/server/interfaces/http/routes/datasnap/sincronizacao');
+const adminEmpresasRouter = require('../src/server/interfaces/http/routes/datasnap/adminEmpresas');
 const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
 const requireSuperAdmin = require('../src/server/interfaces/http/middleware/requireSuperAdmin');
 

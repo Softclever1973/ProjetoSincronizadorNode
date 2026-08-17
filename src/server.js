@@ -51,17 +51,17 @@ function encerrarComErro(err) {
   const { recarregarEmpresas } = require('./server/infrastructure/cache/empresasCache');
   const { agendarLimpeza }     = require('./limpeza');
 
-  const sincronizacaoRoutes      = require('./routes/sincronizacao');
-  const produtosRoutes           = require('./routes/produtos');
-  const pedidosRoutes            = require('./routes/pedidos');
-  const movimentacaoCaixasRoutes = require('./routes/movimentacaoCaixas');
-  const distribuicaoRoutes       = require('./routes/distribuicao');
-  const authRoutes               = require('./routes/auth');
-  const userEmpresasRoutes       = require('./routes/userEmpresas');
-  const adminEmpresasRoutes      = require('./routes/adminEmpresas');
-  const tabelasRoutes            = require('./routes/resources');
-  const usuariosRoutes           = require('./routes/usuarios');
-  const financeiroRoutes         = require('./routes/financeiro');
+  const sincronizacaoRoutes      = require('./server/interfaces/http/routes/datasnap/sincronizacao');
+  const produtosRoutes           = require('./server/interfaces/http/routes/datasnap/produtos');
+  const pedidosRoutes            = require('./server/interfaces/http/routes/datasnap/pedidos');
+  const movimentacaoCaixasRoutes = require('./server/interfaces/http/routes/datasnap/movimentacaoCaixas');
+  const distribuicaoRoutes       = require('./server/interfaces/http/routes/datasnap/distribuicao');
+  const authRoutes               = require('./server/interfaces/http/routes/datasnap/auth');
+  const userEmpresasRoutes       = require('./server/interfaces/http/routes/datasnap/userEmpresas');
+  const adminEmpresasRoutes      = require('./server/interfaces/http/routes/datasnap/adminEmpresas');
+  const tabelasRoutes            = require('./server/interfaces/http/routes/api');
+  const usuariosRoutes           = require('./server/interfaces/http/routes/datasnap/usuarios');
+  const financeiroRoutes         = require('./server/interfaces/http/routes/datasnap/financeiro');
   const authJwt                  = require('./server/interfaces/http/middleware/authJwt');
   const requireSuperAdmin        = require('./server/interfaces/http/middleware/requireSuperAdmin');
 

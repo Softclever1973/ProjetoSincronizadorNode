@@ -4,7 +4,7 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const adminRouter = require('../src/routes/resources/admin');
+const adminRouter = require('../src/server/interfaces/http/routes/api/admin');
 const { pool } = require('../src/server/infrastructure/db');
 const { PLANO_PADRAO } = require('../src/server/domain/planos');
 

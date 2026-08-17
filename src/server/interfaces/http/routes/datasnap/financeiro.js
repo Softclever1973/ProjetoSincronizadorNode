@@ -1,10 +1,10 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool, withTenantConnection, query, isMissingTableError } = require('../server/infrastructure/db');
-const authJwt      = require('../server/interfaces/http/middleware/authJwt');
-const { requireRole } = require('../server/interfaces/http/middleware/checkRole');
-const { requirePlanFeature } = require('../server/interfaces/http/middleware/requirePlanFeature');
-const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
+const { pool, withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
+const authJwt      = require('../../middleware/authJwt');
+const { requireRole } = require('../../middleware/checkRole');
+const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
+const { registrarAuditLog, gerarContasReceberDoPedido } = require('../api/helpers');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))

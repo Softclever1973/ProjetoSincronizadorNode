@@ -1,7 +1,7 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS_ITENS.
  */
-const { query } = require('../../../server/infrastructure/db');
+const { query } = require('../../../../../infrastructure/db');
 const { colunasTabela, pedidoEstaCancelado } = require('../helpers');
 
 async function antesDaTransacao(db, registro) {
