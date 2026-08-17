@@ -4,10 +4,10 @@ const auth = require('../../middleware/auth');
 const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../../../../infrastructure/db');
 const { isFilialBloqueada } = require('../../middleware/filialBloqueada');
 const { planoValido } = require('../../../../domain/planos');
+const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('../../../../domain/schema');
 const {
   registrarAuditLog, gerarContasReceberDoPedido,
-  COLUNAS_IGNORADAS_SERVIDOR, chaveNegocioTabela,
-  colunasTipadasDeRegistro, criarTabelaSeNecessario,
+  COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario,
 } = require('../api/helpers');
 
 /**
