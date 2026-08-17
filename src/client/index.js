@@ -141,7 +141,7 @@ if (isPackaged && !process.env.SINCRONIZADOR_BG) {
 // ja tinha o cliente instalado antes dessa mudanca, sem precisar reconfigurar do zero.
 async function carregarConfiguracao() {
   if (fs.existsSync(CONFIG_ENC_PATH)) {
-    const { desprotegerConfig } = require('./config-crypto');
+    const { desprotegerConfig } = require('./infrastructure/config/config-crypto');
     let dados;
     try {
       dados = desprotegerConfig(fs.readFileSync(CONFIG_ENC_PATH, 'utf8'));
@@ -161,7 +161,7 @@ async function carregarConfiguracao() {
     require('dotenv').config({ path: ENV_PATH, quiet: true });
     if (USAR_CRIPTOGRAFIA) {
       try {
-        const { protegerConfig } = require('./config-crypto');
+        const { protegerConfig } = require('./infrastructure/config/config-crypto');
         const CHAVES = ['SYNC_TOKEN', 'FIREBIRD_HOST', 'FIREBIRD_PORT', 'FIREBIRD_DATABASE', 'FIREBIRD_USER', 'FIREBIRD_PASSWORD', 'INTERVALO_MS', 'NOME_FILIAL'];
         const dados = {};
         for (const chave of CHAVES) if (process.env[chave] !== undefined) dados[chave] = process.env[chave];
@@ -194,11 +194,11 @@ async function main() {
     return;
   }
 
-  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
+  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./infrastructure/firebird/db');
   const { sincronizarTabela } = require('./sync');
   const { empurrarTabela } = require('./push');
   const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
-  const { getColunasTipadas } = require('./db-utils');
+  const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
   const { syncParametrosGlobais } = require('./syncParametrosGlobais');
   const { verificarResetServidor } = require('./resetLocal');
   const { setup } = require('./setup');
@@ -210,7 +210,7 @@ async function main() {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
   } = require('./updater');
-  const { notificarToast } = require('./notificar');
+  const { notificarToast } = require('./infrastructure/notificar');
   const { version: VERSAO_ATUAL } = require('../../package.json');
 
   if (!process.env.SYNC_TOKEN) {
@@ -331,7 +331,7 @@ async function main() {
   // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
   // (mostra quando empacotado — em modo background ou normal)
   if (isPackaged) {
-    const { iniciarTray } = require('./tray');
+    const { iniciarTray } = require('./infrastructure/tray');
     iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 

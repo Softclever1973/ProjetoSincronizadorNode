@@ -1,4 +1,4 @@
-const { query, execute, tabelaExiste } = require('./db');
+const { query, execute, tabelaExiste } = require('./infrastructure/firebird/db');
 const TABELAS = require('./domain/tabelas');
 
 async function generatorExiste(db, nome) {

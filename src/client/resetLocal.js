@@ -1,5 +1,5 @@
 const EventEmitter = require('events');
-const { query, execute, tabelaExiste } = require('./db');
+const { query, execute, tabelaExiste } = require('./infrastructure/firebird/db');
 const { verificarStatusReset } = require('./http');
 const TABELAS = require('./domain/tabelas');
 

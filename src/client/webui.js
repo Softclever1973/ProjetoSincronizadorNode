@@ -8,11 +8,11 @@ const { lerTodos: lerErros, limparErros, emitter: errosEmitter } = require('./er
 const { emitter: atualizacaoEmitter } = require('./updater');
 const { aplicarResetLocal, emitter: resetEmitter } = require('./resetLocal');
 const { enviarRegistro } = require('./http');
-const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./db');
+const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('./infrastructure/firebird/db');
 const { getUltimaAtualizacao } = require('./cursor');
 const TABELAS = require('./domain/tabelas');
 const { lerConfig, salvarConfig, defaultAtivo } = require('./infrastructure/config/tabelasConfig');
-const { gerarNovoPK: utilGerarPK } = require('./db-utils');
+const { gerarNovoPK: utilGerarPK } = require('./infrastructure/firebird/db-utils');
 const { paramsSyncMap } = require('./infrastructure/config/paramsSyncMap');
 
 const TOKEN = process.env.SYNC_TOKEN;

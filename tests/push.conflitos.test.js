@@ -1,6 +1,6 @@
 // Mesmo motivo do sync.conflitos.test.js: factories explícitas evitam carregar os módulos
 // reais (../db exige Firebird real no require).
-jest.mock('../src/client/db', () => ({
+jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
 }));
@@ -17,7 +17,7 @@ jest.mock('../src/client/erros', () => ({
   salvarErro: jest.fn(),
 }));
 
-const { query, execute } = require('../src/client/db');
+const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro } = require('../src/client/http');
 const { atualizarOuSalvarConflito } = require('../src/client/conflitos');
 const { registrarEcho } = require('../src/client/echos');

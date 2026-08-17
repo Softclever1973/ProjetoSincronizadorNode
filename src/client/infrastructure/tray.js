@@ -3,7 +3,7 @@ const path = require('path');
 const os = require('os');
 const { exec, execSync } = require('child_process');
 
-const ICON_FILE = path.join(__dirname, 'assets', 'softcleverlogo.ico');
+const ICON_FILE = path.join(__dirname, '..', 'assets', 'softcleverlogo.ico');
 const TEMP_ICON_FILE = path.join(os.tmpdir(), 'sincronizador-tray.ico');
 
 const REG_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';

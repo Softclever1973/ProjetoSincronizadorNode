@@ -1,4 +1,4 @@
-const { query, execute } = require('./db');
+const { query, execute } = require('./infrastructure/firebird/db');
 const { enviarRegistro } = require('./http');
 const { atualizarOuSalvarConflito } = require('./conflitos');
 const { registrarEcho } = require('./echos');

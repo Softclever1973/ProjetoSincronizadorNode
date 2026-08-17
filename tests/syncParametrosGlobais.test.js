@@ -1,7 +1,7 @@
 // Mesmo motivo do sync.conflitos.test.js/push.conflitos.test.js: factories explícitas evitam
 // carregar ../db real (exige Firebird real no require) e ../parametrosGlobaisState real
 // (escreve parametros-sync.json em disco).
-jest.mock('../src/client/db', () => ({
+jest.mock('../src/client/infrastructure/firebird/db', () => ({
   getParam: jest.fn(),
   setParam: jest.fn(),
 }));
@@ -15,7 +15,7 @@ jest.mock('../src/client/parametrosGlobaisState', () => ({
   decidirAcao: jest.requireActual('../src/client/parametrosGlobaisState').decidirAcao,
 }));
 
-const { getParam, setParam } = require('../src/client/db');
+const { getParam, setParam } = require('../src/client/infrastructure/firebird/db');
 const { buscarParametros, atualizarParametros } = require('../src/client/http');
 const { lerEstado, salvarEstado } = require('../src/client/parametrosGlobaisState');
 const { syncParametrosGlobais } = require('../src/client/syncParametrosGlobais');

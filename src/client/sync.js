@@ -1,4 +1,4 @@
-const { execute, query } = require('./db');
+const { execute, query } = require('./infrastructure/firebird/db');
 const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('./cursor');
 const { consumirEcho } = require('./echos');
 const {
@@ -7,7 +7,7 @@ const {
   buscarProdutosParaAtualizar,
 } = require('./http');
 const { salvarConflito } = require('./conflitos');
-const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('./db-utils');
+const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('./infrastructure/firebird/db-utils');
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};

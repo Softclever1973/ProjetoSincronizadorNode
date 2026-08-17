@@ -1,5 +1,5 @@
 const EventEmitter = require('events');
-const { getConnection, closeConnection, query, execute } = require('./db');
+const { getConnection, closeConnection, query, execute } = require('./infrastructure/firebird/db');
 
 const MAX_ERROS = 200;
 
