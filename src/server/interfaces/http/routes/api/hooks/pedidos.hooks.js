@@ -3,7 +3,8 @@
  */
 const { execute } = require('../../../../../infrastructure/db');
 const { existePagamentoRealizado } = require('../../../../../infrastructure/repositories/pedidosRepository');
-const { resolverNomeVendedor, gerarContasReceberDoPedido } = require('../helpers');
+const { resolverNomeVendedor } = require('../helpers');
+const { gerarContasReceberDoPedido } = require('../../../../../application/financeiro/gerarContasReceberDoPedido');
 
 function aplicarCamposAutomaticos(req, registro) {
   const now        = new Date();

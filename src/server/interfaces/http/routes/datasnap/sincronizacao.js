@@ -7,7 +7,7 @@ const { planoValido } = require('../../../../domain/planos');
 const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('../../../../domain/schema');
 const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { gerarContasReceberDoPedido } = require('../api/helpers');
+const { gerarContasReceberDoPedido } = require('../../../../application/financeiro/gerarContasReceberDoPedido');
 
 /**
  * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções

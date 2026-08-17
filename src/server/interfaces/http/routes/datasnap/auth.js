@@ -3,7 +3,7 @@ const router         = express.Router();
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const { pool }              = require('../../../../infrastructure/db');
-const { vincularVendedorDono } = require('../api/helpers');
+const { vincularVendedorDono } = require('../../../../application/onboarding/vincularVendedorDono');
 const authJwt        = require('../../middleware/authJwt');
 const tokenBlacklist = require('../../../../infrastructure/cache/tokenBlacklist');
 

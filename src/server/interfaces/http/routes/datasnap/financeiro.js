@@ -5,7 +5,7 @@ const authJwt      = require('../../middleware/authJwt');
 const { requireRole } = require('../../middleware/checkRole');
 const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { gerarContasReceberDoPedido } = require('../api/helpers');
+const { gerarContasReceberDoPedido } = require('../../../../application/financeiro/gerarContasReceberDoPedido');
 
 function checkSchema(req, res, next) {
   if (!req.userSchemas.includes(req.params.schema))
