@@ -1,5 +1,5 @@
-const { planoTemFeature } = require('../planos');
-const { pool } = require('../db');
+const { planoTemFeature } = require('../../../../planos');
+const { pool } = require('../../../infrastructure/db');
 
 // Lê o plano de sync_tenants a cada requisição, não do claim do JWT — evita 403 indevido logo após um upgrade.
 function requirePlanFeature(featureKey) {

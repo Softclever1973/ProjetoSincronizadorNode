@@ -10,7 +10,7 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const { pool } = require('../src/db');
+const { pool } = require('../src/server/infrastructure/db');
 const crudRouter = require('../src/routes/resources/crud');
 const { TEST_SCHEMA, setupTestSchema } = require('./helpers/testSchema');
 

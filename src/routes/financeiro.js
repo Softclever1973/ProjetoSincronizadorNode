@@ -1,9 +1,9 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool, withTenantConnection, query, isMissingTableError } = require('../db');
-const authJwt      = require('../middleware/authJwt');
-const { requireRole } = require('../middleware/checkRole');
-const { requirePlanFeature } = require('../middleware/requirePlanFeature');
+const { pool, withTenantConnection, query, isMissingTableError } = require('../server/infrastructure/db');
+const authJwt      = require('../server/interfaces/http/middleware/authJwt');
+const { requireRole } = require('../server/interfaces/http/middleware/checkRole');
+const { requirePlanFeature } = require('../server/interfaces/http/middleware/requirePlanFeature');
 const { registrarAuditLog, gerarContasReceberDoPedido } = require('./resources/helpers');
 
 function checkSchema(req, res, next) {

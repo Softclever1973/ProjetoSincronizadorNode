@@ -1,4 +1,4 @@
-const { query } = require('../db');
+const { query } = require('../../../infrastructure/db');
 
 /**
  * Verifica se uma filial está bloqueada.

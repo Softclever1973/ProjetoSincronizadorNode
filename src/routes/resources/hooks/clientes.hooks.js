@@ -1,7 +1,7 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela CLIENTES.
  */
-const { query } = require('../../../db');
+const { query } = require('../../../server/infrastructure/db');
 
 // Unicidade de CPF/CNPJ — pk é 'SRV_ID' no frontend, então pkVals[0] é sempre o SRV_ID
 // do servidor (nunca nulo em edição), independente do ID_CLIENTE do ERP local.

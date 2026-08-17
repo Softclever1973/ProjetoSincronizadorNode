@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../middleware/auth');
-const { withTenantConnection, query, execute } = require('../db');
-const { isFilialBloqueada } = require('../middleware/filialBloqueada');
+const auth = require('../server/interfaces/http/middleware/auth');
+const { withTenantConnection, query, execute } = require('../server/infrastructure/db');
+const { isFilialBloqueada } = require('../server/interfaces/http/middleware/filialBloqueada');
 
 /**
  * POST /datasnap/rest/TSMMovimetacaoCaixas/updateMovimentacaoCaixa

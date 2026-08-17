@@ -1,4 +1,4 @@
-const { checkSchema } = require('../src/middleware/checkSchema');
+const { checkSchema } = require('../src/server/interfaces/http/middleware/checkSchema');
 
 function mockRes() {
   return { status: jest.fn().mockReturnThis(), json: jest.fn() };

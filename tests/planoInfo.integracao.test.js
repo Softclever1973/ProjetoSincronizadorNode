@@ -5,7 +5,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 const adminRouter = require('../src/routes/resources/admin');
-const { pool } = require('../src/db');
+const { pool } = require('../src/server/infrastructure/db');
 const { PLANO_PADRAO } = require('../src/planos');
 
 const SCHEMA = 'empresa_teste_plano_info';

@@ -10,12 +10,12 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const { pool } = require('../src/db');
-const { initializeDatabase } = require('../src/db-init');
+const { pool } = require('../src/server/infrastructure/db');
+const { initializeDatabase } = require('../src/server/infrastructure/db-init');
 const { PLANO_PADRAO } = require('../src/planos');
 const adminEmpresasRouter = require('../src/routes/adminEmpresas');
-const authJwt = require('../src/middleware/authJwt');
-const requireSuperAdmin = require('../src/middleware/requireSuperAdmin');
+const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
+const requireSuperAdmin = require('../src/server/interfaces/http/middleware/requireSuperAdmin');
 
 const app = express();
 app.use(express.json());

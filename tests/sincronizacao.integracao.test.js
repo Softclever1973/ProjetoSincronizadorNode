@@ -11,7 +11,7 @@
 const express = require('express');
 const request = require('supertest');
 
-const { pool } = require('../src/db');
+const { pool } = require('../src/server/infrastructure/db');
 const sincronizacaoRouter = require('../src/routes/sincronizacao');
 const { TEST_SCHEMA, TEST_TOKEN, setupTestSchema } = require('./helpers/testSchema');
 

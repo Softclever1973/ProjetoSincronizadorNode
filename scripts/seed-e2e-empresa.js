@@ -16,8 +16,8 @@
 
 require('dotenv').config();
 const bcrypt = require('bcryptjs');
-const { pool, withTenantConnection, query, execute } = require('../src/db');
-const { initializeTenantSchema } = require('../src/db-init');
+const { pool, withTenantConnection, query, execute } = require('../src/server/infrastructure/db');
+const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
 
 const SCHEMA   = 'empresa_e2e';
 const TOKEN    = 'TOKEN_E2E_EMPRESA_E2E';

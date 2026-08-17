@@ -47,8 +47,8 @@ function encerrarComErro(err) {
 
   const express = require('express');
   const config  = require('./config');
-  const { initializeDatabase, migrarTodosSchemas } = require('./db-init');
-  const { recarregarEmpresas } = require('./empresas');
+  const { initializeDatabase, migrarTodosSchemas } = require('./server/infrastructure/db-init');
+  const { recarregarEmpresas } = require('./server/infrastructure/cache/empresasCache');
   const { agendarLimpeza }     = require('./limpeza');
 
   const sincronizacaoRoutes      = require('./routes/sincronizacao');
@@ -62,8 +62,8 @@ function encerrarComErro(err) {
   const tabelasRoutes            = require('./routes/resources');
   const usuariosRoutes           = require('./routes/usuarios');
   const financeiroRoutes         = require('./routes/financeiro');
-  const authJwt                  = require('./middleware/authJwt');
-  const requireSuperAdmin        = require('./middleware/requireSuperAdmin');
+  const authJwt                  = require('./server/interfaces/http/middleware/authJwt');
+  const requireSuperAdmin        = require('./server/interfaces/http/middleware/requireSuperAdmin');
 
   const app = express();
 

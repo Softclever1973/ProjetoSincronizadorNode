@@ -1,8 +1,8 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query } = require('../db');
-const { initializeTenantSchema } = require('../db-init');
+const { pool, withTenantConnection, query } = require('../server/infrastructure/db');
+const { initializeTenantSchema } = require('../server/infrastructure/db-init');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('../planos');
 const TABELAS = require('../client/tabelas');
 

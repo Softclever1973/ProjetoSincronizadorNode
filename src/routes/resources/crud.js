@@ -6,16 +6,16 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { requireRoleOuVendedorEm } = require('../../middleware/checkRole');
-const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../db');
+const authJwt             = require('../../server/interfaces/http/middleware/authJwt');
+const { requireRoleOuVendedorEm } = require('../../server/interfaces/http/middleware/checkRole');
+const { checkSchema }     = require('../../server/interfaces/http/middleware/checkSchema');
+const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../server/infrastructure/db');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('./constants');
 const {
   erroServidor, colunasTabela, resolveIdLoja, pedidoEstaCancelado, registrarAuditLog,
   criarTabelaSeNecessario, colunasTipadasDeRegistro,
 } = require('./helpers');
-const { getCurrentTime } = require('../../services/timeService');
+const { getCurrentTime } = require('../../server/infrastructure/timeService');
 const HOOKS = require('./hooks');
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */

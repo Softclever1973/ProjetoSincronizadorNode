@@ -9,12 +9,12 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const { pool } = require('../src/db');
-const { initializeDatabase, initializeTenantSchema } = require('../src/db-init');
+const { pool } = require('../src/server/infrastructure/db');
+const { initializeDatabase, initializeTenantSchema } = require('../src/server/infrastructure/db-init');
 const sincronizacaoRouter = require('../src/routes/sincronizacao');
 const adminEmpresasRouter = require('../src/routes/adminEmpresas');
-const authJwt = require('../src/middleware/authJwt');
-const requireSuperAdmin = require('../src/middleware/requireSuperAdmin');
+const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
+const requireSuperAdmin = require('../src/server/interfaces/http/middleware/requireSuperAdmin');
 
 const SCHEMA = 'empresa_teste_reset';
 const TOKEN = 'TOKEN_TESTE_RESET';

@@ -2,10 +2,10 @@ const express        = require('express');
 const router         = express.Router();
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
-const { pool }              = require('../db');
+const { pool }              = require('../server/infrastructure/db');
 const { vincularVendedorDono } = require('./resources/helpers');
-const authJwt        = require('../middleware/authJwt');
-const tokenBlacklist = require('../tokenBlacklist');
+const authJwt        = require('../server/interfaces/http/middleware/authJwt');
+const tokenBlacklist = require('../server/infrastructure/cache/tokenBlacklist');
 
 const JWT_EXPIRES_IN = '24h';
 

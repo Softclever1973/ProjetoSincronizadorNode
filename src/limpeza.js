@@ -1,4 +1,4 @@
-const { pool } = require('./db');
+const { pool } = require('./server/infrastructure/db');
 
 // Grupos de tabelas transacionais com política de retenção de 2 anos.
 // Filhas devem vir antes do pai para respeitar FK constraints.

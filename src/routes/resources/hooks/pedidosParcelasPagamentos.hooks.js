@@ -1,7 +1,7 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS_PARCELAS_PAGAMENTOS.
  */
-const { execute } = require('../../../db');
+const { execute } = require('../../../server/infrastructure/db');
 const { pedidoEstaCancelado } = require('../helpers');
 
 async function antesDaTransacao(db, registro) {

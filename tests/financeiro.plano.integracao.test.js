@@ -5,7 +5,7 @@ const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
 const financeiroRouter = require('../src/routes/financeiro');
-const { pool } = require('../src/db');
+const { pool } = require('../src/server/infrastructure/db');
 
 const SCHEMA = 'empresa_teste_financeiro_plano';
 

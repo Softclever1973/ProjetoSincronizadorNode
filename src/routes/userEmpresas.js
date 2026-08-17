@@ -1,8 +1,8 @@
 const express  = require('express');
 const router   = express.Router();
-const { pool } = require('../db');
-const { initializeTenantSchema } = require('../db-init');
-const authJwt  = require('../middleware/authJwt');
+const { pool } = require('../server/infrastructure/db');
+const { initializeTenantSchema } = require('../server/infrastructure/db-init');
+const authJwt  = require('../server/interfaces/http/middleware/authJwt');
 const { featuresDoPlano } = require('../planos');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
