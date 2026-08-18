@@ -209,4 +209,11 @@ async function renomearPKLocal(db, nome, pk, registro, novoValorPK, fkRefs) {
   await execute(db, `DELETE FROM ${nome} WHERE ${whereParts}`, whereValores);
 }
 
-module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas, getColunasComputadas, getColunasFirebird };
+function normalizarBlobs(row) {
+  if (!row || typeof row !== 'object') return row;
+  return Object.fromEntries(
+    Object.entries(row).map(([k, v]) => [k, typeof v === 'function' ? null : v])
+  );
+}
+
+module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas, getColunasComputadas, getColunasFirebird, normalizarBlobs };

@@ -48,4 +48,23 @@ function toNaiveDateTime(v) {
   return String(v);
 }
 
-module.exports = { COLUNAS_IGNORADAS_AUDITORIA, isColunaIgnorada, toNaiveDateTime };
+function saoIguais(v1, v2) {
+  if ((v1 === null || v1 === undefined) && (v2 === null || v2 === undefined)) return true;
+  if (v1 === null || v1 === undefined || v2 === null || v2 === undefined) return false;
+
+  // Detecta se ambos são datas/timestamps (Date object ou string ISO/YYYY-MM-DD)
+  const isDate = (v) => v instanceof Date || (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}[T ]/.test(String(v)));
+  if (isDate(v1) && isDate(v2)) {
+    // Compara apenas os dígitos de data/hora sem timezone para evitar falsos
+    // positivos causados pela diferença UTC vs horário local (ex: UTC-3 Brasília)
+    return toNaiveDateTime(v1).substring(0, 19) === toNaiveDateTime(v2).substring(0, 19);
+  }
+
+  // Trata strings vazias vs null de forma estrita
+  if (typeof v1 === 'string' && v1.trim() === '' && (v2 === null || v2 === undefined)) return false;
+  if (typeof v2 === 'string' && v2.trim() === '' && (v1 === null || v1 === undefined)) return false;
+
+  return String(v1) === String(v2);
+}
+
+module.exports = { COLUNAS_IGNORADAS_AUDITORIA, isColunaIgnorada, toNaiveDateTime, saoIguais };
