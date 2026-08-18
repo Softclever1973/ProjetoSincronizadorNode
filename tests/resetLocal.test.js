@@ -1,6 +1,6 @@
 // Mesmo motivo do sync.conflitos.test.js/syncParametrosGlobais.test.js: factories explícitas
 // evitam carregar ../db real (exige Firebird real no require).
-jest.mock('../src/client/db', () => ({
+jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
   tabelaExiste: jest.fn(),
@@ -9,10 +9,10 @@ jest.mock('../src/client/http', () => ({
   verificarStatusReset: jest.fn(),
 }));
 
-const { query, execute, tabelaExiste } = require('../src/client/db');
+const { query, execute, tabelaExiste } = require('../src/client/infrastructure/firebird/db');
 const { verificarStatusReset } = require('../src/client/http');
-const { verificarResetServidor, aplicarResetLocal, emitter } = require('../src/client/resetLocal');
-const TABELAS = require('../src/client/tabelas');
+const { verificarResetServidor, aplicarResetLocal, emitter } = require('../src/client/application/resetLocal');
+const TABELAS = require('../src/client/domain/tabelas');
 
 const db = {}; // opaco pro módulo — só repassado pra query/execute/tabelaExiste mockados
 const baseURI = 'http://servidor.teste';

@@ -4,8 +4,8 @@
  * Isolado do schema real do usuário: nenhuma tabela de negócio (pedidos, clientes, etc.)
  * do dia a dia é tocada, só o schema `empresa_teste` criado aqui.
  */
-const { pool } = require('../../src/db');
-const { initializeTenantSchema } = require('../../src/db-init');
+const { pool } = require('../../src/server/infrastructure/db');
+const { initializeTenantSchema } = require('../../src/server/infrastructure/db-init');
 
 const TEST_SCHEMA = 'empresa_teste';
 const TEST_TOKEN  = 'TOKEN_TESTE_EMPRESA_TESTE'; // token fixo do cliente Firebird de teste (rota /datasnap)

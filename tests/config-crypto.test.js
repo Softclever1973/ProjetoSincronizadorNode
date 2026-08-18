@@ -6,7 +6,7 @@ jest.mock('child_process');
 
 const fs = require('fs');
 const { execFileSync } = require('child_process');
-const { protegerConfig, desprotegerConfig } = require('../src/client/config-crypto');
+const { protegerConfig, desprotegerConfig } = require('../src/client/infrastructure/config/config-crypto');
 
 describe('config-crypto', () => {
   beforeEach(() => {

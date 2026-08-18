@@ -1,4 +1,4 @@
-const { PLANOS, PLANO_PADRAO, planoValido, listarPlanos, featuresDoPlano, planoTemFeature } = require('../src/planos');
+const { PLANOS, PLANO_PADRAO, planoValido, listarPlanos, featuresDoPlano, planoTemFeature } = require('../src/server/domain/planos');
 
 describe('planoValido', () => {
   test.each(Object.keys(PLANOS))('"%s" é válido', (plano) => {

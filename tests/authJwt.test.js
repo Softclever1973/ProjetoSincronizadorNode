@@ -1,6 +1,6 @@
 const jwt = require('jsonwebtoken');
-const tokenBlacklist = require('../src/tokenBlacklist');
-const authJwt = require('../src/middleware/authJwt');
+const tokenBlacklist = require('../src/server/infrastructure/cache/tokenBlacklist');
+const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
 
 const SECRET = 'segredo-de-teste';
 

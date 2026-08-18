@@ -1,27 +1,27 @@
 // Mesmo motivo do sync.conflitos.test.js: factories explícitas evitam carregar os módulos
 // reais (../db exige Firebird real no require).
-jest.mock('../src/client/db', () => ({
+jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
 }));
 jest.mock('../src/client/http', () => ({
   enviarRegistro: jest.fn(),
 }));
-jest.mock('../src/client/conflitos', () => ({
+jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({
   atualizarOuSalvarConflito: jest.fn(),
 }));
-jest.mock('../src/client/echos', () => ({
+jest.mock('../src/client/application/syncEngine/echos', () => ({
   registrarEcho: jest.fn(),
 }));
-jest.mock('../src/client/erros', () => ({
+jest.mock('../src/client/infrastructure/persistence/erros', () => ({
   salvarErro: jest.fn(),
 }));
 
-const { query, execute } = require('../src/client/db');
+const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro } = require('../src/client/http');
-const { atualizarOuSalvarConflito } = require('../src/client/conflitos');
-const { registrarEcho } = require('../src/client/echos');
-const { empurrarTabela } = require('../src/client/push');
+const { atualizarOuSalvarConflito } = require('../src/client/infrastructure/persistence/conflitos');
+const { registrarEcho } = require('../src/client/application/syncEngine/echos');
+const { empurrarTabela } = require('../src/client/application/syncEngine/push');
 const { mockQueryPorSql: mockQueryPorSqlHelper } = require('./helpers/mockQuery');
 
 const noopLog = () => {};
@@ -109,7 +109,7 @@ describe('empurrarTabela — FK referenciando um pai sem SRV_ID ainda (o caso do
       ['SELECT FIRST 1 SRV_ID FROM PRODUTOS', []], // produto 777 não existe mais (foi deletado)
       ['SYNC_VERSOES_SERVIDOR', []],
     ]);
-    const { salvarErro } = require('../src/client/erros');
+    const { salvarErro } = require('../src/client/infrastructure/persistence/erros');
     enviarRegistro.mockResolvedValue({ novoId: 999 });
 
     await empurrarTabela({}, 'http://servidor-teste', 5, configComFk, noopLog);

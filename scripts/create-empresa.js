@@ -10,8 +10,8 @@
  */
 
 require('dotenv').config();
-const { pool } = require('../src/db');
-const { initializeTenantSchema } = require('../src/db-init');
+const { pool } = require('../src/server/infrastructure/db');
+const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
 
 const args = Object.fromEntries(
   process.argv.slice(2)

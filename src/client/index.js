@@ -107,12 +107,12 @@ if (process.env.SINCRONIZADOR_BG) {
 // ---------------------------------------------------------------------------
 process.on('uncaughtException', e => {
   console.error(`[uncaughtException] ${e.stack || e.message}`);
-  try { require('./erros').salvarErro({ operacao: 'uncaughtException', mensagem: e.stack || e.message }); } catch {}
+  try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'uncaughtException', mensagem: e.stack || e.message }); } catch {}
 });
 process.on('unhandledRejection', e => {
   const msg = e instanceof Error ? (e.stack || e.message) : String(e);
   console.error(`[unhandledRejection] ${msg}`);
-  try { require('./erros').salvarErro({ operacao: 'unhandledRejection', mensagem: msg }); } catch {}
+  try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'unhandledRejection', mensagem: msg }); } catch {}
 });
 
 // ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ if (isPackaged && !process.env.SINCRONIZADOR_BG) {
 // ja tinha o cliente instalado antes dessa mudanca, sem precisar reconfigurar do zero.
 async function carregarConfiguracao() {
   if (fs.existsSync(CONFIG_ENC_PATH)) {
-    const { desprotegerConfig } = require('./config-crypto');
+    const { desprotegerConfig } = require('./infrastructure/config/config-crypto');
     let dados;
     try {
       dados = desprotegerConfig(fs.readFileSync(CONFIG_ENC_PATH, 'utf8'));
@@ -161,7 +161,7 @@ async function carregarConfiguracao() {
     require('dotenv').config({ path: ENV_PATH, quiet: true });
     if (USAR_CRIPTOGRAFIA) {
       try {
-        const { protegerConfig } = require('./config-crypto');
+        const { protegerConfig } = require('./infrastructure/config/config-crypto');
         const CHAVES = ['SYNC_TOKEN', 'FIREBIRD_HOST', 'FIREBIRD_PORT', 'FIREBIRD_DATABASE', 'FIREBIRD_USER', 'FIREBIRD_PASSWORD', 'INTERVALO_MS', 'NOME_FILIAL'];
         const dados = {};
         for (const chave of CHAVES) if (process.env[chave] !== undefined) dados[chave] = process.env[chave];
@@ -194,23 +194,23 @@ async function main() {
     return;
   }
 
-  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./db');
-  const { sincronizarTabela } = require('./sync');
-  const { empurrarTabela } = require('./push');
+  const { getConnection, closeConnection, getParam, getTabelasExistentes } = require('./infrastructure/firebird/db');
+  const { sincronizarTabela } = require('./application/syncEngine/sync');
+  const { empurrarTabela } = require('./application/syncEngine/push');
   const { atualizarRegime, garantirTabela, atualizarPlano } = require('./http');
-  const { getColunasTipadas } = require('./db-utils');
-  const { syncParametrosGlobais } = require('./syncParametrosGlobais');
-  const { verificarResetServidor } = require('./resetLocal');
+  const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
+  const { syncParametrosGlobais } = require('./application/syncParametrosGlobais');
+  const { verificarResetServidor } = require('./application/resetLocal');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
-  const TABELAS = require('./tabelas');
-  const { tabelaAtiva } = require('./tabelasConfig');
-  const { salvarErro } = require('./erros');
+  const TABELAS = require('./domain/tabelas');
+  const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
+  const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
-  } = require('./updater');
-  const { notificarToast } = require('./notificar');
+  } = require('./application/updater');
+  const { notificarToast } = require('./infrastructure/notificar');
   const { version: VERSAO_ATUAL } = require('../../package.json');
 
   if (!process.env.SYNC_TOKEN) {
@@ -331,7 +331,7 @@ async function main() {
   // Inicia tray ANTES do loop do Firebird para que apareça imediatamente
   // (mostra quando empacotado — em modo background ou normal)
   if (isPackaged) {
-    const { iniciarTray } = require('./tray');
+    const { iniciarTray } = require('./infrastructure/tray');
     iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 
@@ -506,7 +506,7 @@ async function main() {
 // Segunda camada de rollback (Camada 2): cobre o caso de um build recém-atualizado que
 // lança exceção síncrona antes mesmo de chegar ao primeiro executarCiclo() — mais lento
 // que o watchdog de liveness em updater.js (Camada 1), mas ainda dentro deste laço de
-// retry. Deliberadamente NÃO usa require('./updater') — se o bug estiver dentro desse
+// retry. Deliberadamente NÃO usa require('./application/updater') — se o bug estiver dentro desse
 // módulo, importá-lo aqui durante o rollback poderia falhar também. Só fs/path/child_process.
 function _temAtualizacaoPendenteBruto() {
   try {
@@ -554,7 +554,7 @@ function _rollbackAtualizacaoFatalBruto() {
     } catch (e) {
       tentativas++;
       const msg = e.stack || e.message;
-      try { require('./erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
+      try { require('./infrastructure/persistence/erros').salvarErro({ operacao: 'fatal', mensagem: msg }); } catch {}
 
       const pendente = isPackaged && _temAtualizacaoPendenteBruto();
 

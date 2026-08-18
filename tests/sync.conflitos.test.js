@@ -1,16 +1,16 @@
 // Factories explícitas (em vez de automock): os módulos reais de ../db, ../cursor etc.
 // exigem FIREBIRD_DATABASE/FIREBIRD_PASSWORD no .env no require — automock ainda carrega
 // o módulo real para inspecionar o shape, o que dispararia esse erro fora de um Firebird real.
-jest.mock('../src/client/db', () => ({
+jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
 }));
-jest.mock('../src/client/cursor', () => ({
+jest.mock('../src/client/application/syncEngine/cursor', () => ({
   getUltimaAtualizacao: jest.fn(),
   getUltimaDelecao: jest.fn(),
   salvarCursor: jest.fn(),
 }));
-jest.mock('../src/client/echos', () => ({
+jest.mock('../src/client/application/syncEngine/echos', () => ({
   consumirEcho: jest.fn(),
   registrarEcho: jest.fn(),
 }));
@@ -19,21 +19,21 @@ jest.mock('../src/client/http', () => ({
   buscarRegistrosParaDeletar: jest.fn(),
   buscarProdutosParaAtualizar: jest.fn(),
 }));
-jest.mock('../src/client/conflitos', () => ({
+jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({
   salvarConflito: jest.fn(),
 }));
-jest.mock('../src/client/db-utils', () => ({
+jest.mock('../src/client/infrastructure/firebird/db-utils', () => ({
   getFKRefs: jest.fn().mockResolvedValue([]),
   gerarNovoPK: jest.fn(),
   renomearPKLocal: jest.fn(),
 }));
 
-const { query, execute } = require('../src/client/db');
-const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('../src/client/cursor');
-const { consumirEcho } = require('../src/client/echos');
+const { query, execute } = require('../src/client/infrastructure/firebird/db');
+const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('../src/client/application/syncEngine/cursor');
+const { consumirEcho } = require('../src/client/application/syncEngine/echos');
 const { buscarRegistrosParaAtualizar, buscarRegistrosParaDeletar } = require('../src/client/http');
-const { salvarConflito } = require('../src/client/conflitos');
-const { sincronizarTabela, _resetCachesParaTeste } = require('../src/client/sync');
+const { salvarConflito } = require('../src/client/infrastructure/persistence/conflitos');
+const { sincronizarTabela, _resetCachesParaTeste } = require('../src/client/application/syncEngine/sync');
 
 const noopLog = () => {};
 

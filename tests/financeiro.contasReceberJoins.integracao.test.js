@@ -4,9 +4,9 @@ const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
 
-const financeiroRouter = require('../src/routes/financeiro');
-const { pool } = require('../src/db');
-const { initializeTenantSchema } = require('../src/db-init');
+const financeiroRouter = require('../src/server/interfaces/http/routes/datasnap/financeiro');
+const { pool } = require('../src/server/infrastructure/db');
+const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
 
 const SCHEMA_COM      = 'empresa_teste_fin_joins_com';
 const SCHEMA_SEM      = 'empresa_teste_fin_joins_sem';

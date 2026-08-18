@@ -1,4 +1,4 @@
-const { requireRole, requireRoleOuVendedorEm } = require('../src/middleware/checkRole');
+const { requireRole, requireRoleOuVendedorEm } = require('../src/server/interfaces/http/middleware/checkRole');
 
 function mockRes() {
   return { status: jest.fn().mockReturnThis(), json: jest.fn() };

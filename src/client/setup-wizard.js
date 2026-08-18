@@ -1,7 +1,7 @@
 const readline = require('readline');
 const fs       = require('fs');
 const path     = require('path');
-const { attachComTimeout } = require('./firebird-attach');
+const { attachComTimeout } = require('./infrastructure/firebird/firebird-attach');
 async function pergunta(rl, texto) {
   return new Promise(resolve => rl.question(texto, answer => resolve(answer.trim())));
 }
@@ -300,7 +300,7 @@ async function runSetupWizard({ destino, criptografado }) {
     };
 
     if (criptografado) {
-      const { protegerConfig } = require('./config-crypto');
+      const { protegerConfig } = require('./infrastructure/config/config-crypto');
       fs.writeFileSync(destino, protegerConfig(dados), 'utf8');
       console.log('\n  [OK] Configuracao criptografada gravada em: ' + destino);
     } else {

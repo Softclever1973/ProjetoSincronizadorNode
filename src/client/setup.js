@@ -1,5 +1,5 @@
-const { query, execute, tabelaExiste } = require('./db');
-const TABELAS = require('./tabelas');
+const { query, execute, tabelaExiste } = require('./infrastructure/firebird/db');
+const TABELAS = require('./domain/tabelas');
 
 async function generatorExiste(db, nome) {
   const rows = await query(
@@ -148,7 +148,7 @@ async function setup(db, log = console.log, token = null) {
         `UPDATE ULTIMOS_REGISTROS_MATRIZ SET ULTIMO_REGISTRO_ATUALIZADO = 0, ULTIMO_REGISTRO_DELETADO = 0`
       ).catch(() => {});
       await execute(db, `DELETE FROM SYNC_ERROS`).catch(() => {});
-      try { require('./conflitos').clearConflitos(); } catch {}
+      try { require('./infrastructure/persistence/conflitos').clearConflitos(); } catch {}
       log('[SETUP] Pendentes limpos. Use "Forçar Carga Inicial" na web UI para enviar os dados.');
 
       await execute(db,

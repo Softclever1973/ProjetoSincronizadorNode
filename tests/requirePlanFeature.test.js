@@ -1,9 +1,9 @@
-jest.mock('../src/planos', () => ({ planoTemFeature: jest.fn() }));
-jest.mock('../src/db', () => ({ pool: { query: jest.fn() } }));
+jest.mock('../src/server/domain/planos', () => ({ planoTemFeature: jest.fn() }));
+jest.mock('../src/server/infrastructure/db', () => ({ pool: { query: jest.fn() } }));
 
-const { planoTemFeature } = require('../src/planos');
-const { pool } = require('../src/db');
-const { requirePlanFeature } = require('../src/middleware/requirePlanFeature');
+const { planoTemFeature } = require('../src/server/domain/planos');
+const { pool } = require('../src/server/infrastructure/db');
+const { requirePlanFeature } = require('../src/server/interfaces/http/middleware/requirePlanFeature');
 
 function mockRes() {
   return { status: jest.fn().mockReturnThis(), json: jest.fn() };
