@@ -6,11 +6,16 @@
 
 // Números sempre viram NUMERIC: Firebird NUMERIC(10,2) com valor 100.00 chega como
 // inteiro 100 via node-firebird, e NUMERIC comporta ambos sem perda.
-function inferirTipoPg(valor) {
+function inferirTipoPg(valor, nomeColuna) {
   if (Buffer.isBuffer(valor)) return 'BYTEA';
   if (valor instanceof Date) return 'TIMESTAMP';
   if (typeof valor === 'boolean') return 'BOOLEAN';
   if (typeof valor === 'number') return 'NUMERIC';
+  // ID_*/SRV_ID são sempre inteiros (generator do Firebird) mesmo quando o primeiro registro
+  // usado pra inferir tipo vem com essa FK opcional vazia (ex.: A_RECEBER sem vendedor). Sem
+  // isso a coluna nasce TEXT e quebra em JOIN/comparação contra a tabela referenciada, cuja PK
+  // é NUMERIC — visto em produção (ID_VENDEDOR de A_RECEBER virou TEXT após reset de tenant).
+  if (valor == null && nomeColuna && /^(id_.+|srv_id)$/i.test(nomeColuna)) return 'NUMERIC';
   return 'TEXT';
 }
 
@@ -34,7 +39,7 @@ function chaveNegocioTabela(pks, colunasDisponiveis) {
  * pra inferir tipo por valor, ao contrário de GarantirTabela, que usa introspecção do Firebird).
  */
 function colunasTipadasDeRegistro(registro) {
-  return Object.keys(registro).map(nome => ({ nome, tipoPg: inferirTipoPg(registro[nome]) }));
+  return Object.keys(registro).map(nome => ({ nome, tipoPg: inferirTipoPg(registro[nome], nome) }));
 }
 
 module.exports = { inferirTipoPg, chaveNegocioTabela, colunasTipadasDeRegistro };
