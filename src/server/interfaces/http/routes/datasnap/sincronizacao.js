@@ -361,14 +361,24 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
       // srvIdEhPk: SRV_ID é a PK real, detectado via information_schema (cacheado) — não
       // via tabelaJaExistia, que dava falso no 1º push e causava ON CONFLICT inválido em
       // ID_PRODUTO nas chamadas seguintes.
-      const pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
-      const srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
+      let pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
+      let srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
 
       // Detecção de conflito: SRV_ID como chave só quando é a PK real da tabela.
       // Se a tabela não existir (cache obsoleto), limpa, recria e continua com atual=[].
       let atual;
       ({ atual, colunasServidor } = await selecionarRegistroAtual(db,
         { schemaName: req.schemaName, nomeTabela, srvIdEhPk, srvId, pks, registro, temSrvId, colunasServidor }));
+
+      // Recalcula srvIdEhPk depois do self-heal acima: se a tabela tinha sido dropada (reset
+      // de tenant com o servidor no ar) e o cache de colunas estava obsoleto (achando que a
+      // tabela ainda existia), o pkReal buscado logo acima veio de uma consulta contra uma
+      // tabela que nesse momento não existia (pkReal=null → srvIdEhPk=false), mesmo a tabela
+      // recém-recriada por selecionarRegistroAtual já tendo SRV_ID como PK real. Sem isso, o
+      // INSERT abaixo monta ON CONFLICT (<pks da filial>) — que não corresponde a nenhuma
+      // constraint da tabela nova — e quebra com "no unique or exclusion constraint".
+      pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
+      srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
 
       // Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha (srv_id_map foi
       // limpo/resetado), mas já existe registro com a mesma chave de negócio — reusa o
