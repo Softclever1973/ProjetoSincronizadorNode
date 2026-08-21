@@ -33,10 +33,13 @@ async function resolverIdCondicaoPagamento(s, descricao) {
   return rows[0]?.id_aux_parcela_pagamento ?? null;
 }
 
-// Colunas do formulário A_PAGAR do Sirius Delphi que faltavam aqui — garante antes de usar (cache por processo).
-const colunasParidadeGarantidas = new Set();
+// Colunas do formulário A_PAGAR do Sirius Delphi que faltavam aqui — garante antes de usar.
+// Sem cache por processo de propósito: um reset de tenant (POST /superadmin/empresas/:schema/reset)
+// dropa e recria a_pagar sem essas colunas, e um Set cacheado ficaria "achando" que já tinha
+// garantido, pulando o ALTER e quebrando a query em ap.dt_lancamento. ADD COLUMN IF NOT EXISTS
+// é barato (só checa o catálogo quando a coluna já existe), então rodar sempre é mais robusto
+// do que manter uma invariante de cache que precisaria ser invalidada manualmente no reset.
 async function garantirColunasParidade(s) {
-  if (colunasParidadeGarantidas.has(s)) return;
   await pool.query(`
     ALTER TABLE ${s}.a_pagar
       ADD COLUMN IF NOT EXISTS valor_pago NUMERIC(15,2),
@@ -44,7 +47,6 @@ async function garantirColunasParidade(s) {
       ADD COLUMN IF NOT EXISTS venc_original DATE,
       ADD COLUMN IF NOT EXISTS faturamento_direto VARCHAR(1)
   `);
-  colunasParidadeGarantidas.add(s);
 }
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
