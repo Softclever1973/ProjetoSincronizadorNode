@@ -645,7 +645,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          observacao             = $13,
          id_loja                = COALESCE($14, id_loja),
          dt_lancamento          = COALESCE(dt_lancamento, CURRENT_DATE),
-         venc_original          = COALESCE(venc_original, COALESCE($6, vencimento)),
+         venc_original          = COALESCE(venc_original, (COALESCE($6, vencimento))::date),
          faturamento_direto     = COALESCE(faturamento_direto, 'N'),
          desconto               = COALESCE($15, desconto),
          valor_juros            = COALESCE($16, valor_juros),
