@@ -39,14 +39,27 @@ async function resolverIdCondicaoPagamento(s, descricao) {
 // garantido, pulando o ALTER e quebrando a query em ap.dt_lancamento. ADD COLUMN IF NOT EXISTS
 // é barato (só checa o catálogo quando a coluna já existe), então rodar sempre é mais robusto
 // do que manter uma invariante de cache que precisaria ser invalidada manualmente no reset.
+// parcela/id_condicao_pagamento/total_parcelas: A_PAGAR nunca teve esses campos no lado web
+// (só A_RECEBER tinha parcela/id_condicao_pagamento) — adicionados junto pra permitir
+// condição de pagamento em Contas a Pagar.
 async function garantirColunasParidade(s) {
   await pool.query(`
     ALTER TABLE ${s}.a_pagar
       ADD COLUMN IF NOT EXISTS valor_pago NUMERIC(15,2),
       ADD COLUMN IF NOT EXISTS dt_lancamento DATE,
       ADD COLUMN IF NOT EXISTS venc_original DATE,
-      ADD COLUMN IF NOT EXISTS faturamento_direto VARCHAR(1)
+      ADD COLUMN IF NOT EXISTS faturamento_direto VARCHAR(1),
+      ADD COLUMN IF NOT EXISTS parcela INTEGER,
+      ADD COLUMN IF NOT EXISTS id_condicao_pagamento INTEGER,
+      ADD COLUMN IF NOT EXISTS total_parcelas INTEGER
   `);
+}
+
+// total_parcelas em A_RECEBER: campo só do lado web (formulário aceitava mas nunca persistia —
+// GET sempre devolvia 1 pra lançamento não vinculado a pedido, mesmo o usuário tendo digitado
+// um número real). Mesmo padrão sem cache do garantirColunasParidade acima, mesmo motivo.
+async function garantirColunaTotalParcelasCR(s) {
+  await pool.query(`ALTER TABLE ${s}.a_receber ADD COLUMN IF NOT EXISTS total_parcelas INTEGER`);
 }
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
@@ -131,7 +144,7 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
              WHEN ar.observacao ~ '^pedido:[0-9]+:[0-9]+$' THEN
                (SELECT COUNT(*)::INTEGER FROM ${s}.a_receber ar2
                 WHERE ar2.observacao LIKE 'pedido:' || split_part(ar.observacao,':',2) || ':%')
-             ELSE 1
+             ELSE COALESCE(ar.total_parcelas, 1)
            END                                               AS total_parcelas,
            ar.observacao,
            ar.id_loja,
@@ -151,6 +164,7 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   }
 
   try {
+    await garantirColunaTotalParcelasCR(s);
     let rows, total;
     try {
       [rows, total] = await buscarContasReceber(true);
@@ -189,6 +203,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     }
     const id_vendedor = await resolverIdVendedor(s, vendedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
+    await garantirColunaTotalParcelasCR(s);
 
     // sequence por tabela (seq_srv_id_a_receber): cria se não existir, avança além do max atual.
     await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_receber START WITH 1`);
@@ -215,15 +230,15 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_receber
          (srv_id, descricao, id_cliente, valor, vencimento, proximo_dia_util, data_realizado,
-          status, id_forma_de_pagamento, parcela, observacao, id_loja, id_vendedor, id_condicao_pagamento)
-       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11,$12,$13)
+          status, id_forma_de_pagamento, parcela, total_parcelas, observacao, id_loja, id_vendedor, id_condicao_pagamento)
+       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11,$12,$13,$14)
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja`,
       [next_srv_id, descricao, id_cliente, valor, data_vencimento, data_recebimento || null,
        capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null, parcela || 1,
-       observacao || null, id_loja || null, id_vendedor, id_condicao_pagamento]
+       parseInt(total_parcelas) || null, observacao || null, id_loja || null, id_vendedor, id_condicao_pagamento]
     );
     r.vendedor = vendedor || null;
     r.condicao_pagamento = condicao_pagamento || null;
@@ -266,6 +281,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
     }
     const id_vendedor = await resolverIdVendedor(s, vendedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
+    await garantirColunaTotalParcelasCR(s);
 
     const { rows: [r], rowCount } = await pool.query(
       `UPDATE ${s}.a_receber SET
@@ -278,18 +294,20 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          status               = COALESCE($6, status),
          id_forma_de_pagamento = COALESCE($7, id_forma_de_pagamento),
          parcela              = COALESCE($8, parcela),
-         observacao           = COALESCE($9, observacao),
-         id_loja              = COALESCE($10, id_loja),
+         total_parcelas        = COALESCE($9, total_parcelas),
+         observacao           = COALESCE($10, observacao),
+         id_loja              = COALESCE($11, id_loja),
          id_vendedor           = COALESCE($12, id_vendedor),
          id_condicao_pagamento = COALESCE($13, id_condicao_pagamento)
-       WHERE srv_id = $11
+       WHERE srv_id = $14
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja`,
       [descricao || null, id_cliente, valor || null, data_vencimento || null,
        data_recebimento ?? null, status ? capitalizarStatus(status) : null, parseInt(forma_pagamento) || null,
-       parcela || null, observacao ?? null, id_loja ?? null, id, id_vendedor, id_condicao_pagamento]
+       parcela || null, parseInt(total_parcelas) || null, observacao ?? null, id_loja ?? null,
+       id_vendedor, id_condicao_pagamento, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     if (vendedor !== undefined) r.vendedor = vendedor || null;
@@ -403,11 +421,14 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   if (filtroLoja !== null && !isNaN(filtroLoja)) { params.push(filtroLoja); conds.push(`ap.id_loja = $${params.length}`); }
 
   const where = conds.join(' AND ');
-  const fromAP = `FROM ${s}.a_pagar ap`;
 
-  try {
-    await garantirColunasParidade(s);
-    const [rows, total] = await Promise.all([
+  // Condição de pagamento: cai pra NULL se AUX_PARCELAS_PAGAMENTOS ainda não sincronizou, em vez de 500.
+  async function buscarContasPagar(comCondicao) {
+    const fromAP = `FROM ${s}.a_pagar ap` +
+      (comCondicao ? ` LEFT JOIN ${s}.aux_parcelas_pagamentos cond ON cond.id_aux_parcela_pagamento = ap.id_condicao_pagamento` : '');
+    const colCondicao = comCondicao ? 'cond.descricao' : 'NULL';
+
+    return Promise.all([
       pool.query(
         `SELECT
            ap.srv_id                      AS id,
@@ -424,6 +445,9 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
              ELSE 'pendente'
            END                            AS status,
            ap.id_forma_de_pagamento::text AS forma_pagamento,
+           ap.parcela,
+           ap.total_parcelas,
+           ${colCondicao}                 AS condicao_pagamento,
            ap.observacao,
            ap.id_loja,
            ap.dt_lancamento,
@@ -437,6 +461,17 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
       ),
       pool.query(`SELECT COUNT(*)::INTEGER AS total ${fromAP} WHERE ${where}`, params),
     ]);
+  }
+
+  try {
+    await garantirColunasParidade(s);
+    let rows, total;
+    try {
+      [rows, total] = await buscarContasPagar(true);
+    } catch (e) {
+      if (!isMissingTableError(e)) throw e;
+      [rows, total] = await buscarContasPagar(false);
+    }
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
     res.status(500).json({ erro: e.message });
@@ -448,7 +483,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
-          status, forma_pagamento, observacao } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
   const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
@@ -469,6 +504,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
       );
       id_fornecedor = forn[0]?.srv_id ?? null;
     }
+    const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     // sequence por tabela (seq_srv_id_a_pagar): cria se não existir, avança além do max atual.
     await pool.query(`CREATE SEQUENCE IF NOT EXISTS ${s}.seq_srv_id_a_pagar START WITH 1`);
@@ -495,17 +531,19 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_pagar
          (srv_id, descricao, credor, id_fornecedor, valor, valor_pago, vencimento, proximo_dia_util, data_realizado,
-          status, id_forma_de_pagamento, observacao, id_loja, dt_lancamento, venc_original, faturamento_direto)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12,CURRENT_DATE,$7::timestamp,'N')
+          status, id_forma_de_pagamento, parcela, total_parcelas, id_condicao_pagamento, observacao, id_loja,
+          dt_lancamento, venc_original, faturamento_direto)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12,$13,$14,$15,CURRENT_DATE,$7::timestamp,'N')
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
          dt_lancamento, venc_original, faturamento_direto`,
       [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, parseFloat(valor_pago) || null,
        data_vencimento, data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
-       observacao || null, id_loja || null]
+       parseInt(parcela) || null, parseInt(total_parcelas) || null, id_condicao_pagamento, observacao || null, id_loja || null]
     );
+    r.condicao_pagamento = condicao_pagamento || null;
     registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
@@ -519,7 +557,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
-          status, forma_pagamento, observacao, id_loja } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao, id_loja } = req.body;
 
   if (dataFutura(data_pagamento))
     return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
@@ -547,6 +585,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
       );
       id_fornecedor = forn[0]?.srv_id ?? null;
     }
+    const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     const { rows: [r], rowCount } = await pool.query(
       `UPDATE ${s}.a_pagar SET
@@ -560,22 +599,27 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          data_realizado         = $7,
          status                 = COALESCE($8, status),
          id_forma_de_pagamento  = COALESCE($9, id_forma_de_pagamento),
-         observacao             = $10,
-         id_loja                = COALESCE($11, id_loja),
+         parcela                = COALESCE($10, parcela),
+         total_parcelas         = COALESCE($11, total_parcelas),
+         id_condicao_pagamento  = COALESCE($12, id_condicao_pagamento),
+         observacao             = $13,
+         id_loja                = COALESCE($14, id_loja),
          dt_lancamento          = COALESCE(dt_lancamento, CURRENT_DATE),
          venc_original          = COALESCE(venc_original, COALESCE($6, vencimento)),
          faturamento_direto     = COALESCE(faturamento_direto, 'N')
-       WHERE srv_id = $12
+       WHERE srv_id = $15
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, observacao, id_loja,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
          dt_lancamento, venc_original, faturamento_direto`,
       [descricao || null, fornecedor || null, id_fornecedor, valor || null, parseFloat(valor_pago) || null,
        data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
-       parseInt(forma_pagamento) || null, observacao ?? null, id_loja ?? null, id]
+       parseInt(forma_pagamento) || null, parseInt(parcela) || null, parseInt(total_parcelas) || null,
+       id_condicao_pagamento, observacao ?? null, id_loja ?? null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (condicao_pagamento !== undefined) r.condicao_pagamento = condicao_pagamento || null;
     registrarAuditLog(req, s, 'A_PAGAR', 'UPDATE', String(id), req.body, atual);
     res.json(r);
   } catch (e) {
