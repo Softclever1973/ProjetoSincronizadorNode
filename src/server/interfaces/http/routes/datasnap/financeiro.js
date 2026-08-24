@@ -1,6 +1,6 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool, withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
+const { pool, withTenantConnection, query, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
 const authJwt      = require('../../middleware/authJwt');
 const { requireRole } = require('../../middleware/checkRole');
 const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
@@ -31,6 +31,34 @@ async function resolverIdCondicaoPagamento(s, descricao) {
     `SELECT id_aux_parcela_pagamento FROM ${s}.aux_parcelas_pagamentos WHERE TRIM(descricao) ILIKE TRIM($1) LIMIT 1`, [descricao]
   );
   return rows[0]?.id_aux_parcela_pagamento ?? null;
+}
+
+// Resolve cliente/fornecedor por nome (razão social ou fantasia). srv_id é a identidade normal
+// usada nas FKs do sistema, mas nem toda tabela sincronizada dinamicamente do Firebird ganhou
+// essa coluna — depende de detalhes do primeiro registro que chegou no sync inicial daquele
+// tenant (mesma classe do bug de tipo divergente em a_pagar.vencimento, só que aqui é a coluna
+// inteira que falta em vez do tipo). Sem esse fallback, salvar uma conta com cliente/fornecedor
+// preenchido quebrava com 500 nos tenants onde a coluna simplesmente não existe.
+async function resolverIdPorNome(s, tabela, colunaIdNativa, nome) {
+  if (!nome) return null;
+  try {
+    const { rows } = await pool.query(
+      `SELECT srv_id AS id FROM ${s}.${tabela}
+       WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
+       LIMIT 1`,
+      [nome]
+    );
+    return rows[0]?.id ?? null;
+  } catch (e) {
+    if (!isMissingColumnError(e)) throw e;
+    const { rows } = await pool.query(
+      `SELECT ${colunaIdNativa} AS id FROM ${s}.${tabela}
+       WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
+       LIMIT 1`,
+      [nome]
+    );
+    return rows[0]?.id ?? null;
+  }
 }
 
 // Colunas do formulário A_PAGAR do Sirius Delphi que faltavam aqui — garante antes de usar.
@@ -214,16 +242,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
 
   try {
-    let id_cliente = null;
-    if (nome_cliente) {
-      const { rows: cli } = await pool.query(
-        `SELECT srv_id FROM ${s}.clientes
-         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
-         LIMIT 1`,
-        [nome_cliente]
-      );
-      id_cliente = cli[0]?.srv_id ?? null;
-    }
+    const id_cliente = await resolverIdPorNome(s, 'clientes', 'id_cliente', nome_cliente);
     const id_vendedor = await resolverIdVendedor(s, vendedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
     await garantirColunaTotalParcelasCR(s);
@@ -296,16 +315,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
       return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
     }
 
-    let id_cliente = null;
-    if (nome_cliente) {
-      const { rows: cli } = await pool.query(
-        `SELECT srv_id FROM ${s}.clientes
-         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
-         LIMIT 1`,
-        [nome_cliente]
-      );
-      id_cliente = cli[0]?.srv_id ?? null;
-    }
+    const id_cliente = await resolverIdPorNome(s, 'clientes', 'id_cliente', nome_cliente);
     const id_vendedor = await resolverIdVendedor(s, vendedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
     await garantirColunaTotalParcelasCR(s);
@@ -532,16 +542,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
   try {
     await garantirColunasParidade(s);
-    let id_fornecedor = null;
-    if (fornecedor) {
-      const { rows: forn } = await pool.query(
-        `SELECT srv_id FROM ${s}.fornecedores
-         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
-         LIMIT 1`,
-        [fornecedor]
-      );
-      id_fornecedor = forn[0]?.srv_id ?? null;
-    }
+    const id_fornecedor = await resolverIdPorNome(s, 'fornecedores', 'id_fornecedor', fornecedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     // sequence por tabela (seq_srv_id_a_pagar): cria se não existir, avança além do max atual.
@@ -615,16 +616,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
       return res.status(422).json({ erro: 'Registro cancelado não pode ter o status alterado.' });
     }
 
-    let id_fornecedor = null;
-    if (fornecedor) {
-      const { rows: forn } = await pool.query(
-        `SELECT srv_id FROM ${s}.fornecedores
-         WHERE TRIM(razao_social) ILIKE TRIM($1) OR TRIM(fantasia) ILIKE TRIM($1)
-         LIMIT 1`,
-        [fornecedor]
-      );
-      id_fornecedor = forn[0]?.srv_id ?? null;
-    }
+    const id_fornecedor = await resolverIdPorNome(s, 'fornecedores', 'id_fornecedor', fornecedor);
     const id_condicao_pagamento = await resolverIdCondicaoPagamento(s, condicao_pagamento);
 
     const { rows: [r], rowCount } = await pool.query(
