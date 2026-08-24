@@ -42,6 +42,11 @@ async function resolverIdCondicaoPagamento(s, descricao) {
 // parcela/id_condicao_pagamento/total_parcelas: A_PAGAR nunca teve esses campos no lado web
 // (só A_RECEBER tinha parcela/id_condicao_pagamento) — adicionados junto pra permitir
 // condição de pagamento em Contas a Pagar.
+// desconto/valor_juros/multa: campos da baixa de título (ver POST/PATCH) — nomes escolhidos
+// pra baterem 1:1 com as colunas reais do Firebird (A_PAGAR.DESCONTO, A_PAGAR.VALOR_JUROS,
+// A_PAGAR.MULTA), já que A_PAGAR sincroniza pelo mecanismo genérico (client/domain/tabelas.js),
+// que copia coluna a coluna por nome — batendo o nome aqui, o valor lançado na baixa web
+// sincroniza pro Firebird sem precisar de nenhum mapeamento extra.
 async function garantirColunasParidade(s) {
   await pool.query(`
     ALTER TABLE ${s}.a_pagar
@@ -51,15 +56,28 @@ async function garantirColunasParidade(s) {
       ADD COLUMN IF NOT EXISTS faturamento_direto VARCHAR(1),
       ADD COLUMN IF NOT EXISTS parcela INTEGER,
       ADD COLUMN IF NOT EXISTS id_condicao_pagamento INTEGER,
-      ADD COLUMN IF NOT EXISTS total_parcelas INTEGER
+      ADD COLUMN IF NOT EXISTS total_parcelas INTEGER,
+      ADD COLUMN IF NOT EXISTS desconto NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS valor_juros NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS multa NUMERIC(15,2)
   `);
 }
 
 // total_parcelas em A_RECEBER: campo só do lado web (formulário aceitava mas nunca persistia —
 // GET sempre devolvia 1 pra lançamento não vinculado a pedido, mesmo o usuário tendo digitado
-// um número real). Mesmo padrão sem cache do garantirColunasParidade acima, mesmo motivo.
+// um número real). valor_desconto/valor_juros/valor_multa/valor_recebido: campos da baixa de
+// título — mesmo racional de nomes batendo com o Firebird (A_RECEBER.VALOR_DESCONTO,
+// VALOR_JUROS, VALOR_MULTA, VALOR_RECEBIDO) explicado acima em garantirColunasParidade. Mesmo
+// padrão sem cache, mesmo motivo (reset de tenant dropa e recria a tabela sem essas colunas).
 async function garantirColunaTotalParcelasCR(s) {
-  await pool.query(`ALTER TABLE ${s}.a_receber ADD COLUMN IF NOT EXISTS total_parcelas INTEGER`);
+  await pool.query(`
+    ALTER TABLE ${s}.a_receber
+      ADD COLUMN IF NOT EXISTS total_parcelas INTEGER,
+      ADD COLUMN IF NOT EXISTS valor_desconto NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS valor_juros NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS valor_multa NUMERIC(15,2),
+      ADD COLUMN IF NOT EXISTS valor_recebido NUMERIC(15,2)
+  `);
 }
 
 // ── GET /api/:schema/financeiro/contas-receber ────────────────────────────────
@@ -148,6 +166,10 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
            END                                               AS total_parcelas,
            ar.observacao,
            ar.id_loja,
+           ar.valor_desconto,
+           ar.valor_juros,
+           ar.valor_multa,
+           ar.valor_recebido,
            ${colVendedor}                                    AS vendedor,
            ${colCondicao}                                    AS condicao_pagamento
          ${joins}
@@ -183,7 +205,8 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
 router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
   const s = req.params.schema;
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, vendedor, condicao_pagamento } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, observacao, vendedor, condicao_pagamento,
+          valor_desconto, valor_juros, valor_multa, valor_recebido } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
   const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
@@ -230,15 +253,18 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
     const { rows: [r] } = await pool.query(
       `INSERT INTO ${s}.a_receber
          (srv_id, descricao, id_cliente, valor, vencimento, proximo_dia_util, data_realizado,
-          status, id_forma_de_pagamento, parcela, total_parcelas, observacao, id_loja, id_vendedor, id_condicao_pagamento)
-       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          status, id_forma_de_pagamento, parcela, total_parcelas, observacao, id_loja, id_vendedor, id_condicao_pagamento,
+          valor_desconto, valor_juros, valor_multa, valor_recebido)
+       VALUES ($1,$2,$3,$4,$5::timestamp,${exprProximoDiaUtil('$5')},$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
+         valor_desconto, valor_juros, valor_multa, valor_recebido`,
       [next_srv_id, descricao, id_cliente, valor, data_vencimento, data_recebimento || null,
        capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null, parcela || 1,
-       parseInt(total_parcelas) || null, observacao || null, id_loja || null, id_vendedor, id_condicao_pagamento]
+       parseInt(total_parcelas) || null, observacao || null, id_loja || null, id_vendedor, id_condicao_pagamento,
+       parseFloat(valor_desconto) || null, parseFloat(valor_juros) || null, parseFloat(valor_multa) || null, parseFloat(valor_recebido) || null]
     );
     r.vendedor = vendedor || null;
     r.condicao_pagamento = condicao_pagamento || null;
@@ -255,7 +281,8 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
-          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja, vendedor, condicao_pagamento } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, observacao, id_loja, vendedor, condicao_pagamento,
+          valor_desconto, valor_juros, valor_multa, valor_recebido } = req.body;
 
   try {
     // Impede reativação de registro cancelado
@@ -298,16 +325,23 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
          observacao           = COALESCE($10, observacao),
          id_loja              = COALESCE($11, id_loja),
          id_vendedor           = COALESCE($12, id_vendedor),
-         id_condicao_pagamento = COALESCE($13, id_condicao_pagamento)
-       WHERE srv_id = $14
+         id_condicao_pagamento = COALESCE($13, id_condicao_pagamento),
+         valor_desconto        = COALESCE($14, valor_desconto),
+         valor_juros           = COALESCE($15, valor_juros),
+         valor_multa           = COALESCE($16, valor_multa),
+         valor_recebido        = COALESCE($17, valor_recebido)
+       WHERE srv_id = $18
        RETURNING
          srv_id AS id, descricao, valor,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_recebimento,
-         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja`,
+         status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
+         valor_desconto, valor_juros, valor_multa, valor_recebido`,
       [descricao || null, id_cliente, valor || null, data_vencimento || null,
        data_recebimento ?? null, status ? capitalizarStatus(status) : null, parseInt(forma_pagamento) || null,
        parcela || null, parseInt(total_parcelas) || null, observacao ?? null, id_loja ?? null,
-       id_vendedor, id_condicao_pagamento, id]
+       id_vendedor, id_condicao_pagamento,
+       parseFloat(valor_desconto) || null, parseFloat(valor_juros) || null, parseFloat(valor_multa) || null, parseFloat(valor_recebido) || null,
+       id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     if (vendedor !== undefined) r.vendedor = vendedor || null;
@@ -452,7 +486,10 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
            ap.id_loja,
            ap.dt_lancamento,
            ap.venc_original,
-           ap.faturamento_direto
+           ap.faturamento_direto,
+           ap.desconto,
+           ap.valor_juros,
+           ap.multa
          ${fromAP}
          WHERE ${where}
          ORDER BY ${orderCol} ${orderDir} NULLS LAST, ap.srv_id DESC
@@ -483,7 +520,8 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
   const s = req.params.schema;
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
-          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao,
+          desconto, valor_juros, multa } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
   const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
 
@@ -532,16 +570,17 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
       `INSERT INTO ${s}.a_pagar
          (srv_id, descricao, credor, id_fornecedor, valor, valor_pago, vencimento, proximo_dia_util, data_realizado,
           status, id_forma_de_pagamento, parcela, total_parcelas, id_condicao_pagamento, observacao, id_loja,
-          dt_lancamento, venc_original, faturamento_direto)
-       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12,$13,$14,$15,CURRENT_DATE,$7::timestamp,'N')
+          dt_lancamento, venc_original, faturamento_direto, desconto, valor_juros, multa)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::timestamp,${exprProximoDiaUtil('$7')},$8,$9,$10,$11,$12,$13,$14,$15,CURRENT_DATE,$7::timestamp,'N',$16,$17,$18)
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
-         dt_lancamento, venc_original, faturamento_direto`,
+         dt_lancamento, venc_original, faturamento_direto, desconto, valor_juros, multa`,
       [next_srv_id, descricao, fornecedor || null, id_fornecedor, valor, parseFloat(valor_pago) || null,
        data_vencimento, data_pagamento || null, capitalizarStatus(status || 'pendente'), parseInt(forma_pagamento) || null,
-       parseInt(parcela) || null, parseInt(total_parcelas) || null, id_condicao_pagamento, observacao || null, id_loja || null]
+       parseInt(parcela) || null, parseInt(total_parcelas) || null, id_condicao_pagamento, observacao || null, id_loja || null,
+       parseFloat(desconto) || null, parseFloat(valor_juros) || null, parseFloat(multa) || null]
     );
     r.condicao_pagamento = condicao_pagamento || null;
     registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
@@ -557,7 +596,8 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
-          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao, id_loja } = req.body;
+          status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao, id_loja,
+          desconto, valor_juros, multa } = req.body;
 
   if (dataFutura(data_pagamento))
     return res.status(400).json({ erro: 'Não utilize data de pagamento maior que hoje.' });
@@ -606,17 +646,21 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
          id_loja                = COALESCE($14, id_loja),
          dt_lancamento          = COALESCE(dt_lancamento, CURRENT_DATE),
          venc_original          = COALESCE(venc_original, COALESCE($6, vencimento)),
-         faturamento_direto     = COALESCE(faturamento_direto, 'N')
-       WHERE srv_id = $15
+         faturamento_direto     = COALESCE(faturamento_direto, 'N'),
+         desconto               = COALESCE($15, desconto),
+         valor_juros            = COALESCE($16, valor_juros),
+         multa                  = COALESCE($17, multa)
+       WHERE srv_id = $18
        RETURNING
          srv_id AS id, descricao, credor AS fornecedor, valor, valor_pago,
          vencimento AS data_vencimento, proximo_dia_util, data_realizado AS data_pagamento,
          status, id_forma_de_pagamento::text AS forma_pagamento, parcela, total_parcelas, observacao, id_loja,
-         dt_lancamento, venc_original, faturamento_direto`,
+         dt_lancamento, venc_original, faturamento_direto, desconto, valor_juros, multa`,
       [descricao || null, fornecedor || null, id_fornecedor, valor || null, parseFloat(valor_pago) || null,
        data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
        parseInt(forma_pagamento) || null, parseInt(parcela) || null, parseInt(total_parcelas) || null,
-       id_condicao_pagamento, observacao ?? null, id_loja ?? null, id]
+       id_condicao_pagamento, observacao ?? null, id_loja ?? null,
+       parseFloat(desconto) || null, parseFloat(valor_juros) || null, parseFloat(multa) || null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
     if (condicao_pagamento !== undefined) r.condicao_pagamento = condicao_pagamento || null;
