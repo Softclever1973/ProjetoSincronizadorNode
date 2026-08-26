@@ -1,13 +1,21 @@
 const express        = require('express');
 const router         = express.Router();
+const crypto         = require('crypto');
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const { pool }              = require('../../../../infrastructure/db');
 const { vincularVendedorDono } = require('../../../../application/onboarding/vincularVendedorDono');
 const authJwt        = require('../../middleware/authJwt');
 const tokenBlacklist = require('../../../../infrastructure/cache/tokenBlacklist');
+const { enviarEmail } = require('../../../../infrastructure/email/emailApiClient');
 
 const JWT_EXPIRES_IN = '24h';
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
+const RESET_THROTTLE_MS  = 60 * 1000;      // evita reenvio em disparada pelo mesmo e-mail
+
+// Em memória, por processo — mesma limitação de tokenBlacklist.js (não sobrevive a
+// restart nem é compartilhado entre instâncias; suficiente para um único processo).
+const _ultimoPedidoReset = new Map(); // email → timestamp do último pedido aceito
 
 /**
  * Lê os vínculos do usuário com empresas e monta os claims schemas/roles/lojas/vendedores.
@@ -72,6 +80,90 @@ router.post('/login', async (req, res) => {
     const { token, nome, isSuperAdmin } = assinarToken(usuario, claims);
 
     res.json({ id: usuario.id, email: usuario.email, token, ...claims, nome, isSuperAdmin });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+/**
+ * Pede o envio de um e-mail de recuperação de senha. Responde sempre com sucesso
+ * genérico — nunca revela se o e-mail existe ou não na base (evita enumeração de contas).
+ */
+router.post('/esqueci-senha', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.status(400).json({ erro: 'email obrigatório' });
+
+  const RESPOSTA_GENERICA = { ok: true, message: 'Se o e-mail existir, enviaremos um link de redefinição.' };
+
+  const ultimoPedido = _ultimoPedidoReset.get(email);
+  if (ultimoPedido && Date.now() - ultimoPedido < RESET_THROTTLE_MS) {
+    return res.json(RESPOSTA_GENERICA);
+  }
+
+  try {
+    const { rows: [usuario] } = await pool.query(
+      'SELECT id, email, nome FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
+      [email]
+    );
+
+    if (usuario) {
+      const token     = crypto.randomBytes(32).toString('hex');
+      const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+      const expira    = new Date(Date.now() + RESET_TOKEN_TTL_MS);
+
+      await pool.query(
+        'UPDATE public.usuarios SET reset_token_hash = $1, reset_token_expira = $2 WHERE id = $3',
+        [tokenHash, expira, usuario.id]
+      );
+
+      const link = `${process.env.FRONTEND_URL}/redefinir-senha.html?token=${token}`;
+      await enviarEmail({
+        to: usuario.email,
+        subject: 'Redefinição de senha — Sirius Web',
+        html: `<p>Olá${usuario.nome ? ', ' + usuario.nome : ''}!</p>
+               <p>Recebemos um pedido para redefinir sua senha. Clique no link abaixo (válido por 1 hora):</p>
+               <p><a href="${link}">${link}</a></p>
+               <p>Se você não pediu isso, ignore este e-mail.</p>`,
+        text: `Redefinição de senha. Acesse: ${link} (válido por 1 hora). Se você não pediu isso, ignore este e-mail.`,
+      });
+
+      _ultimoPedidoReset.set(email, Date.now());
+    }
+
+    res.json(RESPOSTA_GENERICA);
+  } catch (e) {
+    // Falha no envio (Email API fora do ar, etc.) não deve vazar se o e-mail existe —
+    // loga no servidor e responde com a mesma mensagem genérica.
+    console.error('Erro ao processar /auth/esqueci-senha:', e.message);
+    res.json(RESPOSTA_GENERICA);
+  }
+});
+
+/** Confirma a redefinição de senha a partir do token recebido por e-mail. */
+router.post('/redefinir-senha', async (req, res) => {
+  const { token, novaSenha } = req.body;
+  if (!token || !novaSenha)
+    return res.status(400).json({ erro: 'token e novaSenha obrigatórios' });
+  if (novaSenha.length < 6)
+    return res.status(400).json({ erro: 'Senha deve ter no mínimo 6 caracteres' });
+
+  try {
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const { rows: [usuario] } = await pool.query(
+      `SELECT id FROM public.usuarios
+       WHERE reset_token_hash = $1 AND reset_token_expira > NOW() AND ativo = TRUE`,
+      [tokenHash]
+    );
+    if (!usuario)
+      return res.status(400).json({ erro: 'Link inválido ou expirado. Solicite uma nova redefinição.' });
+
+    const senhaHash = await bcrypt.hash(novaSenha, 12);
+    await pool.query(
+      'UPDATE public.usuarios SET senha_hash = $1, reset_token_hash = NULL, reset_token_expira = NULL WHERE id = $2',
+      [senhaHash, usuario.id]
+    );
+
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

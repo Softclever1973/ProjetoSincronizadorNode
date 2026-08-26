@@ -34,6 +34,12 @@ const DDL_CONTROLE = [
   // Migração: adiciona nome ao perfil do usuário
   `ALTER TABLE public.usuarios
      ADD COLUMN IF NOT EXISTS nome TEXT`,
+  // Migração: recuperação de senha ("esqueci minha senha") — hash do token (nunca o
+  // token em texto puro) + expiração; ambos NULL fora de um fluxo de reset em andamento
+  `ALTER TABLE public.usuarios
+     ADD COLUMN IF NOT EXISTS reset_token_hash TEXT`,
+  `ALTER TABLE public.usuarios
+     ADD COLUMN IF NOT EXISTS reset_token_expira TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS public.audit_log (
     id          SERIAL       PRIMARY KEY,
     id_usuario  INTEGER      REFERENCES public.usuarios(id),
