@@ -1,5 +1,6 @@
-// /api/:schema/financeiro/* exige feature "financeiro" (Safira+), lida de sync_tenants — não
-// do claim do JWT. Schema fictício próprio pra não colidir com TEST_SCHEMA/plano_info.
+// /api/:schema/financeiro/* exige o módulo "financeiro" com nível 'rw' — permissão efetiva
+// (plano ∩ role), lida de public.permissoes_plano/permissoes_role via cache (não do claim do
+// JWT). Schema fictício próprio pra não colidir com TEST_SCHEMA/plano_info.
 const express = require('express');
 const request = require('supertest');
 const jwt = require('jsonwebtoken');
@@ -41,7 +42,7 @@ afterAll(async () => {
   await pool.end();
 });
 
-describe('GET /api/:schema/financeiro/contas-pagar — gate de plano', () => {
+describe('GET /api/:schema/financeiro/contas-pagar — gate de módulo (plano ∩ role)', () => {
   test('dono num plano abaixo de Safira recebe 403 (plano lido do banco, claim do JWT diz Diamante)', async () => {
     await setPlanoNoBanco('OURO1');
 
@@ -51,7 +52,7 @@ describe('GET /api/:schema/financeiro/contas-pagar — gate de plano', () => {
       .set('Authorization', `Bearer ${tokenPara('dono', 'DIAMANTE1')}`);
 
     expect(res.status).toBe(403);
-    expect(res.body.erro).toBe('recurso não disponível no plano atual');
+    expect(res.body.erro).toBe('permissão insuficiente');
   });
 
   test('dono num plano Safira+ é liberado, mesmo com claim do JWT desatualizado (Lite)', async () => {
@@ -77,7 +78,7 @@ describe('GET /api/:schema/financeiro/contas-pagar — gate de plano', () => {
     expect(depois.status).not.toBe(403);
   });
 
-  test('schema sem linha em sync_tenants cai pro plano padrão (sem feature) e recebe 403', async () => {
+  test('schema sem linha em sync_tenants cai pro plano padrão (sem módulo financeiro) e recebe 403', async () => {
     const SCHEMA_FANTASMA = 'schema_que_nao_existe_em_sync_tenants_fin';
     const token = jwt.sign(
       { id: 999999, schemas: [SCHEMA_FANTASMA], roles: { [SCHEMA_FANTASMA]: 'dono' }, lojas: {}, vendedores: {}, planos: {} },

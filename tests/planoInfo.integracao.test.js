@@ -14,9 +14,12 @@ const app = express();
 app.use(express.json());
 app.use('/api', adminRouter);
 
+// role 'dono' de propósito: é 'rw' em todo módulo na matriz role×módulo, então
+// `modulos.financeiro` do response passa a refletir só a dimensão de plano que este
+// teste quer isolar (permissão efetiva = min(plano, role) = plano, quando role já é o máximo).
 function tokenComPlanoClaim(planoNoClaim) {
   return jwt.sign(
-    { id: 999999, nome: 'Teste', schemas: [SCHEMA], roles: {}, lojas: {}, vendedores: {}, planos: { [SCHEMA]: planoNoClaim } },
+    { id: 999999, nome: 'Teste', schemas: [SCHEMA], roles: { [SCHEMA]: 'dono' }, lojas: {}, vendedores: {}, planos: { [SCHEMA]: planoNoClaim } },
     process.env.JWT_SECRET
   );
 }
@@ -49,11 +52,11 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('DIAMANTE1');
-    expect(res.body.features).toContain('financeiro');
     expect(res.body.features).toContain('exportacao');
+    expect(res.body.modulos.financeiro).toBe('rw');
   });
 
-  test('plano abaixo de Safira não tem financeiro nem exportacao', async () => {
+  test('plano abaixo de Safira não libera o módulo financeiro nem a feature exportacao', async () => {
     await setPlanoNoBanco('OURO1');
 
     const res = await request(app)
@@ -62,8 +65,8 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('OURO1');
-    expect(res.body.features).not.toContain('financeiro');
     expect(res.body.features).not.toContain('exportacao');
+    expect(res.body.modulos.financeiro).toBe('--');
   });
 
   test('mudança de plano no banco reflete na próxima chamada, mesmo com o mesmo JWT (sem reemitir token)', async () => {
@@ -72,13 +75,13 @@ describe('GET /api/:schema/plano', () => {
 
     const antes = await request(app).get(`/api/${SCHEMA}/plano`).set('Authorization', token);
     expect(antes.body.plano).toBe('LITE1');
-    expect(antes.body.features).not.toContain('financeiro');
+    expect(antes.body.modulos.financeiro).toBe('--');
 
     await setPlanoNoBanco('SAFIRA1');
 
     const depois = await request(app).get(`/api/${SCHEMA}/plano`).set('Authorization', token);
     expect(depois.body.plano).toBe('SAFIRA1');
-    expect(depois.body.features).toContain('financeiro');
+    expect(depois.body.modulos.financeiro).toBe('rw');
   });
 
   test('schema sem linha em sync_tenants cai para o plano padrão', async () => {

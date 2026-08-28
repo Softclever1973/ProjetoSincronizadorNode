@@ -28,8 +28,8 @@ describe('listarPlanos', () => {
 });
 
 describe('featuresDoPlano', () => {
-  test.each(['SAFIRA1', 'DIAMANTE1'])('"%s" inclui financeiro e exportacao', (plano) => {
-    expect(featuresDoPlano(plano)).toContain('financeiro');
+  // "financeiro" saiu de features (migrou para o sistema de módulos, ver domain/permissoes.js)
+  test.each(['SAFIRA1', 'DIAMANTE1'])('"%s" inclui exportacao', (plano) => {
     expect(featuresDoPlano(plano)).toContain('exportacao');
   });
 
@@ -48,14 +48,14 @@ describe('featuresDoPlano', () => {
 
 describe('planoTemFeature', () => {
   test('true quando o plano tem a feature', () => {
-    expect(planoTemFeature('SAFIRA1', 'financeiro')).toBe(true);
+    expect(planoTemFeature('SAFIRA1', 'exportacao')).toBe(true);
   });
 
   test('false quando o plano não tem a feature', () => {
-    expect(planoTemFeature(PLANO_PADRAO, 'financeiro')).toBe(false);
+    expect(planoTemFeature(PLANO_PADRAO, 'exportacao')).toBe(false);
   });
 
   test('false para plano desconhecido', () => {
-    expect(planoTemFeature('plano_inexistente', 'financeiro')).toBe(false);
+    expect(planoTemFeature('plano_inexistente', 'exportacao')).toBe(false);
   });
 });
