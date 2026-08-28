@@ -4,7 +4,7 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../../../../infrastructure/db');
 const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('../../../../domain/planos');
-const { MODULOS, NIVEL_VALIDO } = require('../../../../domain/modulos');
+const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('../../../../domain/modulos');
 const { recarregarPermissoes } = require('../../../../infrastructure/cache/permissoesCache');
 const TABELAS = require('../../../../../client/domain/tabelas');
 
@@ -44,7 +44,12 @@ router.get('/permissoes', async (req, res) => {
       pool.query('SELECT plano, modulo, nivel FROM public.permissoes_plano ORDER BY plano, modulo'),
       pool.query('SELECT role, modulo, nivel FROM public.permissoes_role ORDER BY role, modulo'),
     ]);
-    res.json({ modulos: MODULOS, planos, roles });
+    // Módulos (telas inteiras) antes, funções (capacidades pontuais, ex. exportação) depois —
+    // a tela de Permissões usa essa ordem pra desenhar o divisor entre os dois grupos.
+    const modulos = [...MODULOS]
+      .sort((a, b) => (MODULOS_DEF[a].tipo === MODULOS_DEF[b].tipo ? 0 : MODULOS_DEF[a].tipo === 'modulo' ? -1 : 1))
+      .map(chave => ({ chave, label: MODULOS_DEF[chave].label, tipo: MODULOS_DEF[chave].tipo }));
+    res.json({ modulos, planos, roles });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

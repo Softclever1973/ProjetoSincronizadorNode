@@ -1,4 +1,4 @@
-const { PLANOS, PLANO_PADRAO, planoValido, listarPlanos, featuresDoPlano, planoTemFeature } = require('../src/server/domain/planos');
+const { PLANOS, PLANO_PADRAO, planoValido, listarPlanos } = require('../src/server/domain/planos');
 
 describe('planoValido', () => {
   test.each(Object.keys(PLANOS))('"%s" é válido', (plano) => {
@@ -16,29 +16,13 @@ describe('planoValido', () => {
 });
 
 describe('listarPlanos', () => {
-  test('retorna todos os planos com chave/nome/features', () => {
+  test('retorna todos os planos com chave/nome', () => {
     const lista = listarPlanos();
     expect(lista).toHaveLength(Object.keys(PLANOS).length);
     lista.forEach(p => {
       expect(p).toHaveProperty('chave');
       expect(p).toHaveProperty('nome');
-      expect(p).toHaveProperty('features');
     });
-  });
-});
-
-describe('featuresDoPlano', () => {
-  // "financeiro" saiu de features (migrou para o sistema de módulos, ver domain/permissoes.js)
-  test.each(['SAFIRA1', 'DIAMANTE1'])('"%s" inclui exportacao', (plano) => {
-    expect(featuresDoPlano(plano)).toContain('exportacao');
-  });
-
-  test.each(['LITE1', 'BRONZE1', 'PRATA1', 'OURO1'])('"%s" não tem nenhuma feature', (plano) => {
-    expect(featuresDoPlano(plano)).toEqual([]);
-  });
-
-  test('plano desconhecido retorna [] (fail-closed, não cai para PLANO_PADRAO)', () => {
-    expect(featuresDoPlano('plano_inexistente')).toEqual([]);
   });
 
   test('PLANO_PADRAO é um plano válido', () => {
@@ -46,16 +30,6 @@ describe('featuresDoPlano', () => {
   });
 });
 
-describe('planoTemFeature', () => {
-  test('true quando o plano tem a feature', () => {
-    expect(planoTemFeature('SAFIRA1', 'exportacao')).toBe(true);
-  });
-
-  test('false quando o plano não tem a feature', () => {
-    expect(planoTemFeature(PLANO_PADRAO, 'exportacao')).toBe(false);
-  });
-
-  test('false para plano desconhecido', () => {
-    expect(planoTemFeature('plano_inexistente', 'exportacao')).toBe(false);
-  });
-});
+// Features booleanas por plano (ex.: antiga "exportacao") migraram pro sistema de módulos
+// (plano × role, ver domain/permissoes.js e domain/modulos.js) — cobertura em
+// permissoes.integracao.test.js e planoInfo.integracao.test.js.

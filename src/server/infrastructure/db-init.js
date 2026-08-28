@@ -8,22 +8,27 @@ const { pool } = require('./db');
 // (sidebar.js: feature 'financeiro' + roles ['gerente','dono']) — página própria, mas
 // mesma regra dupla (plano Safira+/Diamante E role gerente/dono). Segue o mesmo padrão
 // de financeiro nas duas matrizes abaixo, não o padrão aberto de produtos/clientes/pedidos.
-const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw' };
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--' };
 // Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
 // mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
+// exportacao migrou de planos.json (`features: ['exportacao']`) pra cá — mesmos dois planos.
+// É do tipo 'funcao' (domain/modulos.js): não tem leitura/escrita separadas, só liberado/
+// bloqueado — por isso só usa 'rw' (liberado) ou '--' (bloqueado), nunca 'r-'.
 const SEED_PERMISSOES_PLANO = {
   LITE1:     _MOD_RW_TODOS,
   BRONZE1:   _MOD_RW_TODOS,
   PRATA1:    _MOD_RW_TODOS,
   OURO1:     _MOD_RW_TODOS,
-  DIAMANTE1: { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw' },
-  SAFIRA1:   { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw' },
+  DIAMANTE1: { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw', exportacao: 'rw' },
+  SAFIRA1:   { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw', exportacao: 'rw' },
 };
 // Ordem de poder (não alfabética): vendedor < gerente < dono.
+// exportacao não varia por role (hoje qualquer role exporta se o plano libera) — 'rw' nos
+// três, igual ao comportamento antigo de AUTH.hasFeature (sem checagem de role nenhuma).
 const SEED_PERMISSOES_ROLE = {
-  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--' },
-  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--' },
-  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw' },
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw' },
 };
 
 /** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */

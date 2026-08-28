@@ -144,7 +144,8 @@ describe('GET /superadmin/permissoes', () => {
   test('lista os módulos e as duas matrizes completas', async () => {
     const res = await request(app).get('/superadmin/permissoes').set('Authorization', tokenSuperAdmin());
     expect(res.status).toBe(200);
-    expect(res.body.modulos).toContain('financeiro');
+    expect(res.body.modulos).toContainEqual({ chave: 'financeiro', label: expect.any(String), tipo: 'modulo' });
+    expect(res.body.modulos).toContainEqual({ chave: 'exportacao', label: expect.any(String), tipo: 'funcao' });
     expect(Array.isArray(res.body.planos)).toBe(true);
     expect(Array.isArray(res.body.roles)).toBe(true);
   });

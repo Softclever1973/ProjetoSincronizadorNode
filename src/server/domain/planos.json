@@ -1,28 +1,10 @@
 {
   "planos": {
-    "LITE1": {
-      "nome": "Lite",
-      "features": []
-    },
-    "BRONZE1": {
-      "nome": "Bronze",
-      "features": []
-    },
-    "PRATA1": {
-      "nome": "Prata",
-      "features": []
-    },
-    "OURO1": {
-      "nome": "Ouro",
-      "features": []
-    },
-    "DIAMANTE1": {
-      "nome": "Diamante",
-      "features": ["exportacao"]
-    },
-    "SAFIRA1": {
-      "nome": "Safira",
-      "features": ["exportacao"]
-    }
+    "LITE1": { "nome": "Lite" },
+    "BRONZE1": { "nome": "Bronze" },
+    "PRATA1": { "nome": "Prata" },
+    "OURO1": { "nome": "Ouro" },
+    "DIAMANTE1": { "nome": "Diamante" },
+    "SAFIRA1": { "nome": "Safira" }
   }
 }

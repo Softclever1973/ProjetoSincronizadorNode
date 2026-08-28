@@ -42,7 +42,7 @@ afterAll(async () => {
 });
 
 describe('GET /api/:schema/plano', () => {
-  test('retorna plano/nome/features do banco (não do claim do JWT)', async () => {
+  test('retorna plano/nome/modulos do banco (não do claim do JWT)', async () => {
     await setPlanoNoBanco('DIAMANTE1');
 
     const res = await request(app)
@@ -52,11 +52,11 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('DIAMANTE1');
-    expect(res.body.features).toContain('exportacao');
+    expect(res.body.modulos.exportacao).toBe('rw');
     expect(res.body.modulos.financeiro).toBe('rw');
   });
 
-  test('plano abaixo de Safira não libera o módulo financeiro nem a feature exportacao', async () => {
+  test('plano abaixo de Safira não libera o módulo financeiro nem o de exportação', async () => {
     await setPlanoNoBanco('OURO1');
 
     const res = await request(app)
@@ -65,7 +65,7 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('OURO1');
-    expect(res.body.features).not.toContain('exportacao');
+    expect(res.body.modulos.exportacao).toBe('--');
     expect(res.body.modulos.financeiro).toBe('--');
   });
 

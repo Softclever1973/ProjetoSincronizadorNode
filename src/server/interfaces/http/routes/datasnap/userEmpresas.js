@@ -3,7 +3,6 @@ const router   = express.Router();
 const { pool } = require('../../../../infrastructure/db');
 const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
 const authJwt  = require('../../middleware/authJwt');
-const { featuresDoPlano } = require('../../../../domain/planos');
 const { obterPermissoesEfetivas } = require('../../../../infrastructure/cache/permissoesCache');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
@@ -21,7 +20,6 @@ router.get('/', authJwt, async (req, res) => {
     );
     const rows = await Promise.all(result.rows.map(async r => ({
       ...r,
-      features: featuresDoPlano(r.plano),
       modulos: await obterPermissoesEfetivas(r.plano, req.userRoles?.[r.schema_name]),
     })));
     res.json(rows);

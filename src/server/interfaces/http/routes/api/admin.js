@@ -103,7 +103,7 @@ router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
     const plano = rows[0]?.plano || PLANO_PADRAO;
     const role = req.userRoles?.[schema];
     const modulos = await obterPermissoesEfetivas(plano, role);
-    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [], modulos });
+    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, modulos });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
