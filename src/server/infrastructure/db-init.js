@@ -1,5 +1,45 @@
 const { pool } = require('./db');
 
+// Seed do sistema de permissões por módulo (plano × módulo, role × módulo) — reproduz
+// exatamente o comportamento anterior (requireRole/requireRoleOuVendedorEm/
+// requirePlanFeature('financeiro')) linha por linha, pra não regredir acesso de ninguém.
+// Ver plano em C:\Users\USUARIO021\.claude\plans\jaunty-nibbling-rabbit.md.
+// Fornecedores tinha, antes desta migração, EXATAMENTE o mesmo gate de financeiro
+// (sidebar.js: feature 'financeiro' + roles ['gerente','dono']) — página própria, mas
+// mesma regra dupla (plano Safira+/Diamante E role gerente/dono). Segue o mesmo padrão
+// de financeiro nas duas matrizes abaixo, não o padrão aberto de produtos/clientes/pedidos.
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw' };
+// Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
+// mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
+const SEED_PERMISSOES_PLANO = {
+  LITE1:     _MOD_RW_TODOS,
+  BRONZE1:   _MOD_RW_TODOS,
+  PRATA1:    _MOD_RW_TODOS,
+  OURO1:     _MOD_RW_TODOS,
+  DIAMANTE1: { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw' },
+  SAFIRA1:   { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw' },
+};
+// Ordem de poder (não alfabética): vendedor < gerente < dono.
+const SEED_PERMISSOES_ROLE = {
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw' },
+};
+
+/** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */
+function _sqlSeedPermissoes(tabela, colChave, mapa) {
+  const rows = [];
+  const params = [];
+  let i = 1;
+  for (const [chave, modulos] of Object.entries(mapa)) {
+    for (const [modulo, nivel] of Object.entries(modulos)) {
+      rows.push(`($${i++}, $${i++}, $${i++})`);
+      params.push(chave, modulo, nivel);
+    }
+  }
+  return { sql: `INSERT INTO public.${tabela} (${colChave}, modulo, nivel) VALUES ${rows.join(', ')} ON CONFLICT (${colChave}, modulo) DO NOTHING`, params };
+}
+
 // Tabelas de controle: ficam sempre em public, fora de qualquer tenant schema
 const DDL_CONTROLE = [
   `CREATE TABLE IF NOT EXISTS public.sync_tenants (
@@ -81,6 +121,22 @@ const DDL_CONTROLE = [
   `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'LITE1'`,
   // Timestamp do último reset — client usa pra detectar e disparar o banner de limpeza local.
   `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS resetado_em TIMESTAMP`,
+  // Migração: sistema unificado de permissões por módulo (plano × módulo, role × módulo),
+  // substitui requireRole/requireRoleOuVendedorEm/requirePlanFeature('financeiro') hardcoded.
+  `CREATE TABLE IF NOT EXISTS public.permissoes_plano (
+    plano   TEXT NOT NULL,
+    modulo  TEXT NOT NULL,
+    nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (plano, modulo)
+  )`,
+  `CREATE TABLE IF NOT EXISTS public.permissoes_role (
+    role    TEXT NOT NULL CHECK (role IN ('vendedor', 'gerente', 'dono')),
+    modulo  TEXT NOT NULL,
+    nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (role, modulo)
+  )`,
+  _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
+  _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
@@ -213,7 +269,7 @@ async function initializeDatabase() {
   const client = await pool.connect();
   try {
     for (const ddl of DDL_CONTROLE) {
-      await client.query(ddl);
+      typeof ddl === 'string' ? await client.query(ddl) : await client.query(ddl.sql, ddl.params);
     }
   } finally {
     client.release();
