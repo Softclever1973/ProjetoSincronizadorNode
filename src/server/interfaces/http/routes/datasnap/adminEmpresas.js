@@ -4,6 +4,8 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query } = require('../../../../infrastructure/db');
 const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('../../../../domain/planos');
+const { MODULOS, NIVEL_VALIDO } = require('../../../../domain/modulos');
+const { recarregarPermissoes } = require('../../../../infrastructure/cache/permissoesCache');
 const TABELAS = require('../../../../../client/domain/tabelas');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
@@ -31,6 +33,67 @@ router.get('/empresas', async (req, res) => {
 
 router.get('/planos', (req, res) => {
   res.json(listarPlanos());
+});
+
+// ── GET /superadmin/permissoes ────────────────────────────────────────────────
+// Matriz completa (plano×módulo + role×módulo), pra popular a tela de edição.
+
+router.get('/permissoes', async (req, res) => {
+  try {
+    const [{ rows: planos }, { rows: roles }] = await Promise.all([
+      pool.query('SELECT plano, modulo, nivel FROM public.permissoes_plano ORDER BY plano, modulo'),
+      pool.query('SELECT role, modulo, nivel FROM public.permissoes_role ORDER BY role, modulo'),
+    ]);
+    res.json({ modulos: MODULOS, planos, roles });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/permissoes/plano ──────────────────────────────────────────
+// Upsert de uma célula (plano, modulo) -> nivel.
+
+router.put('/permissoes/plano', async (req, res) => {
+  const { plano, modulo, nivel } = req.body;
+  if (!planoValido(plano)) return res.status(400).json({ erro: `Plano inválido: ${plano}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+  if (!NIVEL_VALIDO.has(nivel)) return res.status(400).json({ erro: `Nível inválido: ${nivel}` });
+
+  try {
+    await pool.query(
+      `INSERT INTO public.permissoes_plano (plano, modulo, nivel) VALUES ($1, $2, $3)
+       ON CONFLICT (plano, modulo) DO UPDATE SET nivel = EXCLUDED.nivel`,
+      [plano, modulo, nivel]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/permissoes/role ───────────────────────────────────────────
+// Upsert de uma célula (role, modulo) -> nivel.
+
+const ROLES_VALIDOS_PERMISSOES = ['dono', 'gerente', 'vendedor'];
+
+router.put('/permissoes/role', async (req, res) => {
+  const { role, modulo, nivel } = req.body;
+  if (!ROLES_VALIDOS_PERMISSOES.includes(role)) return res.status(400).json({ erro: `Role inválido: ${role}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+  if (!NIVEL_VALIDO.has(nivel)) return res.status(400).json({ erro: `Nível inválido: ${nivel}` });
+
+  try {
+    await pool.query(
+      `INSERT INTO public.permissoes_role (role, modulo, nivel) VALUES ($1, $2, $3)
+       ON CONFLICT (role, modulo) DO UPDATE SET nivel = EXCLUDED.nivel`,
+      [role, modulo, nivel]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
 });
 
 // ── POST /superadmin/empresas ─────────────────────────────────────────────────

@@ -10,15 +10,16 @@ const express = require('express');
 const router  = express.Router();
 
 const authJwt                  = require('../../middleware/authJwt');
-const { requireRole }          = require('../../middleware/checkRole');
+const { requireModulo }        = require('../../middleware/requireModulo');
 const { checkSchema }          = require('../../middleware/checkSchema');
 const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
+const { obterPermissoesEfetivas } = require('../../../../infrastructure/cache/permissoesCache');
 
 /* ── GET /api/:schema/admin/sync-config ── */
-router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'r'), async (req, res) => {
   const { schema } = req.params;
   try {
     const rows = await withTenantConnection(schema, db =>
@@ -32,7 +33,7 @@ router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono
 });
 
 /* ── PUT /api/:schema/admin/sync-config ── */
-router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'w'), async (req, res) => {
   const { schema } = req.params;
   const { chave, valor } = req.body;
 
@@ -90,6 +91,9 @@ router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
 });
 
 // GET /api/:schema/plano — info do plano atual. Lê de sync_tenants, não do claim do JWT (evita staleness até o token renovar).
+// `modulos` traz a permissão efetiva (plano ∩ role) de cada módulo — é o mesmo endpoint que
+// sidebar.js#initSidebar() já chama em toda carga de página, então o frontend recebe
+// permissões atualizadas sem precisar de um novo login.
 router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
@@ -97,7 +101,9 @@ router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
       'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [schema]
     );
     const plano = rows[0]?.plano || PLANO_PADRAO;
-    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [] });
+    const role = req.userRoles?.[schema];
+    const modulos = await obterPermissoesEfetivas(plano, role);
+    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [], modulos });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

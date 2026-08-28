@@ -14,6 +14,7 @@ const router  = express.Router();
 
 const authJwt             = require('../../middleware/authJwt');
 const { requireRole }     = require('../../middleware/checkRole');
+const { requireModulo }   = require('../../middleware/requireModulo');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
 const { COLS_DATA_PEDIDO } = require('../../../../domain/validacao');
@@ -71,7 +72,7 @@ router.get('/:schema/dashboard', authJwt, checkSchema, async (req, res) => {
 });
 
 /* ── GET /api/:schema/dashboard/faturamento-por-loja ── */
-router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requireModulo('faturamento', 'r'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
 
@@ -134,7 +135,7 @@ router.get('/:schema/dashboard/faturamento-por-loja', authJwt, checkSchema, requ
 });
 
 /* ── GET /api/:schema/dashboard/evolucao-mensal ── */
-router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireModulo('faturamento', 'r'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
@@ -170,7 +171,7 @@ router.get('/:schema/dashboard/evolucao-mensal', authJwt, checkSchema, requireRo
 });
 
 /* ── GET /api/:schema/dashboard/evolucao-mensal-por-loja ── */
-router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, requireModulo('faturamento', 'r'), requireRole('dono'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   // Só faz sentido comparar lojas quando não há filtro ativo — o frontend já para de
@@ -225,7 +226,7 @@ router.get('/:schema/dashboard/evolucao-mensal-por-loja', authJwt, checkSchema, 
 });
 
 /* ── GET /api/:schema/dashboard/top-produtos ── */
-router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireModulo('faturamento', 'r'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
@@ -268,7 +269,7 @@ router.get('/:schema/dashboard/top-produtos', authJwt, checkSchema, requireRole(
 });
 
 /* ── GET /api/:schema/dashboard/pedidos-por-status ── */
-router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requireModulo('faturamento', 'r'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
@@ -290,7 +291,7 @@ router.get('/:schema/dashboard/pedidos-por-status', authJwt, checkSchema, requir
 });
 
 /* ── GET /api/:schema/dashboard/faturamento-por-vendedor ── */
-router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/dashboard/faturamento-por-vendedor', authJwt, checkSchema, requireModulo('faturamento', 'r'), async (req, res) => {
   const { schema } = req.params;
   const { ano, mes, anoInicio, mesInicio, anoFim, mesFim } = req.query;
   const idLojaF = resolveIdLoja(req, schema, { donoPodemFiltrar: true });

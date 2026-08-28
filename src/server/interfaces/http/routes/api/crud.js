@@ -7,10 +7,10 @@ const express = require('express');
 const router  = express.Router();
 
 const authJwt             = require('../../middleware/authJwt');
-const { requireRoleOuVendedorEm } = require('../../middleware/checkRole');
+const { requireModuloDaTabela } = require('../../middleware/requireModulo');
 const { checkSchema }     = require('../../middleware/checkSchema');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('../../../../domain/validacao');
+const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('../../../../domain/validacao');
 const { colunasTipadasDeRegistro } = require('../../../../domain/schema');
 const { colunasTabela, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
@@ -83,7 +83,7 @@ router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async
 });
 
 /* ── GET /api/:schema/tabelas/:tabela — lista paginada ── */
-router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   const exportAll = req.query.all === 'true';
@@ -490,12 +490,12 @@ async function handleSave(req, res, forceUpdate) {
   }
 }
 
-const _saveMw = [authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER)];
+const _saveMw = [authJwt, checkSchema, requireModuloDaTabela('w')];
 router.post('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, false));
 router.put ('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, true));
 
 /* ── DELETE /api/:schema/tabelas/:tabela ── */
-router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER), async (req, res) => {
+router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabela('w'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 

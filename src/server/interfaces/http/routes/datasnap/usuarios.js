@@ -4,19 +4,15 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query, execute } = require('../../../../infrastructure/db');
 const authJwt  = require('../../middleware/authJwt');
 const { requireRole } = require('../../middleware/checkRole');
+const { requireModulo } = require('../../middleware/requireModulo');
+const { checkSchema } = require('../../middleware/checkSchema');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 const PODE_CRIAR    = { dono: ['gerente', 'vendedor'], gerente: ['vendedor'] };
 
-function checkSchema(req, res, next) {
-  if (!req.userSchemas.includes(req.params.schema))
-    return res.status(403).json({ erro: 'acesso negado' });
-  next();
-}
-
 /* ── GET /api/:schema/usuarios ── */
-router.get('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 'r'), async (req, res) => {
   const { schema } = req.params;
   const callerRole  = req.userRoles[schema];
   const filtroLoja  = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
@@ -121,7 +117,7 @@ async function _criarVendedorNoTenant(schema, { nome, id_loja }) {
 }
 
 /* ── POST /api/:schema/usuarios — criar usuário ── */
-router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.post('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema } = req.params;
   const callerRole = req.userRoles[schema];
   const { nome, email, senha, role, id_loja, id_vendedor, criarVendedor } = req.body;
@@ -205,7 +201,7 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/ativo ── */
-router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema, id } = req.params;
   const { ativo } = req.body;
 
@@ -238,7 +234,7 @@ router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireRole('g
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/perfil — editar nome, email, senha ── */
-router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema, id } = req.params;
   const callerRole = req.userRoles[schema];
   const { nome, email, senha } = req.body;
@@ -316,7 +312,7 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/role ── */
-router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireModulo('usuarios', 'w'), requireRole('dono'), async (req, res) => {
   const { schema, id } = req.params;
   const { role, id_loja, id_vendedor } = req.body;
 
@@ -357,7 +353,7 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('do
 /* ── GET /api/:schema/vendedores-disponiveis ── */
 // Retorna [{id_vendedor, nome, id_loja}] da tabela VENDEDORES do tenant.
 // Usado pelos modais de criar/editar usuário para popular o select de vínculo.
-router.get('/:schema/vendedores-disponiveis', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/vendedores-disponiveis', authJwt, checkSchema, requireModulo('usuarios', 'r'), async (req, res) => {
   const { schema } = req.params;
   try {
     // 1. Detecta colunas com o nome original (case) que o PostgreSQL armazenou.

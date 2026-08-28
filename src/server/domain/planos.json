@@ -16,13 +16,13 @@
       "nome": "Ouro",
       "features": []
     },
-    "SAFIRA1": {
-      "nome": "Safira",
-      "features": ["financeiro", "exportacao"]
-    },
     "DIAMANTE1": {
       "nome": "Diamante",
-      "features": ["financeiro", "exportacao"]
+      "features": ["exportacao"]
+    },
+    "SAFIRA1": {
+      "nome": "Safira",
+      "features": ["exportacao"]
     }
   }
 }

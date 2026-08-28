@@ -7,12 +7,12 @@ const express = require('express');
 const router  = express.Router();
 
 const authJwt         = require('../../middleware/authJwt');
-const { requireRole } = require('../../middleware/checkRole');
+const { requireModulo } = require('../../middleware/requireModulo');
 const { checkSchema } = require('../../middleware/checkSchema');
 const { pool }        = require('../../../../infrastructure/db');
 
 /* ── GET /api/:schema/audit-log ── */
-router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/audit-log', authJwt, checkSchema, requireModulo('auditoria', 'r'), async (req, res) => {
   const { schema } = req.params;
   const pageSize   = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 50));
   const page       = Math.max(1, parseInt(req.query.page) || 1);

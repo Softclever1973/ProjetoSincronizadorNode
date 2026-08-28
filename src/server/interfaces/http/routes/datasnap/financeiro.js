@@ -2,20 +2,15 @@ const express      = require('express');
 const router       = express.Router();
 const { pool, withTenantConnection, query, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
 const authJwt      = require('../../middleware/authJwt');
-const { requireRole } = require('../../middleware/checkRole');
-const { requirePlanFeature } = require('../../middleware/requirePlanFeature');
+const { requireModulo } = require('../../middleware/requireModulo');
+const { checkSchema } = require('../../middleware/checkSchema');
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const { gerarContasReceberDoPedido } = require('../../../../application/financeiro/gerarContasReceberDoPedido');
 const { gerarFluxoCaixa } = require('../../../../application/financeiro/fluxoCaixa');
 const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('../../../../domain/financeiro');
 
-function checkSchema(req, res, next) {
-  if (!req.userSchemas.includes(req.params.schema))
-    return res.status(403).json({ erro: 'acesso negado' });
-  next();
-}
-
-const guard = [authJwt, checkSchema, requireRole('gerente', 'dono'), requirePlanFeature('financeiro')];
+const guardRead  = [authJwt, checkSchema, requireModulo('financeiro', 'r')];
+const guardWrite = [authJwt, checkSchema, requireModulo('financeiro', 'w')];
 
 // Resolve vendedor/condição de pagamento por nome (dropdown de busca), igual ao padrão já usado pra cliente/fornecedor.
 async function resolverIdVendedor(s, nome) {
@@ -128,7 +123,7 @@ const CP_SORT_MAP = {
   srv_id:          'ap.srv_id',
 };
 
-router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
+router.get('/:schema/financeiro/contas-receber', ...guardRead, async (req, res) => {
   const s = req.params.schema;
   const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
@@ -230,7 +225,7 @@ router.get('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
 
 // ── POST /api/:schema/financeiro/contas-receber ───────────────────────────────
 
-router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => {
+router.post('/:schema/financeiro/contas-receber', ...guardWrite, async (req, res) => {
   const s = req.params.schema;
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
           status, forma_pagamento, parcela, total_parcelas, observacao, vendedor, condicao_pagamento,
@@ -296,7 +291,7 @@ router.post('/:schema/financeiro/contas-receber', ...guard, async (req, res) => 
 
 // ── PATCH /api/:schema/financeiro/contas-receber/:id ─────────────────────────
 
-router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res) => {
+router.patch('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (req, res) => {
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, nome_cliente, valor, data_vencimento, data_recebimento,
@@ -403,7 +398,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res
 
 // ── DELETE /api/:schema/financeiro/contas-receber/:id ────────────────────────
 
-router.delete('/:schema/financeiro/contas-receber/:id', ...guard, async (req, res) => {
+router.delete('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (req, res) => {
   const s  = req.params.schema;
   const id = parseInt(req.params.id);
   try {
@@ -421,7 +416,7 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guard, async (req, re
 
 // ── GET /api/:schema/financeiro/filiais ──────────────────────────────────────
 
-router.get('/:schema/financeiro/filiais', ...guard, async (req, res) => {
+router.get('/:schema/financeiro/filiais', ...guardRead, async (req, res) => {
   const s = req.params.schema;
   try {
     const rows = await withTenantConnection(s, (db) =>
@@ -435,7 +430,7 @@ router.get('/:schema/financeiro/filiais', ...guard, async (req, res) => {
 
 // ── GET /api/:schema/financeiro/contas-pagar ──────────────────────────────────
 
-router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
+router.get('/:schema/financeiro/contas-pagar', ...guardRead, async (req, res) => {
   const s = req.params.schema;
   const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
@@ -527,7 +522,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
 // ── POST /api/:schema/financeiro/contas-pagar ─────────────────────────────────
 
-router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
+router.post('/:schema/financeiro/contas-pagar', ...guardWrite, async (req, res) => {
   const s = req.params.schema;
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
           status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao,
@@ -593,7 +588,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guard, async (req, res) => {
 
 // ── PATCH /api/:schema/financeiro/contas-pagar/:id ───────────────────────────
 
-router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) => {
+router.patch('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req, res) => {
   const s   = req.params.schema;
   const id  = parseInt(req.params.id);
   const { descricao, fornecedor, valor, valor_pago, data_vencimento, data_pagamento,
@@ -665,7 +660,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) 
 
 // ── DELETE /api/:schema/financeiro/contas-pagar/:id ──────────────────────────
 
-router.delete('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res) => {
+router.delete('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req, res) => {
   const s  = req.params.schema;
   const id = parseInt(req.params.id);
   try {
@@ -684,7 +679,7 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guard, async (req, res)
 // ── GET /api/:schema/financeiro/fluxo-caixa ──────────────────────────────────
 // Agregação diária de entradas (CR recebidos) + saídas (CP pagos) + MOV_CAIXA.
 
-router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
+router.get('/:schema/financeiro/fluxo-caixa', ...guardRead, async (req, res) => {
   const s = req.params.schema;
   const mes = req.query.mes || new Date().toISOString().slice(0, 7); // YYYY-MM
   const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
@@ -700,6 +695,10 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guard, async (req, res) => {
 // ── POST /api/:schema/financeiro/parcelas-pedido ─────────────────────────────
 // Gera A_RECEBER pendentes de um pedido (só se STATUS='R'); no-op seguro se ainda não realizado.
 
+// Sem gate de módulo financeiro de propósito: chamado automaticamente pelo próprio fluxo de
+// Pedidos (pedidoNovoWizard.js/pedidoPagamentoModal.js) quando um pedido é marcado como
+// realizado — inclusive por vendedor, que nunca tem acesso ao módulo financeiro. Gatear aqui
+// quebraria o fluxo normal de pedidos pra esse role.
 router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (req, res) => {
   const s = req.params.schema;
   const { id_pedido } = req.body;
