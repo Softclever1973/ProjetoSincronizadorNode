@@ -17,6 +17,8 @@ const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao
 const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
 const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
 const { obterPermissoesEfetivas } = require('../../../../infrastructure/cache/permissoesCache');
+const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { buildNomeLojaExpr } = require('./helpers');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'r'), async (req, res) => {
@@ -78,13 +80,35 @@ router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
 });
 
 /* ── GET /api/:schema/filiais ── */
+// sync_filiais só ganha uma linha quando o client daquela loja chega a rodar um ciclo de
+// sync — uma loja com PEDIDOS reais (dado migrado, ou filial que nunca instalou o client)
+// nunca aparece lá, mesmo aparecendo normalmente no gráfico de faturamento por loja (que
+// lê ID_LOJA direto de PEDIDOS). Sem completar com essas lojas "órfãs" aqui, o filtro
+// global de loja (sidebar.js) nunca oferece uma opção pra filtrar por elas.
 router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
-    const rows = await withTenantConnection(schema, db =>
-      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
-    );
-    res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
+    const rows = await withTenantConnection(schema, async db => {
+      const base = await query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja').catch(() => []);
+      const mapa = new Map(base.map(r => [r.ID_LOJA, r.NOME]));
+
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      if (colsP.some(c => c.COLUMN_NAME === 'ID_LOJA')) {
+        const colsAG = await colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []);
+        const { nomeLojaExpr, joinAG } = buildNomeLojaExpr({ hasSF: false, hasAuxGen: colsAG.length > 0 });
+        const extras = await query(db, `
+          SELECT p.ID_LOJA AS id_loja, ${nomeLojaExpr} AS nome
+          FROM PEDIDOS p
+          ${joinAG}
+          WHERE p.ID_LOJA IS NOT NULL
+          GROUP BY p.ID_LOJA
+        `, []).catch(() => []);
+        for (const r of extras) if (!mapa.has(r.ID_LOJA)) mapa.set(r.ID_LOJA, r.NOME);
+      }
+
+      return [...mapa.entries()].sort((a, b) => a[0] - b[0]);
+    });
+    res.json(rows.map(([id, nome]) => ({ id, nome: nome || `Loja ${id}` })));
   } catch {
     res.json([]);
   }
