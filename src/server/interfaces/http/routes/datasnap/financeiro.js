@@ -1,13 +1,13 @@
 const express      = require('express');
 const router       = express.Router();
-const { pool, withTenantConnection, query, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
+const { pool, withTenantConnection, query, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
 const authJwt      = require('../../middleware/authJwt');
 const { requireModulo } = require('../../middleware/requireModulo');
 const { checkSchema } = require('../../middleware/checkSchema');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { gerarContasReceberDoPedido } = require('../../../../application/financeiro/gerarContasReceberDoPedido');
-const { gerarFluxoCaixa } = require('../../../../application/financeiro/fluxoCaixa');
-const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('../../../../domain/financeiro');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
+const { gerarFluxoCaixa } = require('#server/application/financeiro/fluxoCaixa.js');
+const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('#server/domain/financeiro.js');
 
 const guardRead  = [authJwt, checkSchema, requireModulo('financeiro', 'r')];
 const guardWrite = [authJwt, checkSchema, requireModulo('financeiro', 'w')];

@@ -1,5 +1,5 @@
 const jwt            = require('jsonwebtoken');
-const tokenBlacklist = require('../../../infrastructure/cache/tokenBlacklist');
+const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
 
 function authJwt(req, res, next) {
   const header = req.headers.authorization;

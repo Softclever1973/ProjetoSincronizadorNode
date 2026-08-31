@@ -1,12 +1,12 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../../middleware/auth');
-const { withTenantConnection, query, execute, isMissingTableError, pool } = require('../../../../infrastructure/db');
+const { withTenantConnection, query, execute, isMissingTableError, pool } = require('#server/infrastructure/db.js');
 const { isFilialBloqueada } = require('../../middleware/filialBloqueada');
-const { planoValido } = require('../../../../domain/planos');
-const { colunasCache, getColunasServidor, getPkServidor } = require('../../../../infrastructure/cache/tenantCache');
-const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
+const { planoValido } = require('#server/domain/planos.js');
+const { colunasCache, getColunasServidor, getPkServidor } = require('#server/infrastructure/cache/tenantCache.js');
+const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const {
   alocarSrvId,
   processarDelecao,
@@ -15,7 +15,7 @@ const {
   selecionarRegistroAtual,
   recuperarSrvIdPerdido,
   dispararEfeitosPosUpsert,
-} = require('../../../../application/sync/pushController');
+} = require('#server/application/sync/pushController.js');
 
 function normalizarBlobs(row) {
   if (!row || typeof row !== 'object') return row;

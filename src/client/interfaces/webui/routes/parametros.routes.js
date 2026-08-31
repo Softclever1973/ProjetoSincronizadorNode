@@ -1,7 +1,7 @@
 const express = require('express');
-const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('../../../infrastructure/firebird/db');
-const { normalizarBlobs } = require('../../../infrastructure/firebird/db-utils');
-const { paramsSyncMap } = require('../../../infrastructure/config/paramsSyncMap');
+const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
+const { normalizarBlobs } = require('#client/infrastructure/firebird/db-utils.js');
+const { paramsSyncMap } = require('#client/infrastructure/config/paramsSyncMap.js');
 
 function criarParametrosRouter(contexto) {
   const router = express.Router();

@@ -1,9 +1,9 @@
 const express  = require('express');
 const router   = express.Router();
-const { pool } = require('../../../../infrastructure/db');
-const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
+const { pool } = require('#server/infrastructure/db.js');
+const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const authJwt  = require('../../middleware/authJwt');
-const { obterPermissoesEfetivas } = require('../../../../infrastructure/cache/permissoesCache');
+const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
 // não aqui — a tabela VENDEDORES do schema recém-criado só existe depois do primeiro

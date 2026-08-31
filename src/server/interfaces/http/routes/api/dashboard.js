@@ -16,9 +16,9 @@ const authJwt             = require('../../middleware/authJwt');
 const { requireRole }     = require('../../middleware/checkRole');
 const { requireModulo }   = require('../../middleware/requireModulo');
 const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
-const { COLS_DATA_PEDIDO } = require('../../../../domain/validacao');
-const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
+const { COLS_DATA_PEDIDO } = require('#server/domain/validacao.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { erroServidor } = require('../../erroServidor');
 const { resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
 

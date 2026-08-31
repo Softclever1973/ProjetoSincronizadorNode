@@ -4,6 +4,10 @@
   "description": "Servidor de sincronização Firebird matriz/filiais",
   "type": "commonjs",
   "main": "src/server.js",
+  "imports": {
+    "#server/*": "./src/server/*",
+    "#client/*": "./src/client/*"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",

@@ -1,7 +1,7 @@
-const { pool } = require('../../../infrastructure/db');
-const { obterNivelEfetivo } = require('../../../infrastructure/cache/permissoesCache');
-const { podeLer, podeEscrever } = require('../../../domain/permissoes');
-const { TABELA_MODULO } = require('../../../domain/tabelaModulo');
+const { pool } = require('#server/infrastructure/db.js');
+const { obterNivelEfetivo } = require('#server/infrastructure/cache/permissoesCache.js');
+const { podeLer, podeEscrever } = require('#server/domain/permissoes.js');
+const { TABELA_MODULO } = require('#server/domain/tabelaModulo.js');
 
 // Lê o plano fresco de sync_tenants a cada requisição (mesmo princípio de
 // requirePlanFeature.js: não confiar no claim do JWT, pra não dar 403 indevido logo

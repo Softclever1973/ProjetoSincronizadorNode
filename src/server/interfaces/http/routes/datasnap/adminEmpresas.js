@@ -1,12 +1,12 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query } = require('../../../../infrastructure/db');
-const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
-const { planoValido, listarPlanos, PLANO_PADRAO } = require('../../../../domain/planos');
-const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('../../../../domain/modulos');
-const { recarregarPermissoes } = require('../../../../infrastructure/cache/permissoesCache');
-const TABELAS = require('../../../../../client/domain/tabelas');
+const { pool, withTenantConnection, query } = require('#server/infrastructure/db.js');
+const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
+const { planoValido, listarPlanos, PLANO_PADRAO } = require('#server/domain/planos.js');
+const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('#server/domain/modulos.js');
+const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoesCache.js');
+const TABELAS = require('#client/domain/tabelas.js');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.

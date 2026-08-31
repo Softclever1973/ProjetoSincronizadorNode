@@ -11,9 +11,9 @@ const router  = express.Router();
 
 const authJwt             = require('../../middleware/authJwt');
 const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('../../../../domain/validacao');
-const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('#server/domain/validacao.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { erroServidor } = require('../../erroServidor');
 const { resolveIdLoja } = require('./helpers');
 

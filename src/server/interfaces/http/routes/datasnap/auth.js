@@ -3,11 +3,11 @@ const router         = express.Router();
 const crypto         = require('crypto');
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
-const { pool }              = require('../../../../infrastructure/db');
-const { vincularVendedorDono } = require('../../../../application/onboarding/vincularVendedorDono');
+const { pool }              = require('#server/infrastructure/db.js');
+const { vincularVendedorDono } = require('#server/application/onboarding/vincularVendedorDono.js');
 const authJwt        = require('../../middleware/authJwt');
-const tokenBlacklist = require('../../../../infrastructure/cache/tokenBlacklist');
-const { enviarEmail } = require('../../../../infrastructure/email/emailApiClient');
+const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
+const { enviarEmail } = require('#server/infrastructure/email/emailApiClient.js');
 
 const JWT_EXPIRES_IN = '24h';
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h

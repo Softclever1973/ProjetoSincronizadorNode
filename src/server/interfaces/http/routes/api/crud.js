@@ -9,16 +9,16 @@ const router  = express.Router();
 const authJwt             = require('../../middleware/authJwt');
 const { requireModuloDaTabela } = require('../../middleware/requireModulo');
 const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('../../../../domain/validacao');
-const { colunasTipadasDeRegistro } = require('../../../../domain/schema');
-const { colunasTabela, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
+const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('#server/domain/validacao.js');
+const { colunasTipadasDeRegistro } = require('#server/domain/schema.js');
+const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const { erroServidor } = require('../../erroServidor');
 const {
   resolveIdLoja, pedidoEstaCancelado,
 } = require('./helpers');
-const { getCurrentTime } = require('../../../../infrastructure/timeService');
+const { getCurrentTime } = require('#server/infrastructure/timeService.js');
 const HOOKS = require('./hooks');
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */

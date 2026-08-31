@@ -1,9 +1,9 @@
 const express = require('express');
-const TABELAS = require('../../../domain/tabelas');
-const { isColunaIgnorada, saoIguais } = require('../../../domain/auditoria');
-const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('../../../infrastructure/firebird/db');
-const { getColunasComputadas, normalizarBlobs } = require('../../../infrastructure/firebird/db-utils');
-const { salvarLoteConflitos } = require('../../../infrastructure/persistence/conflitos');
+const TABELAS = require('#client/domain/tabelas.js');
+const { isColunaIgnorada, saoIguais } = require('#client/domain/auditoria.js');
+const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
+const { getColunasComputadas, normalizarBlobs } = require('#client/infrastructure/firebird/db-utils.js');
+const { salvarLoteConflitos } = require('#client/infrastructure/persistence/conflitos.js');
 const { getJSON } = require('../shared/getJSON');
 const { formatDisplay } = require('../viewHelpers');
 

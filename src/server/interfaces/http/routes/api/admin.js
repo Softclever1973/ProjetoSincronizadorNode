@@ -12,12 +12,12 @@ const router  = express.Router();
 const authJwt                  = require('../../middleware/authJwt');
 const { requireModulo }        = require('../../middleware/requireModulo');
 const { checkSchema }          = require('../../middleware/checkSchema');
-const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
-const { obterPermissoesEfetivas } = require('../../../../infrastructure/cache/permissoesCache');
-const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { pool, withTenantConnection, query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('#server/domain/validacao.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { PLANOS, PLANO_PADRAO } = require('#server/domain/planos.js');
+const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { buildNomeLojaExpr } = require('./helpers');
 
 /* ── GET /api/:schema/admin/sync-config ── */

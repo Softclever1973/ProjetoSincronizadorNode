@@ -1,7 +1,7 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PRODUTOS.
  */
-const { query } = require('../../../../../infrastructure/db');
+const { query } = require('#server/infrastructure/db.js');
 
 // Unicidade de CODIGO quando parâmetro 122 = 'S' no Firebird da filial (sync_config.codigo_interno_unico)
 async function validarUnicidade(db, { registro }) {

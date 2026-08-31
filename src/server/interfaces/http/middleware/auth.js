@@ -1,4 +1,4 @@
-const { resolverEmpresa } = require('../../../infrastructure/cache/empresasCache');
+const { resolverEmpresa } = require('#server/infrastructure/cache/empresasCache.js');
 
 async function authMiddleware(req, res, next) {
   const empresa = await resolverEmpresa(req.query.token);

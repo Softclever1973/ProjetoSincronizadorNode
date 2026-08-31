@@ -3,9 +3,9 @@
  * Extraídos de tabelas.js (monolítico) para facilitar reutilização e testes.
  */
 
-const { query } = require('../../../../infrastructure/db');
-const { COLS_DATA_PEDIDO } = require('../../../../domain/validacao');
-const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
+const { query } = require('#server/infrastructure/db.js');
+const { COLS_DATA_PEDIDO } = require('#server/domain/validacao.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 
 /**
  * Resolve o ID da loja efetivo para uma query, respeitando o role do usuário.

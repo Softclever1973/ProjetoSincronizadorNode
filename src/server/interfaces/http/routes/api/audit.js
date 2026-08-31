@@ -9,7 +9,7 @@ const router  = express.Router();
 const authJwt         = require('../../middleware/authJwt');
 const { requireModulo } = require('../../middleware/requireModulo');
 const { checkSchema } = require('../../middleware/checkSchema');
-const { pool }        = require('../../../../infrastructure/db');
+const { pool }        = require('#server/infrastructure/db.js');
 
 /* ── GET /api/:schema/audit-log ── */
 router.get('/:schema/audit-log', authJwt, checkSchema, requireModulo('auditoria', 'r'), async (req, res) => {

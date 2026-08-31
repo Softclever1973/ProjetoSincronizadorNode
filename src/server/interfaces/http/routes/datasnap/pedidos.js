@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../../middleware/auth');
-const { withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
+const { withTenantConnection, query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
 const { isFilialBloqueada } = require('../../middleware/filialBloqueada');
 
 /**

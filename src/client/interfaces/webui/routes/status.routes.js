@@ -1,6 +1,6 @@
 const express = require('express');
-const { getConnection, query: dbQuery, closeConnection } = require('../../../infrastructure/firebird/db');
-const { getUltimaAtualizacao } = require('../../../application/syncEngine/cursor');
+const { getConnection, query: dbQuery, closeConnection } = require('#client/infrastructure/firebird/db.js');
+const { getUltimaAtualizacao } = require('#client/application/syncEngine/cursor.js');
 const { getJSON } = require('../shared/getJSON');
 
 const TOKEN = process.env.SYNC_TOKEN;

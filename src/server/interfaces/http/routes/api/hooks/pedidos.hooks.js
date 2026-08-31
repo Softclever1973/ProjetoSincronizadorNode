@@ -1,10 +1,10 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS.
  */
-const { execute } = require('../../../../../infrastructure/db');
-const { existePagamentoRealizado } = require('../../../../../infrastructure/repositories/pedidosRepository');
+const { execute } = require('#server/infrastructure/db.js');
+const { existePagamentoRealizado } = require('#server/infrastructure/repositories/pedidosRepository.js');
 const { resolverNomeVendedor } = require('../helpers');
-const { gerarContasReceberDoPedido } = require('../../../../../application/financeiro/gerarContasReceberDoPedido');
+const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 
 function aplicarCamposAutomaticos(req, registro) {
   const now        = new Date();
