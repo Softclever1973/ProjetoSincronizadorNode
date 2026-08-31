@@ -1,6 +1,6 @@
 const fs     = require('fs');
 const path   = require('path');
-const TABELAS = require('../../domain/tabelas');
+const TABELAS = require('#client/domain/tabelas.js');
 
 const CAMINHO = path.join(process.cwd(), 'tabelas-config.json');
 

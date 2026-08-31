@@ -1,8 +1,8 @@
 const express = require('express');
 const router = express.Router();
-const auth = require('../../middleware/auth');
+const auth = require('#server/interfaces/http/middleware/auth.js');
 const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
-const { isFilialBloqueada } = require('../../middleware/filialBloqueada');
+const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
 
 /**
  * GET /datasnap/rest/TSMProdutos/ProdutosParaAtualizar

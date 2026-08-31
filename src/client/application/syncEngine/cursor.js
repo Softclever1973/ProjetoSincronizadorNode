@@ -1,4 +1,4 @@
-const { query, execute } = require('../../infrastructure/firebird/db');
+const { query, execute } = require('#client/infrastructure/firebird/db.js');
 
 /**
  * Retorna o próximo valor do generator do Firebird.

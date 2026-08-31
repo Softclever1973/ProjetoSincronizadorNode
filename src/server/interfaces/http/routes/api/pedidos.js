@@ -9,12 +9,12 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { checkSchema }     = require('../../middleware/checkSchema');
+const authJwt             = require('#server/interfaces/http/middleware/authJwt.js');
+const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
 const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
 const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('#server/domain/validacao.js');
 const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
-const { erroServidor } = require('../../erroServidor');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const { resolveIdLoja } = require('./helpers');
 
 /* ── GET /api/:schema/pedidos-completo — JOIN das 3 tabelas de pedido ── */

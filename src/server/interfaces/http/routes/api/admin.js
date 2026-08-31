@@ -9,9 +9,9 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt                  = require('../../middleware/authJwt');
-const { requireModulo }        = require('../../middleware/requireModulo');
-const { checkSchema }          = require('../../middleware/checkSchema');
+const authJwt                  = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModulo }        = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema }          = require('#server/interfaces/http/middleware/checkSchema.js');
 const { pool, withTenantConnection, query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
 const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('#server/domain/validacao.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');

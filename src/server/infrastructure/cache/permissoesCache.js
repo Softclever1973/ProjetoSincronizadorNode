@@ -1,5 +1,5 @@
-const { pool } = require('../db');
-const { permissaoEfetiva, resolverPermissoesEfetivas } = require('../../domain/permissoes');
+const { pool } = require('#server/infrastructure/db.js');
+const { permissaoEfetiva, resolverPermissoesEfetivas } = require('#server/domain/permissoes.js');
 
 let cachePlano = new Map(); // plano -> Map(modulo -> nivel)
 let cacheRole  = new Map(); // role  -> Map(modulo -> nivel)

@@ -4,8 +4,8 @@ const { isColunaIgnorada, saoIguais } = require('#client/domain/auditoria.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { getColunasComputadas, normalizarBlobs } = require('#client/infrastructure/firebird/db-utils.js');
 const { salvarLoteConflitos } = require('#client/infrastructure/persistence/conflitos.js');
-const { getJSON } = require('../shared/getJSON');
-const { formatDisplay } = require('../viewHelpers');
+const { getJSON } = require('#client/interfaces/webui/shared/getJSON.js');
+const { formatDisplay } = require('#client/interfaces/webui/viewHelpers.js');
 
 const TOKEN = process.env.SYNC_TOKEN;
 

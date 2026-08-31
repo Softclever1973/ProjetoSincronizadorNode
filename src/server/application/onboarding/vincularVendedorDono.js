@@ -1,5 +1,5 @@
-const { query, execute, withTenantConnection } = require('../../infrastructure/db');
-const { colunasTabela } = require('../../infrastructure/repositories/colunasRepository');
+const { query, execute, withTenantConnection } = require('#server/infrastructure/db.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 
 /**
  * Cria um VENDEDORES "DONO" e vincula o usuário a ele (usuarios_empresas.id_vendedor),

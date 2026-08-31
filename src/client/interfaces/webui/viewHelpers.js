@@ -1,4 +1,4 @@
-const { saoIguais } = require('../../domain/auditoria');
+const { saoIguais } = require('#client/domain/auditoria.js');
 
 function formatDisplay(v) {
   if (v === null || v === undefined) return '<span style="color:#aaa;font-style:italic">NULL</span>';

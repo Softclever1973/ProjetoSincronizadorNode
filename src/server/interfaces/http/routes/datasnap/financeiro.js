@@ -1,9 +1,9 @@
 const express      = require('express');
 const router       = express.Router();
 const { pool, withTenantConnection, query, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
-const authJwt      = require('../../middleware/authJwt');
-const { requireModulo } = require('../../middleware/requireModulo');
-const { checkSchema } = require('../../middleware/checkSchema');
+const authJwt      = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 const { gerarFluxoCaixa } = require('#server/application/financeiro/fluxoCaixa.js');

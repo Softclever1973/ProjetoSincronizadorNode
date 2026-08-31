@@ -2,10 +2,10 @@ const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
-const authJwt  = require('../../middleware/authJwt');
-const { requireRole } = require('../../middleware/checkRole');
-const { requireModulo } = require('../../middleware/requireModulo');
-const { checkSchema } = require('../../middleware/checkSchema');
+const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireRole } = require('#server/interfaces/http/middleware/checkRole.js');
+const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];

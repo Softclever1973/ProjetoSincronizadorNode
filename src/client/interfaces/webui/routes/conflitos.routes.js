@@ -4,7 +4,7 @@ const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = r
 const { gerarNovoPK: utilGerarPK } = require('#client/infrastructure/firebird/db-utils.js');
 const { aplicarRegistroLocal } = require('#client/application/syncEngine/resolverConflito.js');
 const { enviarRegistro } = require('#client/http.js');
-const { renderCampos } = require('../viewHelpers');
+const { renderCampos } = require('#client/interfaces/webui/viewHelpers.js');
 
 function criarConflitosRouter(contexto) {
   const router = express.Router();

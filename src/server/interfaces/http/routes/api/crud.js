@@ -6,15 +6,15 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { requireModuloDaTabela } = require('../../middleware/requireModulo');
-const { checkSchema }     = require('../../middleware/checkSchema');
+const authJwt             = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModuloDaTabela } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
 const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('#server/domain/validacao.js');
 const { colunasTipadasDeRegistro } = require('#server/domain/schema.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
-const { erroServidor } = require('../../erroServidor');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const {
   resolveIdLoja, pedidoEstaCancelado,
 } = require('./helpers');

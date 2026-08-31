@@ -1,5 +1,5 @@
-const { query, execute } = require('../db');
-const { chaveNegocioTabela } = require('../../domain/schema');
+const { query, execute } = require('#server/infrastructure/db.js');
+const { chaveNegocioTabela } = require('#server/domain/schema.js');
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 // nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).

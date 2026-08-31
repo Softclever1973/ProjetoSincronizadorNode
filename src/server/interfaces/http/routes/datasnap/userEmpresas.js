@@ -2,7 +2,7 @@ const express  = require('express');
 const router   = express.Router();
 const { pool } = require('#server/infrastructure/db.js');
 const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
-const authJwt  = require('../../middleware/authJwt');
+const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
 const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),

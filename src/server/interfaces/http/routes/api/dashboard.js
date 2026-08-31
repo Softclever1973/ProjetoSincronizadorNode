@@ -12,14 +12,14 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { requireRole }     = require('../../middleware/checkRole');
-const { requireModulo }   = require('../../middleware/requireModulo');
-const { checkSchema }     = require('../../middleware/checkSchema');
+const authJwt             = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireRole }     = require('#server/interfaces/http/middleware/checkRole.js');
+const { requireModulo }   = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
 const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
 const { COLS_DATA_PEDIDO } = require('#server/domain/validacao.js');
 const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
-const { erroServidor } = require('../../erroServidor');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const { resolveIdLoja, buildNomeLojaExpr, buildWhere } = require('./helpers');
 
 /* ── GET /api/:schema/dashboard ── */

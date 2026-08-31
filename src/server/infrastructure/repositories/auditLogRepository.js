@@ -1,4 +1,4 @@
-const { pool } = require('../db');
+const { pool } = require('#server/infrastructure/db.js');
 
 /**
  * Insere uma linha no audit_log de forma assíncrona (fire-and-forget).

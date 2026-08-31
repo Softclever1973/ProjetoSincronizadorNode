@@ -1,4 +1,4 @@
-const { pool } = require('../../infrastructure/db');
+const { pool } = require('#server/infrastructure/db.js');
 
 /**
  * Garante que existam registros em A_RECEBER para as parcelas de pagamento de um

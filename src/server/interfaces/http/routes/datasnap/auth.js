@@ -5,7 +5,7 @@ const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const { pool }              = require('#server/infrastructure/db.js');
 const { vincularVendedorDono } = require('#server/application/onboarding/vincularVendedorDono.js');
-const authJwt        = require('../../middleware/authJwt');
+const authJwt        = require('#server/interfaces/http/middleware/authJwt.js');
 const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
 const { enviarEmail } = require('#server/infrastructure/email/emailApiClient.js');
 

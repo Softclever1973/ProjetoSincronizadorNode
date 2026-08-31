@@ -3,7 +3,7 @@
  */
 const { execute } = require('#server/infrastructure/db.js');
 const { existePagamentoRealizado } = require('#server/infrastructure/repositories/pedidosRepository.js');
-const { resolverNomeVendedor } = require('../helpers');
+const { resolverNomeVendedor } = require('#server/interfaces/http/routes/api/helpers.js');
 const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 
 function aplicarCamposAutomaticos(req, registro) {
