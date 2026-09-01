@@ -412,4 +412,29 @@ router.post('/usuarios', async (req, res) => {
   }
 });
 
+// ── PATCH /superadmin/usuarios/:id/senha ───────────────────────────────────────
+// Requer: body.senhaReset === RESET_SECRET (mesma senha usada no reset de empresa).
+router.patch('/usuarios/:id/senha', async (req, res) => {
+  const { id } = req.params;
+  const { novaSenha, senhaReset } = req.body;
+
+  if (senhaReset !== process.env.RESET_SECRET)
+    return res.status(403).json({ erro: 'Senha de autorização inválida' });
+
+  if (!novaSenha || novaSenha.length < 6)
+    return res.status(400).json({ erro: 'Senha deve ter no mínimo 6 caracteres' });
+
+  try {
+    const senhaHash = await bcrypt.hash(novaSenha, 12);
+    const { rowCount } = await pool.query(
+      'UPDATE public.usuarios SET senha_hash = $1 WHERE id = $2',
+      [senhaHash, id]
+    );
+    if (!rowCount) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 module.exports = router;
