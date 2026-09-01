@@ -32,6 +32,7 @@ const MODULOS_DEF = Object.freeze({
   auditoria:     { label: 'Auditoria',     tipo: 'modulo' },
   configuracoes: { label: 'Configurações', tipo: 'modulo' },
   exportacao:    { label: 'Exportação (CSV/Excel)', tipo: 'funcao' },
+  imprimir:      { label: 'Impressão', tipo: 'funcao' },
 });
 
 const MODULOS = Object.freeze(Object.keys(MODULOS_DEF));
