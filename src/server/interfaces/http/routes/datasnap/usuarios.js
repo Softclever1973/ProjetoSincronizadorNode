@@ -315,26 +315,31 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireModulo
 router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireModulo('usuarios', 'w'), requireRole('dono'), async (req, res) => {
   const { schema, id } = req.params;
   const { role, id_loja, id_vendedor } = req.body;
+  const isSelf = String(req.userId) === String(id);
 
   if (!ROLES_VALIDOS.includes(role))
     return res.status(400).json({ erro: `role inválido. Use: ${ROLES_VALIDOS.join(' | ')}` });
 
-  // Dono não pode ser atribuído via API
-  if (role === 'dono')
+  // Ninguém vira dono por aqui (só via CLI) — exceto o próprio dono mantendo o papel que já
+  // tem, ao editar a si mesmo pra só atualizar loja/vendedor (ver isSelf abaixo). O modal de
+  // edição do dono sempre reenvia o role atual nesse caso, nunca deixa escolher outro.
+  if (role === 'dono' && !isSelf)
     return res.status(403).json({ erro: 'o role dono só pode ser atribuído via script CLI' });
 
   if (role !== 'dono' && !id_loja)
     return res.status(400).json({ erro: 'id_loja é obrigatório para gerente e vendedor' });
 
   try {
-    // Impede alterar o role de outro dono
     const alvo = await pool.query(
       'SELECT role FROM public.usuarios_empresas WHERE id_usuario = $1 AND schema_name = $2',
       [id, schema]
     );
     if (!alvo.rows.length)
       return res.status(404).json({ erro: 'usuário não encontrado neste schema' });
-    if (alvo.rows[0].role === 'dono')
+    // Impede alterar o papel de um dono existente — inclusive rebaixá-lo — por qualquer
+    // caminho que não seja o próprio dono mantendo seu papel inalterado (role já garantido
+    // 'dono' aqui, pela checagem acima, quando isSelf).
+    if (alvo.rows[0].role === 'dono' && (!isSelf || role !== 'dono'))
       return res.status(403).json({ erro: 'não é possível alterar o papel de um dono' });
 
     const result = await pool.query(
