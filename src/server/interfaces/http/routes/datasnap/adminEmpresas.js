@@ -1,11 +1,12 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query } = require('#server/infrastructure/db.js');
+const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
 const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('#server/domain/planos.js');
 const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('#server/domain/modulos.js');
 const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoesCache.js');
+const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
@@ -327,6 +328,264 @@ router.get('/empresas/:schema/filiais', async (req, res) => {
     ).catch(() => []); // tabela pode ainda não existir numa empresa recém-criada
 
     res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── Dados de empresa/filial (endereço, CNPJ, etc. — cabeçalho de impressão) ────
+// EMPRESAS e AUX_GENERICA (SUB_TABELA='Lojas') são tabelas que o Firebird sincroniza
+// normalmente (ver ProjetoSincronizadorNode/CLAUDE.md, "Adicionando uma nova tabela ao
+// sync") — aqui só editamos os mesmos campos manualmente quando o Firebird ainda não os
+// preencheu. Coluna cheia (não só os campos do formulário) na criação da tabela: se ela
+// ainda não existe e a criamos com só o subconjunto editável, um sync real do Firebird
+// que chegar depois teria as colunas extras filtradas pra sempre (ver crud.js/
+// sincronizacao.js — colunas fora do schema atual do servidor nunca são adicionadas
+// automaticamente num push, só na criação inicial da tabela).
+
+const COLUNAS_EMPRESAS = [
+  { nome: 'ID_EMPRESA', tipoPg: 'NUMERIC' },
+  { nome: 'FANTASIA', tipoPg: 'TEXT' },
+  { nome: 'RAZAO_SOCIAL', tipoPg: 'TEXT' },
+  { nome: 'PERC_ISS', tipoPg: 'NUMERIC' },
+  { nome: 'NUM_ULT_NF_EMITIDA', tipoPg: 'NUMERIC' },
+  { nome: 'PERC_ICMS', tipoPg: 'NUMERIC' },
+  { nome: 'ID_CONTA_CORRENTE_RECEBER', tipoPg: 'NUMERIC' },
+  { nome: 'ID_CONTA_CORRENTE_PAGAR', tipoPg: 'NUMERIC' },
+  { nome: 'ENDERECO', tipoPg: 'TEXT' },
+  { nome: 'BAIRRO', tipoPg: 'TEXT' },
+  { nome: 'CIDADE', tipoPg: 'TEXT' },
+  { nome: 'UF', tipoPg: 'TEXT' },
+  { nome: 'TELEFONES', tipoPg: 'TEXT' },
+  { nome: 'SITE', tipoPg: 'TEXT' },
+  { nome: 'E_MAIL', tipoPg: 'TEXT' },
+  { nome: 'CEP', tipoPg: 'TEXT' },
+  { nome: 'CNPJ', tipoPg: 'TEXT' },
+  { nome: 'INSCR_ESTADUAL', tipoPg: 'TEXT' },
+  { nome: 'ATACADO_OU_VAREJO', tipoPg: 'TEXT' },
+  { nome: 'VALOR_IMPOSTOS', tipoPg: 'NUMERIC' },
+  { nome: 'NUMERO_ULTIMO_INVENTARIO', tipoPg: 'NUMERIC' },
+  { nome: 'PERC_IMPOSTOS_CALC_LEI_TRANSP', tipoPg: 'NUMERIC' },
+  { nome: 'PERC_IMPOSTOS_CALC_LEI_TRANSP_S', tipoPg: 'NUMERIC' },
+  { nome: 'ID_USUARIO', tipoPg: 'NUMERIC' },
+  { nome: 'DATA_ULTIMA_PESQUISA', tipoPg: 'TIMESTAMP' },
+  { nome: 'INTERVALO_PESQUISA', tipoPg: 'NUMERIC' },
+  { nome: 'NUM_ENDERECO', tipoPg: 'TEXT' },
+  { nome: 'CATEGORIA', tipoPg: 'TEXT' },
+  { nome: 'REGIME_DE_TRIBUTACAO', tipoPg: 'TEXT' },
+  { nome: 'PERC_IMP_CALC_LEI_TRANSP_EST', tipoPg: 'NUMERIC' },
+  { nome: 'RAZAO_SOCIAL_60', tipoPg: 'TEXT' },
+  { nome: 'CODIGO_DO_MUNICIPIO', tipoPg: 'TEXT' },
+  { nome: 'PERC_CREDITO_ICMS', tipoPg: 'NUMERIC' },
+  { nome: 'PERC_CREDITO_ICMS_IND_E_COM', tipoPg: 'NUMERIC' },
+  { nome: 'INSTAGRAM', tipoPg: 'TEXT' },
+];
+
+const COLUNAS_AUX_GENERICA = [
+  { nome: 'SUB_TABELA', tipoPg: 'TEXT' },
+  { nome: 'ID_SUB_TABELA', tipoPg: 'NUMERIC' },
+  { nome: 'DESCRICAO', tipoPg: 'TEXT' },
+  { nome: 'VALOR', tipoPg: 'NUMERIC' },
+  { nome: 'OBSERVACOES', tipoPg: 'TEXT' },
+  { nome: 'INTEGER1', tipoPg: 'NUMERIC' },
+  { nome: 'OBSERVACOES_2', tipoPg: 'TEXT' },
+  { nome: 'VARCHAR1_100', tipoPg: 'TEXT' },
+  { nome: 'VARCHAR2_100', tipoPg: 'TEXT' },
+  { nome: 'VARCHAR3_100', tipoPg: 'TEXT' },
+  { nome: 'DATA_HORA', tipoPg: 'TEXT' },
+  { nome: 'ID_GRUPO_EMPRESARIAL', tipoPg: 'NUMERIC' },
+  { nome: 'ID_ASSOCIADO', tipoPg: 'NUMERIC' },
+  { nome: 'ID_BANDEIRA', tipoPg: 'NUMERIC' },
+  { nome: 'ID_REGIAO', tipoPg: 'NUMERIC' },
+  { nome: 'DATA_ALTERACAO', tipoPg: 'TEXT' },
+  { nome: 'VALOR_DO_CAIXA', tipoPg: 'NUMERIC' },
+  { nome: 'NOME_GERENTE', tipoPg: 'TEXT' },
+  { nome: 'ENDERECO', tipoPg: 'TEXT' },
+  { nome: 'NUMERO', tipoPg: 'TEXT' },
+  { nome: 'COMPLEMENTO', tipoPg: 'TEXT' },
+  { nome: 'CIDADE', tipoPg: 'TEXT' },
+  { nome: 'CEP', tipoPg: 'TEXT' },
+  { nome: 'ESTADO', tipoPg: 'TEXT' },
+  { nome: 'RAZAO_SOCIAL', tipoPg: 'TEXT' },
+  { nome: 'INSC_ESTADUAL', tipoPg: 'TEXT' },
+  { nome: 'PADRAO_ST_IPI', tipoPg: 'TEXT' },
+  { nome: 'PADRAO_ST_IPI_AJUSTES', tipoPg: 'TEXT' },
+  { nome: 'CODIGO_CENTRO_DE_CUSTO', tipoPg: 'TEXT' },
+  { nome: 'REDUZIDO', tipoPg: 'TEXT' },
+  { nome: 'ID_POSCTRL_UNIDADE', tipoPg: 'NUMERIC' },
+  { nome: 'BRASMIX_ID_CENTRAL', tipoPg: 'TEXT' },
+  { nome: 'REDUZIDO_CIELO', tipoPg: 'TEXT' },
+  { nome: 'ID_LOJA', tipoPg: 'NUMERIC' },
+];
+
+// Campos editáveis pelo formulário do admin — o resto das colunas (impostos, contas
+// correntes etc.) fica intocado, só existe pra não colidir com um sync real futuro.
+const CAMPOS_EMPRESA = [
+  'FANTASIA', 'RAZAO_SOCIAL', 'CNPJ', 'INSCR_ESTADUAL', 'TELEFONES', 'E_MAIL',
+  'ENDERECO', 'NUM_ENDERECO', 'BAIRRO', 'CIDADE', 'UF', 'CEP',
+];
+const CAMPOS_FILIAL = [
+  'RAZAO_SOCIAL', 'ENDERECO', 'NUMERO', 'COMPLEMENTO', 'CIDADE', 'CEP', 'ESTADO',
+  'INSC_ESTADUAL', 'NOME_GERENTE',
+];
+
+async function validarEmpresaExiste(schema) {
+  const { rows } = await pool.query('SELECT 1 FROM public.sync_tenants WHERE schema_name = $1', [schema]);
+  return rows.length > 0;
+}
+
+async function garantirTabela(db, schema, tabela, colunasTipadas, pks) {
+  const cols = await colunasTabela(db, schema, tabela);
+  if (cols.length === 0) await criarTabelaSeNecessario(db, tabela, schema, colunasTipadas, pks, false);
+}
+
+// Após INSERT/UPDATE manual, bumpa o cursor de sync — mesmo padrão de crud.js
+// (handleSave). Tabelas criadas por criarTabelaSeNecessario já têm um trigger que faz
+// isso sozinho, mas tabelas sincronizadas antes dessa convenção existir podem não ter;
+// UPDATE explícito cobre os dois casos sem custo extra.
+async function bumpCursorSync(db, schema, tabela, pkWhere, pkVals) {
+  await execute(db,
+    `UPDATE ${tabela} SET ID_ULTIMA_ATUALIZACAO_MATRIZ = nextval('${schema}.seq_atualizacao_matriz') WHERE ${pkWhere}`,
+    pkVals
+  ).catch(() => {});
+}
+
+// ── GET /superadmin/empresas/:schema/dados-empresa ─────────────────────────────
+router.get('/empresas/:schema/dados-empresa', async (req, res) => {
+  const { schema } = req.params;
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    const registro = await withTenantConnection(schema, async db => {
+      const cols = await colunasTabela(db, schema, 'EMPRESAS');
+      if (cols.length === 0) return null;
+      // ID_EMPRESA=0 é um registro padrão do Firebird sem dados reais — prioriza o
+      // primeiro ID diferente de zero (mesmo critério do cabeçalho de impressão).
+      const rows = await query(db, `SELECT * FROM EMPRESAS WHERE ID_EMPRESA <> 0 ORDER BY ID_EMPRESA LIMIT 1`);
+      return rows[0] || (await query(db, `SELECT * FROM EMPRESAS ORDER BY ID_EMPRESA LIMIT 1`))[0] || null;
+    });
+
+    const dados = Object.fromEntries(CAMPOS_EMPRESA.map(c => [c, registro?.[c] ?? null]));
+    res.json({ existe: !!registro, idEmpresa: registro?.ID_EMPRESA ?? null, ...dados });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/empresas/:schema/dados-empresa ──────────────────────────────
+router.put('/empresas/:schema/dados-empresa', async (req, res) => {
+  const { schema } = req.params;
+  const dados = req.body || {};
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await withTenantConnection(schema, async db => {
+      await garantirTabela(db, schema, 'EMPRESAS', COLUNAS_EMPRESAS, ['ID_EMPRESA']);
+
+      const existente = await query(db, `SELECT ID_EMPRESA FROM EMPRESAS WHERE ID_EMPRESA <> 0 ORDER BY ID_EMPRESA LIMIT 1`);
+      const idEmpresa = existente[0]?.ID_EMPRESA ?? 1;
+
+      const cols = CAMPOS_EMPRESA.filter(c => dados[c] !== undefined);
+      const vals = cols.map(c => dados[c] ?? null);
+
+      const jaExiste = (await query(db, `SELECT 1 FROM EMPRESAS WHERE ID_EMPRESA = $1`, [idEmpresa])).length > 0;
+      if (jaExiste) {
+        if (cols.length > 0) {
+          const setPhase = cols.map((c, i) => `${c} = $${i + 1}`).join(', ');
+          await execute(db, `UPDATE EMPRESAS SET ${setPhase} WHERE ID_EMPRESA = $${cols.length + 1}`, [...vals, idEmpresa]);
+        }
+      } else {
+        await execute(db,
+          `INSERT INTO EMPRESAS (ID_EMPRESA, ${cols.join(', ')}) VALUES ($1, ${cols.map((_, i) => `$${i + 2}`).join(', ')})`,
+          [idEmpresa, ...vals]
+        );
+      }
+      await bumpCursorSync(db, schema, 'EMPRESAS', 'ID_EMPRESA = $1', [idEmpresa]);
+    });
+
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── GET /superadmin/empresas/:schema/dados-filiais ──────────────────────────────
+// Combina sync_filiais (fonte da lista de lojas) com AUX_GENERICA (SUB_TABELA='Lojas',
+// fonte do endereço) — uma filial pode existir numa tabela sem ainda existir na outra.
+router.get('/empresas/:schema/dados-filiais', async (req, res) => {
+  const { schema } = req.params;
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    const lista = await withTenantConnection(schema, async db => {
+      const filiais = await query(db, 'SELECT id_loja, nome FROM sync_filiais').catch(() => []);
+      const auxCols = await colunasTabela(db, schema, 'AUX_GENERICA');
+      const enderecos = auxCols.length === 0 ? [] :
+        await query(db, `SELECT * FROM AUX_GENERICA WHERE SUB_TABELA = 'Lojas'`);
+
+      const porLoja = new Map(enderecos.map(r => [Number(r.ID_SUB_TABELA), r]));
+      const idsFiliais = new Set(filiais.map(f => Number(f.ID_LOJA)));
+      for (const id of porLoja.keys()) idsFiliais.add(id);
+
+      return [...idsFiliais].sort((a, b) => a - b).map(id => {
+        const filial = filiais.find(f => Number(f.ID_LOJA) === id);
+        const end = porLoja.get(id);
+        return {
+          idLoja: id,
+          nome: filial?.NOME || end?.DESCRICAO || `Loja ${id}`,
+          ...Object.fromEntries(CAMPOS_FILIAL.map(c => [c, end?.[c] ?? null])),
+        };
+      });
+    });
+
+    res.json(lista);
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/empresas/:schema/dados-filiais/:idLoja ──────────────────────
+router.put('/empresas/:schema/dados-filiais/:idLoja', async (req, res) => {
+  const { schema } = req.params;
+  const idLoja = parseInt(req.params.idLoja, 10);
+  const dados = req.body || {};
+  if (!Number.isInteger(idLoja) || idLoja <= 0) return res.status(400).json({ erro: 'idLoja inválido' });
+
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await withTenantConnection(schema, async db => {
+      await garantirTabela(db, schema, 'AUX_GENERICA', COLUNAS_AUX_GENERICA, ['SUB_TABELA', 'ID_SUB_TABELA']);
+
+      const cols = CAMPOS_FILIAL.filter(c => dados[c] !== undefined);
+      const vals = cols.map(c => dados[c] ?? null);
+
+      const jaExiste = (await query(db,
+        `SELECT 1 FROM AUX_GENERICA WHERE SUB_TABELA = 'Lojas' AND ID_SUB_TABELA = $1`, [idLoja]
+      )).length > 0;
+
+      if (jaExiste) {
+        if (cols.length > 0) {
+          const setPhase = cols.map((c, i) => `${c} = $${i + 1}`).join(', ');
+          await execute(db,
+            `UPDATE AUX_GENERICA SET ${setPhase} WHERE SUB_TABELA = 'Lojas' AND ID_SUB_TABELA = $${cols.length + 1}`,
+            [...vals, idLoja]
+          );
+        }
+      } else {
+        const filial = await query(db, 'SELECT nome FROM sync_filiais WHERE id_loja = $1', [idLoja]).catch(() => []);
+        const nomeLoja = filial[0]?.NOME || `Loja ${idLoja}`;
+        const colsFinal = ['SUB_TABELA', 'ID_SUB_TABELA', 'DESCRICAO', 'ID_LOJA', ...cols];
+        const valsFinal = ['Lojas', idLoja, nomeLoja, idLoja, ...vals];
+        await execute(db,
+          `INSERT INTO AUX_GENERICA (${colsFinal.join(', ')}) VALUES (${colsFinal.map((_, i) => `$${i + 1}`).join(', ')})`,
+          valsFinal
+        );
+      }
+      await bumpCursorSync(db, schema, 'AUX_GENERICA', `SUB_TABELA = 'Lojas' AND ID_SUB_TABELA = $1`, [idLoja]);
+    });
+
+    res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }
