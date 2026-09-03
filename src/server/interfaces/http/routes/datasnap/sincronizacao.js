@@ -214,12 +214,30 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
 
 /**
  * GET /datasnap/rest/TSMSincronizacao/StatusTabelas
- * Query params: token
+ * Query params: token, idLoja, filtros (JSON: [{ nome, filtroFilial, filtroFilialViaFK }])
  *
  * Retorna para cada tabela: total de registros e o maior ID_ULTIMA_ATUALIZACAO_MATRIZ.
- * Usado pelo cliente para verificar se está tudo sincronizado.
+ * Usado pelo cliente para verificar se está tudo sincronizado. `filtros` restringe o
+ * cálculo à mesma loja que RegistrosParaAtualizar usa pra puxar — sem isso, tabelas com
+ * filtroFilial (ex: A_PAGAR, A_RECEBER) nunca fecham em "OK": o máximo comparado seria o
+ * da empresa inteira, não o da loja, que é tudo que essa filial algum dia vai receber.
  */
 router.get('/StatusTabelas', auth, async (req, res) => {
+  const idLoja = req.query.idLoja ? parseInt(req.query.idLoja, 10) : null;
+  let filtrosPorTabela = new Map();
+  try {
+    const lista = JSON.parse(req.query.filtros || '[]');
+    for (const f of lista) {
+      const nome = String(f?.nome || '').toUpperCase().trim();
+      const filtroFilial = f?.filtroFilial ? String(f.filtroFilial).trim().toUpperCase() : null;
+      const filtroFilialViaFK = f?.filtroFilialViaFK ? String(f.filtroFilialViaFK).trim().toUpperCase() : null;
+      if (!nome) continue;
+      if (filtroFilial && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilial)) continue;
+      if (filtroFilialViaFK && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilialViaFK)) continue;
+      filtrosPorTabela.set(nome, { filtroFilial, filtroFilialViaFK });
+    }
+  } catch { /* filtros malformado — segue sem restrição por loja */ }
+
   try {
     const resultado = await withTenantConnection(req.schemaName, async (db) => {
       const tabelasRows = await query(db,
@@ -235,9 +253,31 @@ router.get('/StatusTabelas', auth, async (req, res) => {
       const status = [];
       for (const tabela of tabelas) {
         try {
+          // CLIENTES: mesma regra especial de RegistrosParaAtualizar — config do servidor
+          // manda, não o que o cliente enviou.
+          let filtroFilial = filtrosPorTabela.get(tabela)?.filtroFilial ?? null;
+          const filtroFilialViaFK = filtrosPorTabela.get(tabela)?.filtroFilialViaFK ?? null;
+          if (tabela === 'CLIENTES') {
+            try {
+              const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
+              filtroFilial = cfg?.VALOR && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.VALOR) ? cfg.VALOR : null;
+            } catch { filtroFilial = null; }
+          }
+
+          const params = [];
+          let whereFilial = '';
+          if (idLoja && filtroFilial) {
+            params.push(idLoja);
+            whereFilial = ` WHERE ${filtroFilial} = $${params.length}`;
+          } else if (idLoja && filtroFilialViaFK) {
+            params.push(idLoja);
+            whereFilial = ` WHERE ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
+          }
+
           const rows = await query(db,
             `SELECT COUNT(*) AS TOTAL, MAX(ID_ULTIMA_ATUALIZACAO_MATRIZ) AS MAX_ID
-             FROM ${tabela}`
+             FROM ${tabela}${whereFilial}`,
+            params
           );
           status.push({
             tabela,

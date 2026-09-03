@@ -32,9 +32,10 @@ beforeAll(async () => {
   // mesmo teste nem interfere com as tabelas de crud.integracao.test.js.
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.produtos_sync_teste CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.a_receber CASCADE`);
+  await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.status_filtro_sync_teste CASCADE`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_produtos_sync_teste`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_a_receber`);
-  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER')`);
+  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER', 'STATUS_FILTRO_SYNC_TESTE')`);
 }, 30000);
 
 afterAll(async () => {
@@ -121,5 +122,97 @@ describe('POST /AtualizarPlano — PARAMETROS(45004) do Firebird → sync_tenant
   test('body sem plano retorna 400', async () => {
     const res = await atualizarPlano(undefined);
     expect(res.status).toBe(400);
+  });
+});
+
+describe('POST /AtualizarRegime — PARAMETROS(40026) do Firebird → sync_tenants.regime_tributario', () => {
+  afterEach(async () => {
+    await pool.query(`UPDATE public.sync_tenants SET regime_tributario = NULL WHERE schema_name = $1`, [TEST_SCHEMA]);
+  });
+
+  function atualizarRegime(regime) {
+    return request(app)
+      .post('/datasnap/rest/TSMSincronizacao/AtualizarRegime')
+      .query({ token: TEST_TOKEN })
+      .send({ regime });
+  }
+
+  test('regime informado é gravado em sync_tenants.regime_tributario', async () => {
+    const res = await atualizarRegime('simples');
+
+    expect(res.status).toBe(200);
+    const { rows } = await pool.query(
+      'SELECT regime_tributario FROM public.sync_tenants WHERE schema_name = $1', [TEST_SCHEMA]
+    );
+    expect(rows[0].regime_tributario).toBe('simples');
+  });
+
+  test('body sem regime retorna 400 e não altera o valor atual', async () => {
+    await atualizarRegime('simples'); // valor prévio, pra confirmar que o 400 não o apaga
+    const res = await atualizarRegime(undefined);
+
+    expect(res.status).toBe(400);
+    const { rows } = await pool.query(
+      'SELECT regime_tributario FROM public.sync_tenants WHERE schema_name = $1', [TEST_SCHEMA]
+    );
+    expect(rows[0].regime_tributario).toBe('simples');
+  });
+});
+
+describe('GET /StatusTabelas — restringe total/maxId à loja quando a tabela tem filtroFilial', () => {
+  beforeAll(async () => {
+    // 2 registros da loja 1, 1 registro da loja 2 — sem isso, StatusTabelas somava a
+    // empresa inteira e o cursor de uma loja nunca alcançava o máximo de outra loja.
+    await receberRegistro({
+      tabela: 'STATUS_FILTRO_SYNC_TESTE', pk: 'ID_STATUS_TESTE',
+      registro: { ID_STATUS_TESTE: 1, ID_LOJA: 1, NOME: 'Loja 1 - A' },
+    });
+    await receberRegistro({
+      tabela: 'STATUS_FILTRO_SYNC_TESTE', pk: 'ID_STATUS_TESTE',
+      registro: { ID_STATUS_TESTE: 2, ID_LOJA: 1, NOME: 'Loja 1 - B' },
+    });
+    await receberRegistro({
+      tabela: 'STATUS_FILTRO_SYNC_TESTE', pk: 'ID_STATUS_TESTE',
+      registro: { ID_STATUS_TESTE: 3, ID_LOJA: 2, NOME: 'Loja 2 - A' },
+    });
+  });
+
+  function statusTabelas(query) {
+    return request(app)
+      .get('/datasnap/rest/TSMSincronizacao/StatusTabelas')
+      .query({ token: TEST_TOKEN, ...query });
+  }
+
+  // COUNT(*)/MAX() do pg vêm como string (bigint) — igual o resto do endpoint, não é
+  // particular deste teste; comparar como número evita depender desse detalhe do driver.
+  function acharTabela(res, nome) {
+    const linha = res.body.find(t => t.tabela === nome.toUpperCase());
+    return { ...linha, total: Number(linha.total), maxId: Number(linha.maxId) };
+  }
+
+  test('sem idLoja/filtros (comportamento antigo) — total da empresa inteira', async () => {
+    const res = await statusTabelas({});
+    const linha = acharTabela(res, 'STATUS_FILTRO_SYNC_TESTE');
+    expect(linha.total).toBe(3);
+  });
+
+  test('com idLoja + filtros — total e maxId restritos à loja informada', async () => {
+    const filtros = JSON.stringify([{ nome: 'STATUS_FILTRO_SYNC_TESTE', filtroFilial: 'ID_LOJA' }]);
+
+    const semFiltro = await statusTabelas({});
+    const maxIdEmpresaInteira = acharTabela(semFiltro, 'STATUS_FILTRO_SYNC_TESTE').maxId;
+
+    const resLoja1 = await statusTabelas({ idLoja: 1, filtros });
+    const linhaLoja1 = acharTabela(resLoja1, 'STATUS_FILTRO_SYNC_TESTE');
+    expect(linhaLoja1.total).toBe(2);
+    // O 3º registro (loja 2, inserido por último) tem o maior cursor da tabela — sem o
+    // filtro por loja, o maxId da loja 1 nunca alcançaria isso, ficando "Pendente" pra
+    // sempre mesmo com os 2 registros dela em dia.
+    expect(linhaLoja1.maxId).toBeLessThan(maxIdEmpresaInteira);
+
+    const resLoja2 = await statusTabelas({ idLoja: 2, filtros });
+    const linhaLoja2 = acharTabela(resLoja2, 'STATUS_FILTRO_SYNC_TESTE');
+    expect(linhaLoja2.total).toBe(1);
+    expect(linhaLoja2.maxId).toBe(maxIdEmpresaInteira);
   });
 });

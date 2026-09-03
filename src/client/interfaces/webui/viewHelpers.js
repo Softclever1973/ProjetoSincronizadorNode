@@ -1,4 +1,4 @@
-const { saoIguais } = require('#client/domain/auditoria.js');
+const { saoIguais, isColunaIgnorada } = require('#client/domain/auditoria.js');
 
 function formatDisplay(v) {
   if (v === null || v === undefined) return '<span style="color:#aaa;font-style:italic">NULL</span>';
@@ -16,10 +16,12 @@ const COLUNAS_IDENTIFICACAO = /DESCRI|^NOME$|PRECO|VALOR|REFERENCIA|CODIGO|EAN|U
  *   - localRows / servidorRows: <tbody> para identificação e outros campos (layout lado a lado)
  */
 function renderCampos(versaoLocal, versaoServidor, conflitoid) {
+  // Colunas de controle (ID_ULTIMA_ATUALIZACAO_MATRIZ etc.) nunca são gravadas na filial —
+  // vão sempre aparecer como "divergentes" (local=NULL) sem ser um conflito de verdade.
   const todasColunas = [...new Set([
     ...Object.keys(versaoLocal || {}),
     ...Object.keys(versaoServidor || {}),
-  ])];
+  ])].filter(c => !isColunaIgnorada(c));
 
   const divergentes   = todasColunas.filter(c => !saoIguais(versaoLocal?.[c], versaoServidor?.[c]));
   const identificacao = todasColunas.filter(c => COLUNAS_IDENTIFICACAO.test(c) && !divergentes.includes(c));

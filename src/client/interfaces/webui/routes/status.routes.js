@@ -2,8 +2,15 @@ const express = require('express');
 const { getConnection, query: dbQuery, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { getUltimaAtualizacao } = require('#client/application/syncEngine/cursor.js');
 const { getJSON } = require('#client/interfaces/webui/shared/getJSON.js');
+const TABELAS = require('#client/domain/tabelas.js');
 
 const TOKEN = process.env.SYNC_TOKEN;
+
+// Só as tabelas com filtro por loja — o servidor usa isso pra calcular MAX_ID/total
+// restrito à loja local em vez da empresa inteira (ver StatusTabelas no servidor).
+const FILTROS_FILIAL = TABELAS
+  .filter(t => t.filtroFilial || t.filtroFilialViaFK)
+  .map(t => ({ nome: t.nome, filtroFilial: t.filtroFilial, filtroFilialViaFK: t.filtroFilialViaFK }));
 
 function criarStatusRouter(contexto) {
   const router = express.Router();
@@ -19,7 +26,8 @@ function criarStatusRouter(contexto) {
 
     let statusServidor = [];
     try {
-      const url = `${contexto.baseURI}/datasnap/rest/TSMSincronizacao/StatusTabelas?token=${TOKEN}`;
+      const params = new URLSearchParams({ token: TOKEN, idLoja: String(contexto.idLoja), filtros: JSON.stringify(FILTROS_FILIAL) });
+      const url = `${contexto.baseURI}/datasnap/rest/TSMSincronizacao/StatusTabelas?${params}`;
       statusServidor = await getJSON(url);
     } catch (e) {
       return res.status(502).render('status', {

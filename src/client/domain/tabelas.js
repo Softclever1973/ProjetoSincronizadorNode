@@ -115,6 +115,7 @@ const TABELAS = [
   tabela({ nome: 'AUX_SITUACOES_TRIBUTARIAS', pk: 'ID_SITUACAO_TRIBUTARIA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  tabela({ nome: 'EMPRESAS', pk: 'ID_EMPRESA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
 
   // ── Cadastros base ──────────────────────────────────────────────────────────
   tabela({ nome: 'CENTROS_DE_CUSTO', pk: 'CODIGO_CENTRO_DE_CUSTO', grupo: GRUPOS.CADASTROS }),
