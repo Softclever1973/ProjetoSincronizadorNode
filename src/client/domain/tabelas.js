@@ -243,6 +243,21 @@ const TABELAS = [
     ],
   }),
 
+  tabela({
+    nome: 'NOTAS_FISCAIS',
+    pk: 'ID_NOTA_FISCAL',
+    grupo: GRUPOS.FINANCEIRO,
+    filtroFilial: 'ID_LOJA',
+    generator: 'GEN_NOTAS_FISCAIS',  // confirmar nome no Firebird
+    colunaData: 'DATA_EMISSAO',
+    defaultAtivo: false,
+    srvId: true,
+    fks: [
+      { coluna: 'ID_CLIENTE', tabela: 'CLIENTES', traduzirSrvId: true, pkRef: 'ID_CLIENTE' },
+      { coluna: 'ID_EMPRESA', tabela: 'EMPRESAS', traduzirSrvId: true, pkRef: 'ID_EMPRESA' },
+    ],
+  }),
+
   // ── Sync4Market (desativado — tabelas não existem neste banco) ───────────────
   // tabela({ nome: 'SYNC_4M_PRODUTOS',    pk: 'ID_4M_PRODUTO',    grupo: 'Sync4Market' }),
   // tabela({ nome: 'SYNC_4M_PROD_CANAIS', pk: 'ID_4M_PROD_CANAL', grupo: 'Sync4Market' }),
