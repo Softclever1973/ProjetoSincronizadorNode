@@ -36,6 +36,7 @@ const MODULOS_DEF = Object.freeze({
   faturamento:   { label: 'Faturamento',   tipo: 'modulo' },
   auditoria:     { label: 'Auditoria',     tipo: 'modulo' },
   configuracoes: { label: 'Configurações', tipo: 'modulo' },
+  notas_fiscais: { label: 'Notas Fiscais', tipo: 'modulo' },
   exportacao:    { label: 'Exportação (CSV/Excel)', tipo: 'funcao' },
   imprimir:      { label: 'Impressão', tipo: 'funcao' },
   pedidos_inserir:  { label: 'Inserir',                  tipo: 'funcao', subDe: 'pedidos' },
