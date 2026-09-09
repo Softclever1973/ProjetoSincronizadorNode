@@ -13,8 +13,13 @@
  *   página (`AUTH.requireModulo`) e entrada em modulosRegistry.js.
  * - 'funcao' — uma capacidade pontual sem tela própria (ex. exportação de planilha),
  *   gateada só no ponto específico onde aparece. A tela de Permissões do superadmin separa
- *   visualmente os dois tipos (funções vêm depois, com um divisor) pra deixar claro que não
- *   é uma área nova do sistema.
+ *   visualmente as funções genéricas (Exportação, Impressão — usadas por várias telas) num
+ *   grupo à parte, com um divisor, pra deixar claro que não são uma área nova do sistema.
+ * - `subDe` (opcional, só em entradas 'funcao') — chave de um módulo 'modulo' do qual esta
+ *   função é uma ação específica (ex. `pedidos_inserir` é uma ação de `pedidos`, não uma
+ *   função genérica como exportação). A tela de Permissões agrupa essas entradas logo abaixo
+ *   do módulo pai, em vez de jogá-las no grupo genérico de funções — GET /superadmin/permissoes
+ *   (adminEmpresas.js) é quem faz essa intercalação a partir deste campo.
  *
  * Depois de registrado, gatear o acesso de verdade:
  * - backend: `requireModulo(chave, 'r'|'w')` na rota (ou `requireModuloDaTabela` se for
@@ -33,6 +38,11 @@ const MODULOS_DEF = Object.freeze({
   configuracoes: { label: 'Configurações', tipo: 'modulo' },
   exportacao:    { label: 'Exportação (CSV/Excel)', tipo: 'funcao' },
   imprimir:      { label: 'Impressão', tipo: 'funcao' },
+  pedidos_inserir:  { label: 'Inserir',                  tipo: 'funcao', subDe: 'pedidos' },
+  pedidos_editar:   { label: 'Editar',                   tipo: 'funcao', subDe: 'pedidos' },
+  pedidos_realizar: { label: 'Realizar',                 tipo: 'funcao', subDe: 'pedidos' },
+  pedidos_cancelar: { label: 'Cancelar',                 tipo: 'funcao', subDe: 'pedidos' },
+  produtos_movimentacao: { label: 'Movimentação de Estoque', tipo: 'funcao', subDe: 'produtos' },
 });
 
 const MODULOS = Object.freeze(Object.keys(MODULOS_DEF));

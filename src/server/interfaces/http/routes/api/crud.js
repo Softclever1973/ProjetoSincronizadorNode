@@ -363,8 +363,10 @@ async function handleSave(req, res, forceUpdate) {
         dadosAntes = before[0] ?? null;
       }
 
-      // PEDIDOS: pedido cancelado trava edição; Realizado não pode ir direto pra Cancelado
-      await hooks?.validarTransicao?.(db, { registro, update, dadosAntes });
+      // PEDIDOS: pedido cancelado trava edição; Realizado não pode ir direto pra Cancelado;
+      // e checagem de permissão granular (pedidos_inserir/editar/realizar/cancelar) — por
+      // isso o hook recebe req aqui (única tabela com validarTransicao hoje).
+      await hooks?.validarTransicao?.(db, { registro, update, dadosAntes, req, schema });
 
       // PRODUTOS: unicidade de CODIGO; CLIENTES: unicidade de CPF/CNPJ
       await hooks?.validarUnicidade?.(db, { registro, pkVals });
@@ -485,6 +487,7 @@ async function handleSave(req, res, forceUpdate) {
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
+    if (e.isForbidden) return res.status(403).json({ erro: e.message });
     if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `${req.method} ${tabela}`);
   }

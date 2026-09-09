@@ -45,11 +45,25 @@ router.get('/permissoes', async (req, res) => {
       pool.query('SELECT plano, modulo, nivel FROM public.permissoes_plano ORDER BY plano, modulo'),
       pool.query('SELECT role, modulo, nivel FROM public.permissoes_role ORDER BY role, modulo'),
     ]);
-    // Módulos (telas inteiras) antes, funções (capacidades pontuais, ex. exportação) depois —
-    // a tela de Permissões usa essa ordem pra desenhar o divisor entre os dois grupos.
-    const modulos = [...MODULOS]
-      .sort((a, b) => (MODULOS_DEF[a].tipo === MODULOS_DEF[b].tipo ? 0 : MODULOS_DEF[a].tipo === 'modulo' ? -1 : 1))
-      .map(chave => ({ chave, label: MODULOS_DEF[chave].label, tipo: MODULOS_DEF[chave].tipo }));
+    // Ordem pra tela de Permissões: cada módulo (tela inteira) seguido imediatamente das
+    // funções que são ações específicas dele (`subDe`, ex. pedidos_inserir logo após
+    // pedidos); só depois de todos os módulos vem o grupo de funções genéricas de verdade
+    // (sem `subDe`, ex. exportação/impressão — usadas por várias telas), que a tela desenha
+    // com um divisor. Preserva a ordem de declaração em MODULOS_DEF dentro de cada grupo.
+    const chavesModulo   = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'modulo');
+    const chavesFuncao   = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'funcao');
+    const _entrada = (chave, extra = {}) => ({ chave, label: MODULOS_DEF[chave].label, tipo: MODULOS_DEF[chave].tipo, ...extra });
+
+    const modulos = [];
+    for (const chave of chavesModulo) {
+      modulos.push(_entrada(chave));
+      for (const sub of chavesFuncao.filter(f => MODULOS_DEF[f].subDe === chave)) {
+        modulos.push(_entrada(sub, { subDe: chave }));
+      }
+    }
+    for (const chave of chavesFuncao.filter(f => !MODULOS_DEF[f].subDe)) {
+      modulos.push(_entrada(chave));
+    }
     res.json({ modulos, planos, roles });
   } catch (e) {
     res.status(500).json({ erro: e.message });

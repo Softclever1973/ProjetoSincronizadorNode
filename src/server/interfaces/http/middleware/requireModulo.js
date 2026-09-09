@@ -16,14 +16,21 @@ function _autorizado(nivel, nivelExigido) {
   return nivelExigido === 'w' ? podeEscrever(nivel) : podeLer(nivel);
 }
 
+/** Resolve o nível efetivo (plano × role) de um módulo pra requisição atual — mesma lógica
+ * usada pelos dois middlewares abaixo, reaproveitada também fora de middleware (ex.: hooks
+ * de validação de negócio que precisam checar uma permissão granular no meio da transação). */
+async function resolverNivelModulo(req, schema, modulo) {
+  const role  = req.userRoles?.[schema];
+  const plano = await _planoDoSchema(schema);
+  return obterNivelEfetivo(plano, role, modulo);
+}
+
 /** Middleware fixo: gate para uma rota cujo módulo é conhecido em tempo de definição da rota. */
 function requireModulo(modulo, nivelExigido) {
   return async (req, res, next) => {
     try {
       const schema = req.params.schema;
-      const role   = req.userRoles?.[schema];
-      const plano  = await _planoDoSchema(schema);
-      const nivel  = await obterNivelEfetivo(plano, role, modulo);
+      const nivel  = await resolverNivelModulo(req, schema, modulo);
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
@@ -43,9 +50,7 @@ function requireModuloDaTabela(nivelExigido) {
       if (!modulo) return next();
 
       const schema = req.params.schema;
-      const role   = req.userRoles?.[schema];
-      const plano  = await _planoDoSchema(schema);
-      const nivel  = await obterNivelEfetivo(plano, role, modulo);
+      const nivel  = await resolverNivelModulo(req, schema, modulo);
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
@@ -54,4 +59,4 @@ function requireModuloDaTabela(nivelExigido) {
   };
 }
 
-module.exports = { requireModulo, requireModuloDaTabela };
+module.exports = { requireModulo, requireModuloDaTabela, resolverNivelModulo };

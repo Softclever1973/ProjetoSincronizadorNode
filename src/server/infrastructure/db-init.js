@@ -8,7 +8,10 @@ const { pool } = require('./db');
 // (sidebar.js: feature 'financeiro' + roles ['gerente','dono']) — página própria, mas
 // mesma regra dupla (plano Safira+/Diamante E role gerente/dono). Segue o mesmo padrão
 // de financeiro nas duas matrizes abaixo, não o padrão aberto de produtos/clientes/pedidos.
-const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw' };
+// pedidos_inserir/editar/realizar/cancelar e produtos_movimentacao: novas permissões
+// granulares (ver domain/modulos.js) — 'rw' em todo plano, mesmo padrão de 'imprimir'
+// acima (não variam por plano; a granularidade real é só por role, em SEED_PERMISSOES_ROLE).
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' };
 // Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
 // mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
 // exportacao migrou de planos.json (`features: ['exportacao']`) pra cá — mesmos dois planos.
@@ -25,10 +28,16 @@ const SEED_PERMISSOES_PLANO = {
 // Ordem de poder (não alfabética): vendedor < gerente < dono.
 // exportacao não varia por role (hoje qualquer role exporta se o plano libera) — 'rw' nos
 // três, igual ao comportamento antigo de AUTH.hasFeature (sem checagem de role nenhuma).
+// pedidos_inserir/editar/realizar/cancelar: mesmo nível que 'pedidos' já tinha por role
+// ('rw' nos três — vendedor tem acesso total ao próprio pedido lançado, intencional, ver
+// comentário em pedidosPage.js). produtos_movimentacao fecha um gap de segurança real:
+// vendedor só tinha 'produtos:r-', mas conseguia registrar movimentação de estoque sem
+// nenhum gate — agora explicitamente bloqueado ('--') pra ele, liberado ('rw') pra
+// gerente/dono, mesmo nível que 'produtos' já tem pra esses dois papéis.
 const SEED_PERMISSOES_ROLE = {
-  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw' },
-  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw' },
-  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw' },
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
 };
 
 /** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */
