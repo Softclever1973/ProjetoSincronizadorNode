@@ -20,6 +20,14 @@
  *   função genérica como exportação). A tela de Permissões agrupa essas entradas logo abaixo
  *   do módulo pai, em vez de jogá-las no grupo genérico de funções — GET /superadmin/permissoes
  *   (adminEmpresas.js) é quem faz essa intercalação a partir deste campo.
+ * - `binario` (opcional, só em entradas 'funcao', default false) — controla só a UI da tela
+ *   de Permissões: `true` desenha um único switch "Liberado" (grava '--'/'rw', nunca 'r-')
+ *   porque a ação não tem estado de só-leitura que faça sentido (ex. `pedidos_inserir`: não
+ *   existe "inserir em modo leitura"). Deixar `false`/omitido desenha o par de checkboxes r/w
+ *   igual a um 'modulo' — pra funções que genuinely têm um meio-termo útil (ex.
+ *   `produtos_movimentacao`: 'r-' vê o histórico sem poder registrar movimentação). O nível
+ *   gravado sempre foi '--'/'r-'/'rw' pros três — `binario` não muda isso, só esconde a opção
+ *   'r-' da UI quando ela não faz sentido.
  *
  * Depois de registrado, gatear o acesso de verdade:
  * - backend: `requireModulo(chave, 'r'|'w')` na rota (ou `requireModuloDaTabela` se for
@@ -37,12 +45,12 @@ const MODULOS_DEF = Object.freeze({
   auditoria:     { label: 'Auditoria',     tipo: 'modulo' },
   configuracoes: { label: 'Configurações', tipo: 'modulo' },
   notas_fiscais: { label: 'Notas Fiscais', tipo: 'modulo' },
-  exportacao:    { label: 'Exportação (CSV/Excel)', tipo: 'funcao' },
-  imprimir:      { label: 'Impressão', tipo: 'funcao' },
-  pedidos_inserir:  { label: 'Inserir',                  tipo: 'funcao', subDe: 'pedidos' },
-  pedidos_editar:   { label: 'Editar',                   tipo: 'funcao', subDe: 'pedidos' },
-  pedidos_realizar: { label: 'Realizar',                 tipo: 'funcao', subDe: 'pedidos' },
-  pedidos_cancelar: { label: 'Cancelar',                 tipo: 'funcao', subDe: 'pedidos' },
+  exportacao:    { label: 'Exportação (CSV/Excel)', tipo: 'funcao', binario: true },
+  imprimir:      { label: 'Impressão', tipo: 'funcao', binario: true },
+  pedidos_inserir:  { label: 'Inserir',                  tipo: 'funcao', subDe: 'pedidos', binario: true },
+  pedidos_editar:   { label: 'Editar',                   tipo: 'funcao', subDe: 'pedidos', binario: true },
+  pedidos_realizar: { label: 'Realizar',                 tipo: 'funcao', subDe: 'pedidos', binario: true },
+  pedidos_cancelar: { label: 'Cancelar',                 tipo: 'funcao', subDe: 'pedidos', binario: true },
   produtos_movimentacao: { label: 'Movimentação de Estoque', tipo: 'funcao', subDe: 'produtos' },
 });
 

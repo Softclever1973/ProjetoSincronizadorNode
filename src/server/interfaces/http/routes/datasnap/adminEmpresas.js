@@ -50,18 +50,25 @@ router.get('/permissoes', async (req, res) => {
     // pedidos); só depois de todos os módulos vem o grupo de funções genéricas de verdade
     // (sem `subDe`, ex. exportação/impressão — usadas por várias telas), que a tela desenha
     // com um divisor. Preserva a ordem de declaração em MODULOS_DEF dentro de cada grupo.
-    const chavesModulo   = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'modulo');
-    const chavesFuncao   = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'funcao');
-    const _entrada = (chave, extra = {}) => ({ chave, label: MODULOS_DEF[chave].label, tipo: MODULOS_DEF[chave].tipo, ...extra });
+    const chavesModulo = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'modulo');
+    // Agrupamento por `subDe`, não por `tipo` — `binario` é ortogonal (só decide a UI de
+    // checkbox), então uma função com subDe continua sendo intercalada sob o pai
+    // independente de ser binária ou ter r/w separados.
+    const chavesComSubDe        = MODULOS.filter(c => MODULOS_DEF[c].subDe);
+    const chavesFuncaoGenerica  = MODULOS.filter(c => MODULOS_DEF[c].tipo === 'funcao' && !MODULOS_DEF[c].subDe);
+    const _entrada = (chave, extra = {}) => ({
+      chave, label: MODULOS_DEF[chave].label, tipo: MODULOS_DEF[chave].tipo,
+      binario: !!MODULOS_DEF[chave].binario, ...extra,
+    });
 
     const modulos = [];
     for (const chave of chavesModulo) {
       modulos.push(_entrada(chave));
-      for (const sub of chavesFuncao.filter(f => MODULOS_DEF[f].subDe === chave)) {
+      for (const sub of chavesComSubDe.filter(f => MODULOS_DEF[f].subDe === chave)) {
         modulos.push(_entrada(sub, { subDe: chave }));
       }
     }
-    for (const chave of chavesFuncao.filter(f => !MODULOS_DEF[f].subDe)) {
+    for (const chave of chavesFuncaoGenerica) {
       modulos.push(_entrada(chave));
     }
     res.json({ modulos, planos, roles });
