@@ -1,13 +1,13 @@
-const { execute, query } = require('../../infrastructure/firebird/db');
+const { execute, query } = require('#client/infrastructure/firebird/db.js');
 const { getUltimaAtualizacao, getUltimaDelecao, salvarCursor } = require('./cursor');
 const { consumirEcho } = require('./echos');
 const {
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
-} = require('../../http');
-const { salvarConflito } = require('../../infrastructure/persistence/conflitos');
-const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('../../infrastructure/firebird/db-utils');
+} = require('#client/http.js');
+const { salvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
+const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('#client/infrastructure/firebird/db-utils.js');
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};

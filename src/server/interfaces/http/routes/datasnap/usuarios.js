@@ -1,22 +1,18 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query, execute } = require('../../../../infrastructure/db');
-const authJwt  = require('../../middleware/authJwt');
-const { requireRole } = require('../../middleware/checkRole');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
+const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
+const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireRole } = require('#server/interfaces/http/middleware/checkRole.js');
+const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 const PODE_CRIAR    = { dono: ['gerente', 'vendedor'], gerente: ['vendedor'] };
 
-function checkSchema(req, res, next) {
-  if (!req.userSchemas.includes(req.params.schema))
-    return res.status(403).json({ erro: 'acesso negado' });
-  next();
-}
-
 /* ── GET /api/:schema/usuarios ── */
-router.get('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 'r'), async (req, res) => {
   const { schema } = req.params;
   const callerRole  = req.userRoles[schema];
   const filtroLoja  = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
@@ -121,7 +117,7 @@ async function _criarVendedorNoTenant(schema, { nome, id_loja }) {
 }
 
 /* ── POST /api/:schema/usuarios — criar usuário ── */
-router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.post('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema } = req.params;
   const callerRole = req.userRoles[schema];
   const { nome, email, senha, role, id_loja, id_vendedor, criarVendedor } = req.body;
@@ -205,7 +201,7 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireRole('gerente', 'd
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/ativo ── */
-router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema, id } = req.params;
   const { ativo } = req.body;
 
@@ -238,7 +234,7 @@ router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireRole('g
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/perfil — editar nome, email, senha ── */
-router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema, id } = req.params;
   const callerRole = req.userRoles[schema];
   const { nome, email, senha } = req.body;
@@ -316,29 +312,34 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireRole('
 });
 
 /* ── PATCH /api/:schema/usuarios/:id/role ── */
-router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireModulo('usuarios', 'w'), requireRole('dono'), async (req, res) => {
   const { schema, id } = req.params;
   const { role, id_loja, id_vendedor } = req.body;
+  const isSelf = String(req.userId) === String(id);
 
   if (!ROLES_VALIDOS.includes(role))
     return res.status(400).json({ erro: `role inválido. Use: ${ROLES_VALIDOS.join(' | ')}` });
 
-  // Dono não pode ser atribuído via API
-  if (role === 'dono')
+  // Ninguém vira dono por aqui (só via CLI) — exceto o próprio dono mantendo o papel que já
+  // tem, ao editar a si mesmo pra só atualizar loja/vendedor (ver isSelf abaixo). O modal de
+  // edição do dono sempre reenvia o role atual nesse caso, nunca deixa escolher outro.
+  if (role === 'dono' && !isSelf)
     return res.status(403).json({ erro: 'o role dono só pode ser atribuído via script CLI' });
 
   if (role !== 'dono' && !id_loja)
     return res.status(400).json({ erro: 'id_loja é obrigatório para gerente e vendedor' });
 
   try {
-    // Impede alterar o role de outro dono
     const alvo = await pool.query(
       'SELECT role FROM public.usuarios_empresas WHERE id_usuario = $1 AND schema_name = $2',
       [id, schema]
     );
     if (!alvo.rows.length)
       return res.status(404).json({ erro: 'usuário não encontrado neste schema' });
-    if (alvo.rows[0].role === 'dono')
+    // Impede alterar o papel de um dono existente — inclusive rebaixá-lo — por qualquer
+    // caminho que não seja o próprio dono mantendo seu papel inalterado (role já garantido
+    // 'dono' aqui, pela checagem acima, quando isSelf).
+    if (alvo.rows[0].role === 'dono' && (!isSelf || role !== 'dono'))
       return res.status(403).json({ erro: 'não é possível alterar o papel de um dono' });
 
     const result = await pool.query(
@@ -357,7 +358,7 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireRole('do
 /* ── GET /api/:schema/vendedores-disponiveis ── */
 // Retorna [{id_vendedor, nome, id_loja}] da tabela VENDEDORES do tenant.
 // Usado pelos modais de criar/editar usuário para popular o select de vínculo.
-router.get('/:schema/vendedores-disponiveis', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/vendedores-disponiveis', authJwt, checkSchema, requireModulo('usuarios', 'r'), async (req, res) => {
   const { schema } = req.params;
   try {
     // 1. Detecta colunas com o nome original (case) que o PostgreSQL armazenou.

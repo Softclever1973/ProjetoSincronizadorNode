@@ -1,9 +1,9 @@
 const express  = require('express');
 const router   = express.Router();
-const { pool } = require('../../../../infrastructure/db');
-const { initializeTenantSchema } = require('../../../../infrastructure/db-init');
-const authJwt  = require('../../middleware/authJwt');
-const { featuresDoPlano } = require('../../../../domain/planos');
+const { pool } = require('#server/infrastructure/db.js');
+const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
+const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
+const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
 // não aqui — a tabela VENDEDORES do schema recém-criado só existe depois do primeiro
@@ -18,7 +18,11 @@ router.get('/', authJwt, async (req, res) => {
       `SELECT schema_name, nome, ativo, regime_tributario, plano FROM public.sync_tenants WHERE schema_name IN (${placeholders})`,
       req.userSchemas
     );
-    res.json(result.rows.map(r => ({ ...r, features: featuresDoPlano(r.plano) })));
+    const rows = await Promise.all(result.rows.map(async r => ({
+      ...r,
+      modulos: await obterPermissoesEfetivas(r.plano, req.userRoles?.[r.schema_name]),
+    })));
+    res.json(rows);
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

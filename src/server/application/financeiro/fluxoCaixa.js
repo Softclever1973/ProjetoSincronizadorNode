@@ -1,4 +1,4 @@
-const { pool } = require('../../infrastructure/db');
+const { pool } = require('#server/infrastructure/db.js');
 
 // Agregação diária de entradas (CR recebidos) + saídas (CP pagos) + MOV_CAIXA, com saldo
 // acumulado. MOV_CAIXA é opcional (só entra na UNION se a tabela já existir no schema).

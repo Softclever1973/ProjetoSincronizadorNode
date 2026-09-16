@@ -6,19 +6,19 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { requireRoleOuVendedorEm } = require('../../middleware/checkRole');
-const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, TABELAS_VENDEDOR_PODE_ESCREVER, validarRegistro } = require('../../../../domain/validacao');
-const { colunasTipadasDeRegistro } = require('../../../../domain/schema');
-const { colunasTabela, criarTabelaSeNecessario } = require('../../../../infrastructure/repositories/colunasRepository');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { erroServidor } = require('../../erroServidor');
+const authJwt             = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModuloDaTabela } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
+const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('#server/domain/validacao.js');
+const { colunasTipadasDeRegistro } = require('#server/domain/schema.js');
+const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const {
   resolveIdLoja, pedidoEstaCancelado,
 } = require('./helpers');
-const { getCurrentTime } = require('../../../../infrastructure/timeService');
+const { getCurrentTime } = require('#server/infrastructure/timeService.js');
 const HOOKS = require('./hooks');
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
@@ -83,7 +83,7 @@ router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async
 });
 
 /* ── GET /api/:schema/tabelas/:tabela — lista paginada ── */
-router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   const exportAll = req.query.all === 'true';
@@ -363,8 +363,10 @@ async function handleSave(req, res, forceUpdate) {
         dadosAntes = before[0] ?? null;
       }
 
-      // PEDIDOS: pedido cancelado trava edição; Realizado não pode ir direto pra Cancelado
-      await hooks?.validarTransicao?.(db, { registro, update, dadosAntes });
+      // PEDIDOS: pedido cancelado trava edição; Realizado não pode ir direto pra Cancelado;
+      // e checagem de permissão granular (pedidos_inserir/editar/realizar/cancelar) — por
+      // isso o hook recebe req aqui (única tabela com validarTransicao hoje).
+      await hooks?.validarTransicao?.(db, { registro, update, dadosAntes, req, schema });
 
       // PRODUTOS: unicidade de CODIGO; CLIENTES: unicidade de CPF/CNPJ
       await hooks?.validarUnicidade?.(db, { registro, pkVals });
@@ -485,17 +487,18 @@ async function handleSave(req, res, forceUpdate) {
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
+    if (e.isForbidden) return res.status(403).json({ erro: e.message });
     if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `${req.method} ${tabela}`);
   }
 }
 
-const _saveMw = [authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER)];
+const _saveMw = [authJwt, checkSchema, requireModuloDaTabela('w')];
 router.post('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, false));
 router.put ('/:schema/tabelas/:tabela', ..._saveMw, (req, res) => handleSave(req, res, true));
 
 /* ── DELETE /api/:schema/tabelas/:tabela ── */
-router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireRoleOuVendedorEm(TABELAS_VENDEDOR_PODE_ESCREVER), async (req, res) => {
+router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabela('w'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
 

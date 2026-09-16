@@ -1,5 +1,59 @@
 const { pool } = require('./db');
 
+// Seed do sistema de permissões por módulo (plano × módulo, role × módulo) — reproduz
+// exatamente o comportamento anterior (requireRole/requireRoleOuVendedorEm/
+// requirePlanFeature('financeiro')) linha por linha, pra não regredir acesso de ninguém.
+// Ver plano em C:\Users\USUARIO021\.claude\plans\jaunty-nibbling-rabbit.md.
+// Fornecedores tinha, antes desta migração, EXATAMENTE o mesmo gate de financeiro
+// (sidebar.js: feature 'financeiro' + roles ['gerente','dono']) — página própria, mas
+// mesma regra dupla (plano Safira+/Diamante E role gerente/dono). Segue o mesmo padrão
+// de financeiro nas duas matrizes abaixo, não o padrão aberto de produtos/clientes/pedidos.
+// pedidos_inserir/editar/realizar/cancelar e produtos_movimentacao: novas permissões
+// granulares (ver domain/modulos.js) — 'rw' em todo plano, mesmo padrão de 'imprimir'
+// acima (não variam por plano; a granularidade real é só por role, em SEED_PERMISSOES_ROLE).
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' };
+// Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
+// mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
+// exportacao migrou de planos.json (`features: ['exportacao']`) pra cá — mesmos dois planos.
+// É do tipo 'funcao' (domain/modulos.js): não tem leitura/escrita separadas, só liberado/
+// bloqueado — por isso só usa 'rw' (liberado) ou '--' (bloqueado), nunca 'r-'.
+const SEED_PERMISSOES_PLANO = {
+  LITE1:     _MOD_RW_TODOS,
+  BRONZE1:   _MOD_RW_TODOS,
+  PRATA1:    _MOD_RW_TODOS,
+  OURO1:     _MOD_RW_TODOS,
+  DIAMANTE1: { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw', exportacao: 'rw' },
+  SAFIRA1:   { ..._MOD_RW_TODOS, financeiro: 'rw', fornecedores: 'rw', exportacao: 'rw' },
+};
+// Ordem de poder (não alfabética): vendedor < gerente < dono.
+// exportacao não varia por role (hoje qualquer role exporta se o plano libera) — 'rw' nos
+// três, igual ao comportamento antigo de AUTH.hasFeature (sem checagem de role nenhuma).
+// pedidos_inserir/editar/realizar/cancelar: mesmo nível que 'pedidos' já tinha por role
+// ('rw' nos três — vendedor tem acesso total ao próprio pedido lançado, intencional, ver
+// comentário em pedidosPage.js). produtos_movimentacao fecha um gap de segurança real:
+// vendedor só tinha 'produtos:r-', mas conseguia registrar movimentação de estoque sem
+// nenhum gate — agora explicitamente bloqueado ('--') pra ele, liberado ('rw') pra
+// gerente/dono, mesmo nível que 'produtos' já tem pra esses dois papéis.
+const SEED_PERMISSOES_ROLE = {
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
+};
+
+/** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */
+function _sqlSeedPermissoes(tabela, colChave, mapa) {
+  const rows = [];
+  const params = [];
+  let i = 1;
+  for (const [chave, modulos] of Object.entries(mapa)) {
+    for (const [modulo, nivel] of Object.entries(modulos)) {
+      rows.push(`($${i++}, $${i++}, $${i++})`);
+      params.push(chave, modulo, nivel);
+    }
+  }
+  return { sql: `INSERT INTO public.${tabela} (${colChave}, modulo, nivel) VALUES ${rows.join(', ')} ON CONFLICT (${colChave}, modulo) DO NOTHING`, params };
+}
+
 // Tabelas de controle: ficam sempre em public, fora de qualquer tenant schema
 const DDL_CONTROLE = [
   `CREATE TABLE IF NOT EXISTS public.sync_tenants (
@@ -81,6 +135,22 @@ const DDL_CONTROLE = [
   `ALTER TABLE public.sync_tenants ALTER COLUMN plano SET DEFAULT 'LITE1'`,
   // Timestamp do último reset — client usa pra detectar e disparar o banner de limpeza local.
   `ALTER TABLE public.sync_tenants ADD COLUMN IF NOT EXISTS resetado_em TIMESTAMP`,
+  // Migração: sistema unificado de permissões por módulo (plano × módulo, role × módulo),
+  // substitui requireRole/requireRoleOuVendedorEm/requirePlanFeature('financeiro') hardcoded.
+  `CREATE TABLE IF NOT EXISTS public.permissoes_plano (
+    plano   TEXT NOT NULL,
+    modulo  TEXT NOT NULL,
+    nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (plano, modulo)
+  )`,
+  `CREATE TABLE IF NOT EXISTS public.permissoes_role (
+    role    TEXT NOT NULL CHECK (role IN ('vendedor', 'gerente', 'dono')),
+    modulo  TEXT NOT NULL,
+    nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (role, modulo)
+  )`,
+  _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
+  _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
@@ -213,7 +283,7 @@ async function initializeDatabase() {
   const client = await pool.connect();
   try {
     for (const ddl of DDL_CONTROLE) {
-      await client.query(ddl);
+      typeof ddl === 'string' ? await client.query(ddl) : await client.query(ddl.sql, ddl.params);
     }
   } finally {
     client.release();

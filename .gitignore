@@ -37,6 +37,10 @@ config.enc
 .vscode/
 dist/
 
+# Cópia temporária de src/ com os aliases #server/#client reescritos pro pkg (ver
+# scripts/prepare-pkg-build.js) — gerada a cada build:server/build:client, não versionada.
+.pkg-build/
+
 todo.md
 docs/guia-de-testes.md
 docs/manual-configuracao-cliente-softclever.md

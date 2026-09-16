@@ -1,9 +1,9 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS_ITENS.
  */
-const { query } = require('../../../../../infrastructure/db');
-const { colunasTabela } = require('../../../../../infrastructure/repositories/colunasRepository');
-const { pedidoEstaCancelado } = require('../helpers');
+const { query } = require('#server/infrastructure/db.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { pedidoEstaCancelado } = require('#server/interfaces/http/routes/api/helpers.js');
 
 async function antesDaTransacao(db, registro) {
   // Pedido cancelado trava itens e parcelas — insert ou update, não só transição

@@ -1,8 +1,8 @@
-const { query, execute, isMissingTableError } = require('../../infrastructure/db');
-const { colunasCache, getColunasServidor, getColunasComputadas, seqsSrvIdInicializadas, constraintsUqAdicionadas } = require('../../infrastructure/cache/tenantCache');
-const { criarTabelaSeNecessario } = require('../../infrastructure/repositories/colunasRepository');
-const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('../../domain/schema');
-const { gerarContasReceberDoPedido } = require('../financeiro/gerarContasReceberDoPedido');
+const { query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
+const { colunasCache, getColunasServidor, getColunasComputadas, seqsSrvIdInicializadas, constraintsUqAdicionadas } = require('#server/infrastructure/cache/tenantCache.js');
+const { criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('#server/domain/schema.js');
+const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 
 /**
  * Aloca (ou reusa) o SRV_ID de um registro, para tabelas que usam SRV_ID como PK real no

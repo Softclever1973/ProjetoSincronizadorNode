@@ -4,14 +4,18 @@
   "description": "Servidor de sincronização Firebird matriz/filiais",
   "type": "commonjs",
   "main": "src/server.js",
+  "imports": {
+    "#server/*": "./src/server/*",
+    "#client/*": "./src/client/*"
+  },
   "scripts": {
     "start": "node src/server.js",
     "dev": "nodemon src/server.js",
     "client": "node src/client/index.js",
     "client:dev": "nodemon src/client/index.js",
     "generate-secret": "node -e \"process.stdout.write(require('crypto').randomBytes(64).toString('hex') + '\\n')\"",
-    "build:server": "pkg --config package.json src/server.js --target node22-win-x64 --output dist/server.exe",
-    "build:client": "pkg --config package.json src/client/index.js --target node22-win-x64 --output dist/client.exe",
+    "build:server": "node scripts/prepare-pkg-build.js && pkg --config .pkg-build/package.json .pkg-build/src/server.js --target node22-win-x64 --output dist/server.exe",
+    "build:client": "node scripts/prepare-pkg-build.js && pkg --config .pkg-build/package.json .pkg-build/src/client/index.js --target node22-win-x64 --output dist/client.exe",
     "test": "jest"
   },
   "dependencies": {

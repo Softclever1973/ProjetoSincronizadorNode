@@ -1,8 +1,8 @@
 const express = require('express');
-const { emitter: conflitosEmitter } = require('../../../infrastructure/persistence/conflitos');
-const { emitter: errosEmitter } = require('../../../infrastructure/persistence/erros');
-const { emitter: atualizacaoEmitter } = require('../../../application/updater');
-const { emitter: resetEmitter } = require('../../../application/resetLocal');
+const { emitter: conflitosEmitter } = require('#client/infrastructure/persistence/conflitos.js');
+const { emitter: errosEmitter } = require('#client/infrastructure/persistence/erros.js');
+const { emitter: atualizacaoEmitter } = require('#client/application/updater.js');
+const { emitter: resetEmitter } = require('#client/application/resetLocal.js');
 
 function criarEventosRouter() {
   const router = express.Router();

@@ -49,6 +49,7 @@ function encerrarComErro(err) {
   const config  = require('./config');
   const { initializeDatabase, migrarTodosSchemas } = require('./server/infrastructure/db-init');
   const { recarregarEmpresas } = require('./server/infrastructure/cache/empresasCache');
+  const { recarregarPermissoes } = require('./server/infrastructure/cache/permissoesCache');
   const { agendarLimpeza }     = require('./limpeza');
 
   const sincronizacaoRoutes      = require('./server/interfaces/http/routes/datasnap/sincronizacao');
@@ -112,6 +113,18 @@ function encerrarComErro(err) {
       return res.status(403).json({ erro: 'acesso negado' });
     }
     await recarregarEmpresas();
+    res.json({ ok: true });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Endpoint admin — recarrega o cache de permissões (plano×módulo, role×módulo)
+  // sem reiniciar o servidor. Requer header: x-admin-token: <ADMIN_TOKEN>
+  // ---------------------------------------------------------------------------
+  app.post('/admin/reload-permissoes', async (req, res) => {
+    if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+      return res.status(403).json({ erro: 'acesso negado' });
+    }
+    await recarregarPermissoes();
     res.json({ ok: true });
   });
 

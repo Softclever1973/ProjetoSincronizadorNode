@@ -1,4 +1,4 @@
-const { query } = require('../db');
+const { query } = require('#server/infrastructure/db.js');
 
 async function existePagamentoRealizado(db, idPedido) {
   const linhas = await query(db,

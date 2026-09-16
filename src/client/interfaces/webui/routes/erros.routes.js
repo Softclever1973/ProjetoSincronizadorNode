@@ -1,5 +1,5 @@
 const express = require('express');
-const { lerTodos: lerErros, limparErros } = require('../../../infrastructure/persistence/erros');
+const { lerTodos: lerErros, limparErros } = require('#client/infrastructure/persistence/erros.js');
 
 function criarErrosRouter() {
   const router = express.Router();

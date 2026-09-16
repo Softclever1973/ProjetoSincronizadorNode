@@ -1,6 +1,6 @@
-const { execute: dbExecute } = require('../../infrastructure/firebird/db');
-const { getColunasComputadas, getColunasFirebird } = require('../../infrastructure/firebird/db-utils');
-const { COLUNAS_IGNORADAS_AUDITORIA } = require('../../domain/auditoria');
+const { execute: dbExecute } = require('#client/infrastructure/firebird/db.js');
+const { getColunasComputadas, getColunasFirebird } = require('#client/infrastructure/firebird/db-utils.js');
+const { COLUNAS_IGNORADAS_AUDITORIA } = require('#client/domain/auditoria.js');
 
 // Aplica um registro (versão do servidor, mesclado, ou servidor com PK renomeado) no
 // Firebird local via UPDATE OR INSERT — usado pelos 3 dos 4 fluxos de resolução de

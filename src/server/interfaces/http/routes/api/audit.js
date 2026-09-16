@@ -6,13 +6,13 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt         = require('../../middleware/authJwt');
-const { requireRole } = require('../../middleware/checkRole');
-const { checkSchema } = require('../../middleware/checkSchema');
-const { pool }        = require('../../../../infrastructure/db');
+const authJwt         = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
+const { pool }        = require('#server/infrastructure/db.js');
 
 /* ── GET /api/:schema/audit-log ── */
-router.get('/:schema/audit-log', authJwt, checkSchema, requireRole('gerente', 'dono'), async (req, res) => {
+router.get('/:schema/audit-log', authJwt, checkSchema, requireModulo('auditoria', 'r'), async (req, res) => {
   const { schema } = req.params;
   const pageSize   = Math.min(100, Math.max(1, parseInt(req.query.pageSize) || 50));
   const page       = Math.max(1, parseInt(req.query.page) || 1);

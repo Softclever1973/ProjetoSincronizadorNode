@@ -1,7 +1,7 @@
 const EventEmitter = require('events');
-const { query, execute, tabelaExiste } = require('../infrastructure/firebird/db');
-const { verificarStatusReset } = require('../http');
-const TABELAS = require('../domain/tabelas');
+const { query, execute, tabelaExiste } = require('#client/infrastructure/firebird/db.js');
+const { verificarStatusReset } = require('#client/http.js');
+const TABELAS = require('#client/domain/tabelas.js');
 
 // Emite 'novo-reset-pendente' quando o servidor sinaliza um reset ainda não aplicado localmente — consumido pelo SSE em webui.js.
 const emitter = new EventEmitter();

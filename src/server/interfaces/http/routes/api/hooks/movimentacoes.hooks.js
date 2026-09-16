@@ -1,8 +1,8 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela MOVIMENTACOES.
  */
-const { query } = require('../../../../../infrastructure/db');
-const { resolverNomeVendedor } = require('../helpers');
+const { query } = require('#server/infrastructure/db.js');
+const { resolverNomeVendedor } = require('#server/interfaces/http/routes/api/helpers.js');
 
 async function denormalizar(db, schema, registro, allowed, req) {
   if (!allowed.has('USUARIO')) return;

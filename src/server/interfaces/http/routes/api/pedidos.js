@@ -9,12 +9,12 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt             = require('../../middleware/authJwt');
-const { checkSchema }     = require('../../middleware/checkSchema');
-const { withTenantConnection, query, isMissingTableError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('../../../../domain/validacao');
-const { colunasTabela } = require('../../../../infrastructure/repositories/colunasRepository');
-const { erroServidor } = require('../../erroServidor');
+const authJwt             = require('#server/interfaces/http/middleware/authJwt.js');
+const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
+const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, COLS_OCULTAS, COLS_FLAT, NAME_CANDIDATES, SORT_COLS_DIRETOS } = require('#server/domain/validacao.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const { resolveIdLoja } = require('./helpers');
 
 /* ── GET /api/:schema/pedidos-completo — JOIN das 3 tabelas de pedido ── */
@@ -142,6 +142,19 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       // Prefere a coluna armazenada VALOR_TOTAL_ITEM (preenchida pelo Delphi/trigger)
       // para evitar 0,00 quando VALOR_UNITARIO está zerado no servidor
       const exprValorItem = temVtItem ? 'pi.VALOR_TOTAL_ITEM' : 'pi.VALOR_UNITARIO * pi.QUANTIDADE';
+      // Total = subtotal dos itens - desconto% + frete + outras despesas — mesma fórmula
+      // usada no cliente (impressão do pedido, modal de pagamento), pra bater com o que
+      // aparece lá. Antes daqui só somava os itens, ignorando desconto/frete/despesas.
+      const exprSubtotal = `(SELECT COALESCE(SUM(${exprValorItem}), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO)`;
+      // Cast defensivo pra NUMERIC via texto: em alguns schemas essas colunas foram
+      // auto-criadas como TEXT pela sincronização (criarTabelaSeNecessario infere o tipo
+      // do primeiro registro recebido) — COALESCE(coluna_text, 0) quebra porque text e
+      // integer não têm conversão implícita compatível. NULLIF trata também string vazia.
+      const exprNumerica  = col => `COALESCE(NULLIF(TRIM(p.${col}::TEXT), ''), '0')::NUMERIC`;
+      const exprFatorDesc = colNamesP.has('PERCENTUAL_DESCONTO') ? `(1 - ${exprNumerica('PERCENTUAL_DESCONTO')} / 100)` : '1';
+      const exprFrete     = colNamesP.has('VALOR_FRETE')         ? exprNumerica('VALOR_FRETE')     : '0';
+      const exprOutras    = colNamesP.has('OUTRAS_DESPESAS')     ? exprNumerica('OUTRAS_DESPESAS') : '0';
+      const exprValorTotal = `(${exprSubtotal} * ${exprFatorDesc} + ${exprFrete} + ${exprOutras})`;
 
       const select = ['p.ID_PEDIDO'];
       if (colNamesP.has('ID_LOJA'))         select.push('p.ID_LOJA');
@@ -151,7 +164,7 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       if (colNamesP.has('STATUS'))         select.push('p.STATUS');
       if (vendedorCol)                     select.push(`p.${vendedorCol}`);
       if (temValorTotal) {
-        select.push(`(SELECT COALESCE(SUM(${exprValorItem}), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO) AS VALOR_TOTAL`);
+        select.push(`${exprValorTotal} AS VALOR_TOTAL`);
       }
 
       const statusOptions = colNamesP.has('STATUS')
@@ -262,9 +275,8 @@ router.get('/:schema/pedidos-lista', authJwt, checkSchema, async (req, res) => {
       }
       // Filtro de faixa de valor total (subquery inline no WHERE) — usa a mesma expressão do SELECT
       if (temValorTotal) {
-        const subqValor = `(SELECT COALESCE(SUM(${exprValorItem}), 0) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO)`;
-        if (valorMin !== null && !isNaN(valorMin)) { params.push(valorMin); whereParts.push(`${subqValor} >= $${params.length}`); }
-        if (valorMax !== null && !isNaN(valorMax)) { params.push(valorMax); whereParts.push(`${subqValor} <= $${params.length}`); }
+        if (valorMin !== null && !isNaN(valorMin)) { params.push(valorMin); whereParts.push(`${exprValorTotal} >= $${params.length}`); }
+        if (valorMax !== null && !isNaN(valorMax)) { params.push(valorMax); whereParts.push(`${exprValorTotal} <= $${params.length}`); }
       }
       const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 

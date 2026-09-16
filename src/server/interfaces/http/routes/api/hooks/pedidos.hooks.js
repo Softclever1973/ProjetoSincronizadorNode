@@ -1,10 +1,12 @@
 /**
  * Hooks de handleSave (crud.js) específicos da tabela PEDIDOS.
  */
-const { execute } = require('../../../../../infrastructure/db');
-const { existePagamentoRealizado } = require('../../../../../infrastructure/repositories/pedidosRepository');
-const { resolverNomeVendedor } = require('../helpers');
-const { gerarContasReceberDoPedido } = require('../../../../../application/financeiro/gerarContasReceberDoPedido');
+const { execute } = require('#server/infrastructure/db.js');
+const { existePagamentoRealizado } = require('#server/infrastructure/repositories/pedidosRepository.js');
+const { resolverNomeVendedor } = require('#server/interfaces/http/routes/api/helpers.js');
+const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
+const { resolverNivelModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
+const { podeEscrever } = require('#server/domain/permissoes.js');
 
 function aplicarCamposAutomaticos(req, registro) {
   const now        = new Date();
@@ -48,7 +50,30 @@ async function denormalizar(db, schema, registro, allowed) {
   }
 }
 
-async function validarTransicao(db, { registro, update, dadosAntes }) {
+/** Decide qual das 4 permissões granulares de PEDIDOS (domain/modulos.js) governa esta
+ * gravação. STATUS muda -> par realizar/voltar-pendente ('R'/'P') ou cancelar ('C');
+ * senão é inserção (sem PK ainda) ou edição normal de campos. */
+function _chavePermissaoPedido({ registro, update, dadosAntes }) {
+  if (!update) return 'pedidos_inserir';
+  if (registro.STATUS && dadosAntes && registro.STATUS !== dadosAntes.STATUS) {
+    return registro.STATUS === 'C' ? 'pedidos_cancelar' : 'pedidos_realizar';
+  }
+  return 'pedidos_editar';
+}
+
+async function validarTransicao(db, { registro, update, dadosAntes, req, schema }) {
+  // Checagem de permissão granular (pedidos_inserir/editar/realizar/cancelar) — adicional
+  // ao gate de tabela pedidos:'w' já aplicado por requireModuloDaTabela em crud.js, que
+  // continua cobrindo PEDIDOS_ITENS/PEDIDOS_PARCELAS_PAGAMENTOS sem fragmentar.
+  const chave = _chavePermissaoPedido({ registro, update, dadosAntes });
+  const nivel = await resolverNivelModulo(req, schema, chave);
+  if (!podeEscrever(nivel)) {
+    throw Object.assign(
+      new Error('Você não tem permissão para realizar esta ação em Pedidos.'),
+      { isForbidden: true }
+    );
+  }
+
   // Pedido cancelado trava qualquer edição, não só uma tentativa de mudar o status —
   // não existe caminho de volta a partir de Cancelado.
   if (update && dadosAntes?.STATUS === 'C') {

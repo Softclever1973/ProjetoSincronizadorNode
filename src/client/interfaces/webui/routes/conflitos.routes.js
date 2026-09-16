@@ -1,10 +1,10 @@
 const express = require('express');
-const { listarPendentes, resolverConflito, lerTodos } = require('../../../infrastructure/persistence/conflitos');
-const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('../../../infrastructure/firebird/db');
-const { gerarNovoPK: utilGerarPK } = require('../../../infrastructure/firebird/db-utils');
-const { aplicarRegistroLocal } = require('../../../application/syncEngine/resolverConflito');
-const { enviarRegistro } = require('../../../http');
-const { renderCampos } = require('../viewHelpers');
+const { listarPendentes, resolverConflito, lerTodos } = require('#client/infrastructure/persistence/conflitos.js');
+const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
+const { gerarNovoPK: utilGerarPK } = require('#client/infrastructure/firebird/db-utils.js');
+const { aplicarRegistroLocal } = require('#client/application/syncEngine/resolverConflito.js');
+const { enviarRegistro } = require('#client/http.js');
+const { renderCampos } = require('#client/interfaces/webui/viewHelpers.js');
 
 function criarConflitosRouter(contexto) {
   const router = express.Router();

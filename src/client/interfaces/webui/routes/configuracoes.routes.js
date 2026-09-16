@@ -1,9 +1,9 @@
 const express = require('express');
-const TABELAS = require('../../../domain/tabelas');
-const { lerConfig, salvarConfig, defaultAtivo } = require('../../../infrastructure/config/tabelasConfig');
-const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('../../../infrastructure/firebird/db');
-const { clearConflitos } = require('../../../infrastructure/persistence/conflitos');
-const { aplicarResetLocal } = require('../../../application/resetLocal');
+const TABELAS = require('#client/domain/tabelas.js');
+const { lerConfig, salvarConfig, defaultAtivo } = require('#client/infrastructure/config/tabelasConfig.js');
+const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
+const { clearConflitos } = require('#client/infrastructure/persistence/conflitos.js');
+const { aplicarResetLocal } = require('#client/application/resetLocal.js');
 
 function criarConfiguracoesRouter(contexto) {
   const router = express.Router();
@@ -87,7 +87,7 @@ function criarConfiguracoesRouter(contexto) {
     const enviar = (evento, dados) =>
       res.write(`event: ${evento}\ndata: ${JSON.stringify(dados)}\n\n`);
 
-    const { enfileirarTodosRegistros } = require('../../../setup');
+    const { enfileirarTodosRegistros } = require('#client/setup.js');
     const log = (msg) => console.log(msg);
     let db;
     try { db = await getConnection(); } catch (e) {
@@ -166,7 +166,7 @@ function criarConfiguracoesRouter(contexto) {
       ? req.body.tabelas
       : null;
 
-    const { enfileirarRegistrosParcial } = require('../../../setup');
+    const { enfileirarRegistrosParcial } = require('#client/setup.js');
     let db;
     try { db = await getConnection(); } catch (e) {
       return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });

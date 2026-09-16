@@ -1,4 +1,4 @@
-const { query } = require('../db');
+const { query } = require('#server/infrastructure/db.js');
 
 /**
  * Cache de metadados de tabela por tenant (chave `schema:tabela`), para as 3 introspecções

@@ -9,16 +9,19 @@
 const express = require('express');
 const router  = express.Router();
 
-const authJwt                  = require('../../middleware/authJwt');
-const { requireRole }          = require('../../middleware/checkRole');
-const { checkSchema }          = require('../../middleware/checkSchema');
-const { pool, withTenantConnection, query, execute, isMissingTableError } = require('../../../../infrastructure/db');
-const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('../../../../domain/validacao');
-const { registrarAuditLog } = require('../../../../infrastructure/repositories/auditLogRepository');
-const { PLANOS, PLANO_PADRAO } = require('../../../../domain/planos');
+const authJwt                  = require('#server/interfaces/http/middleware/authJwt.js');
+const { requireModulo }        = require('#server/interfaces/http/middleware/requireModulo.js');
+const { checkSchema }          = require('#server/interfaces/http/middleware/checkSchema.js');
+const { pool, withTenantConnection, query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
+const { NOME_VALIDO, CHAVES_PERMITIDAS } = require('#server/domain/validacao.js');
+const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { PLANOS, PLANO_PADRAO } = require('#server/domain/planos.js');
+const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
+const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { buildNomeLojaExpr } = require('./helpers');
 
 /* ── GET /api/:schema/admin/sync-config ── */
-router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'r'), async (req, res) => {
   const { schema } = req.params;
   try {
     const rows = await withTenantConnection(schema, db =>
@@ -32,7 +35,7 @@ router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono
 });
 
 /* ── PUT /api/:schema/admin/sync-config ── */
-router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireRole('dono'), async (req, res) => {
+router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'w'), async (req, res) => {
   const { schema } = req.params;
   const { chave, valor } = req.body;
 
@@ -77,19 +80,44 @@ router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
 });
 
 /* ── GET /api/:schema/filiais ── */
+// sync_filiais só ganha uma linha quando o client daquela loja chega a rodar um ciclo de
+// sync — uma loja com PEDIDOS reais (dado migrado, ou filial que nunca instalou o client)
+// nunca aparece lá, mesmo aparecendo normalmente no gráfico de faturamento por loja (que
+// lê ID_LOJA direto de PEDIDOS). Sem completar com essas lojas "órfãs" aqui, o filtro
+// global de loja (sidebar.js) nunca oferece uma opção pra filtrar por elas.
 router.get('/:schema/filiais', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
-    const rows = await withTenantConnection(schema, db =>
-      query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja')
-    );
-    res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
+    const rows = await withTenantConnection(schema, async db => {
+      const base = await query(db, 'SELECT id_loja, nome FROM sync_filiais ORDER BY id_loja').catch(() => []);
+      const mapa = new Map(base.map(r => [r.ID_LOJA, r.NOME]));
+
+      const colsP = await colunasTabela(db, schema, 'PEDIDOS').catch(() => []);
+      if (colsP.some(c => c.COLUMN_NAME === 'ID_LOJA')) {
+        const colsAG = await colunasTabela(db, schema, 'AUX_GENERICA').catch(() => []);
+        const { nomeLojaExpr, joinAG } = buildNomeLojaExpr({ hasSF: false, hasAuxGen: colsAG.length > 0 });
+        const extras = await query(db, `
+          SELECT p.ID_LOJA AS id_loja, ${nomeLojaExpr} AS nome
+          FROM PEDIDOS p
+          ${joinAG}
+          WHERE p.ID_LOJA IS NOT NULL
+          GROUP BY p.ID_LOJA
+        `, []).catch(() => []);
+        for (const r of extras) if (!mapa.has(r.ID_LOJA)) mapa.set(r.ID_LOJA, r.NOME);
+      }
+
+      return [...mapa.entries()].sort((a, b) => a[0] - b[0]);
+    });
+    res.json(rows.map(([id, nome]) => ({ id, nome: nome || `Loja ${id}` })));
   } catch {
     res.json([]);
   }
 });
 
 // GET /api/:schema/plano — info do plano atual. Lê de sync_tenants, não do claim do JWT (evita staleness até o token renovar).
+// `modulos` traz a permissão efetiva (plano ∩ role) de cada módulo — é o mesmo endpoint que
+// sidebar.js#initSidebar() já chama em toda carga de página, então o frontend recebe
+// permissões atualizadas sem precisar de um novo login.
 router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
@@ -97,7 +125,9 @@ router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
       'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', [schema]
     );
     const plano = rows[0]?.plano || PLANO_PADRAO;
-    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, features: PLANOS[plano]?.features ?? [] });
+    const role = req.userRoles?.[schema];
+    const modulos = await obterPermissoesEfetivas(plano, role);
+    res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, modulos });
   } catch (e) {
     res.status(500).json({ erro: e.message });
   }

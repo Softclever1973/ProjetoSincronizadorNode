@@ -1,4 +1,4 @@
-const { pool } = require('../db');
+const { pool } = require('#server/infrastructure/db.js');
 
 let cache = new Map(); // token → { schema_name, nome }
 let loaded = false;

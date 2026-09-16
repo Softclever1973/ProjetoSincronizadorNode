@@ -1,5 +1,5 @@
-const { query, execute } = require('../db');
-const { chaveNegocioTabela } = require('../../domain/schema');
+const { query, execute } = require('#server/infrastructure/db.js');
+const { chaveNegocioTabela } = require('#server/domain/schema.js');
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 // nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).
@@ -16,7 +16,7 @@ const COLUNAS_IGNORADAS_SERVIDOR = new Set([
  * @param {import('pg').PoolClient} db
  * @param {string} schema
  * @param {string} tabela
- * @returns {Promise<Array<{ COLUMN_NAME: string, DATA_TYPE: string, IS_GENERATED: string, CHARACTER_MAXIMUM_LENGTH: number|null }>>}
+ * @returns {Promise<Array<{ COLUMN_NAME: string, DATA_TYPE: string, IS_GENERATED: string, CHARACTER_MAXIMUM_LENGTH: number|null, NUMERIC_SCALE: number|null }>>}
  */
 async function colunasTabela(db, schema, tabela) {
   return query(db, `
@@ -24,7 +24,8 @@ async function colunasTabela(db, schema, tabela) {
       UPPER(column_name) AS column_name,
       data_type,
       CASE WHEN is_generated = 'ALWAYS' THEN 'ALWAYS' ELSE '' END AS is_generated,
-      character_maximum_length
+      character_maximum_length,
+      numeric_scale
     FROM information_schema.columns
     WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
     ORDER BY ordinal_position
