@@ -1,5 +1,5 @@
 /**
- * Rotas de comandas (pré-venda por comanda/mesa) do tenant.
+ * Rotas de comandas (pré-venda por comanda/mesa — mesmo conceito, um único número) do tenant.
  * GET /api/:schema/comandas-abertas
  */
 
@@ -24,10 +24,17 @@ async function garantirColunasComandas(db, schema) {
   await execute(db, `
     ALTER TABLE PEDIDOS
       ADD COLUMN IF NOT EXISTS NUMERO_COMANDA INTEGER,
-      ADD COLUMN IF NOT EXISTS NUMERO_MESA INTEGER,
       ADD COLUMN IF NOT EXISTS QUANTIDADE_DE_PESSOAS INTEGER,
       ADD COLUMN IF NOT EXISTS LINHA_RODAPE_NF1 VARCHAR(255),
-      ADD COLUMN IF NOT EXISTS NUMERO_CUPOM_FISCAL INTEGER
+      ADD COLUMN IF NOT EXISTS NUMERO_CUPOM_FISCAL INTEGER,
+      ADD COLUMN IF NOT EXISTS ID_VENDEDOR INTEGER,
+      ADD COLUMN IF NOT EXISTS NOME_VENDEDOR VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS NOME_CLIENTE VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS HORA_DO_PEDIDO TIME,
+      ADD COLUMN IF NOT EXISTS DATA_REALIZACAO TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS MOTIVO_CANCELAMENTO VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS USUARIO_CANCELAMENTO VARCHAR(255),
+      ADD COLUMN IF NOT EXISTS DATA_CANCELAMENTO TIMESTAMP
   `);
   _schemasGarantidos.add(schema);
 }
@@ -42,16 +49,17 @@ const STATUS_POR_FILTRO = { todas: null, aberta: 'P', fechada: 'R', cancelada: '
 /* ── GET /api/:schema/comandas-abertas ──
    Apesar do nome (mantido por compatibilidade), essa rota lista comandas em qualquer um
    dos três estados — aberta/fechada/cancelada — conforme o parâmetro ?status=. Comanda
-   "aberta" não é um status novo — é um PEDIDOS normal (STATUS='P') com NUMERO_COMANDA ou
-   NUMERO_MESA preenchido; "fechada" (STATUS='R', Realizado) e "cancelada" (STATUS='C') são
+   "aberta" não é um status novo — é um PEDIDOS normal (STATUS='P') com NUMERO_COMANDA
+   preenchido. No negócio deste tenant "mesa" e "comanda" são o mesmo conceito (confirmado
+   com o usuário) — não existe uma NUMERO_DA_MESA separada em uso real, então um único número
+   cobre os dois casos. "fechada" (STATUS='R', Realizado) e "cancelada" (STATUS='C') são
    estados finais, sem edição possível pela tela de Comandas. VALOR_TOTAL_PRODUTOS não é
    usado — como em pedidosPage.js, o total é recalculado a partir de PEDIDOS_ITENS por não
    confiar no valor persistido. */
 router.get('/:schema/comandas-abertas', authJwt, checkSchema, requireModulo('comandas', 'r'), async (req, res) => {
   const { schema } = req.params;
-  const comandaOuMesa = req.query.comandaOuMesa?.trim() || '';
-  const obs           = req.query.obs?.trim()           || '';
-  const idLoja         = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
+  const busca  = req.query.busca?.trim() || '';
+  const idLoja = resolveIdLoja(req, schema, { donoPodemFiltrar: true });
   // 'todas' mapeia pra null (sem filtro de STATUS) — não dá pra usar `||` aqui, cairia no
   // fallback 'aberta' porque null é falsy.
   const statusFiltro   = Object.prototype.hasOwnProperty.call(STATUS_POR_FILTRO, req.query.status)
@@ -78,7 +86,7 @@ router.get('/:schema/comandas-abertas', authJwt, checkSchema, requireModulo('com
       // cria a coluna quando ela não existe, não migra o tipo de uma já existente), e um
       // COALESCE(coluna, 0) quebra em "tipos ... não podem corresponder" nesse caso.
       const where = [
-        `(COALESCE(NULLIF(p.NUMERO_COMANDA::text, ''), '0')::numeric > 0 OR COALESCE(NULLIF(p.NUMERO_MESA::text, ''), '0')::numeric > 0)`,
+        `COALESCE(NULLIF(p.NUMERO_COMANDA::text, ''), '0')::numeric > 0`,
       ];
       if (statusFiltro !== null) where.push(`p.STATUS = '${statusFiltro}'`);
       if (statusFiltro === 'P') {
@@ -86,21 +94,38 @@ router.get('/:schema/comandas-abertas', authJwt, checkSchema, requireModulo('com
       }
       const params = [];
       if (idLoja !== null) { params.push(idLoja); where.push(`p.ID_LOJA = $${params.length}`); }
-      if (comandaOuMesa) {
-        params.push(`${comandaOuMesa}%`);
-        where.push(`(p.NUMERO_COMANDA::text LIKE $${params.length} OR p.NUMERO_MESA::text LIKE $${params.length})`);
+      if (busca) {
+        // Número da comanda casa por prefixo (busca incremental de digitação); garçom,
+        // cliente e observação casam por substring — mais útil pra nome do que prefixo.
+        params.push(`${busca}%`, `%${busca}%`);
+        const pPrefixo = params.length - 1, pSubstr = params.length;
+        where.push(`(
+          p.NUMERO_COMANDA::text LIKE $${pPrefixo}
+          OR p.NOME_VENDEDOR ILIKE $${pSubstr}
+          OR p.NOME_CLIENTE ILIKE $${pSubstr}
+          OR p.LINHA_RODAPE_NF1 ILIKE $${pSubstr}
+        )`);
       }
-      if (obs) { params.push(`${obs}%`); where.push(`p.LINHA_RODAPE_NF1 ILIKE $${params.length}`); }
+
+      // Fechadas/canceladas são histórico — mais útil ordenado pelo momento do encerramento
+      // (mais recente primeiro) do que pelo número da comanda. Abertas/todas continuam por
+      // NUMERO_COMANDA (não faz sentido ordenar "todas" por um dos dois campos de encerramento,
+      // já que comandas abertas não têm nenhum dos dois preenchido).
+      const orderBy = statusFiltro === 'R' ? 'p.DATA_REALIZACAO DESC NULLS LAST'
+        : statusFiltro === 'C' ? 'p.DATA_CANCELAMENTO DESC NULLS LAST'
+        : 'p.NUMERO_COMANDA ASC';
 
       return query(db, `
-        SELECT p.ID_PEDIDO, p.NUMERO_COMANDA, p.NUMERO_MESA, p.DATA_DO_PEDIDO, p.STATUS,
+        SELECT p.ID_PEDIDO, p.NUMERO_COMANDA, p.DATA_DO_PEDIDO, p.HORA_DO_PEDIDO, p.STATUS,
                p.QUANTIDADE_DE_PESSOAS, p.LINHA_RODAPE_NF1 AS OBSERVACAO,
+               p.ID_VENDEDOR, p.NOME_VENDEDOR, p.NOME_CLIENTE,
+               p.DATA_REALIZACAO, p.DATA_CANCELAMENTO,
                ${somaItem
                  ? `COALESCE((SELECT SUM(${somaItem}) FROM PEDIDOS_ITENS pi WHERE pi.ID_PEDIDO = p.ID_PEDIDO), 0)`
                  : '0'} AS VALOR_TOTAL
         FROM PEDIDOS p
         WHERE ${where.join(' AND ')}
-        ORDER BY p.NUMERO_COMANDA ASC
+        ORDER BY ${orderBy}
       `, params);
     });
     res.json({ registros });
