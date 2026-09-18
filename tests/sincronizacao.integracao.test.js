@@ -33,9 +33,10 @@ beforeAll(async () => {
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.produtos_sync_teste CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.a_receber CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.status_filtro_sync_teste CASCADE`);
+  await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.fk_loja_sync_teste CASCADE`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_produtos_sync_teste`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_a_receber`);
-  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER', 'STATUS_FILTRO_SYNC_TESTE')`);
+  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER', 'STATUS_FILTRO_SYNC_TESTE', 'FK_LOJA_SYNC_TESTE')`);
 }, 30000);
 
 afterAll(async () => {
@@ -214,5 +215,48 @@ describe('GET /StatusTabelas — restringe total/maxId à loja quando a tabela t
     const linhaLoja2 = acharTabela(resLoja2, 'STATUS_FILTRO_SYNC_TESTE');
     expect(linhaLoja2.total).toBe(1);
     expect(linhaLoja2.maxId).toBe(maxIdEmpresaInteira);
+  });
+});
+
+describe('GET /RegistrosParaAtualizar — autocura quando a coluna do filtroFilial não existe ainda', () => {
+  // Reproduz o incidente real: o primeiro registro sincronizado de uma tabela recém-ativada
+  // não trazia ID_LOJA no payload (ausente, não apenas null) — a tabela nasceu sem essa
+  // coluna, e o pull seguinte quebrava pra sempre com "coluna ID_LOJA não existe", num
+  // cliente novo, sem push nenhum ter sido bem-sucedido antes pra autocurar via push.
+  test('cria a coluna do filtroFilial em vez de quebrar, e o pull volta 200', async () => {
+    const push = await receberRegistro({
+      tabela: 'FK_LOJA_SYNC_TESTE',
+      pk: 'ID_FK_LOJA_TESTE',
+      // Sem ID_LOJA no registro — é exatamente essa ausência que faz a coluna nunca nascer.
+      registro: { ID_FK_LOJA_TESTE: 1, NOME: 'Sem loja' },
+    });
+    expect(push.status).toBe(200);
+
+    const { rows: antes } = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'fk_loja_sync_teste' AND column_name = 'id_loja'`,
+      [TEST_SCHEMA]
+    );
+    expect(antes).toHaveLength(0); // confirma que a coluna realmente não existe ainda
+
+    const pull = await request(app)
+      .get('/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar')
+      .query({
+        token: TEST_TOKEN,
+        nomeTabela: 'FK_LOJA_SYNC_TESTE',
+        idUltimaAtualizacaoMatriz: 0,
+        idLoja: 1,
+        filtroFilial: 'ID_LOJA',
+      });
+
+    expect(pull.status).toBe(200);
+    expect(pull.body).toEqual([]); // nenhum registro tem ID_LOJA=1 (coluna acabou de nascer, tudo NULL)
+
+    const { rows: depois } = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'fk_loja_sync_teste' AND column_name = 'id_loja'`,
+      [TEST_SCHEMA]
+    );
+    expect(depois).toHaveLength(1); // autocurada
   });
 });

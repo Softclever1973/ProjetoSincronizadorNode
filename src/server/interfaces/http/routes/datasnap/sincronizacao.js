@@ -27,6 +27,27 @@ function normalizarBlobs(row) {
   );
 }
 
+/**
+ * Garante que uma coluna usada em filtro dinâmico (filtroFilial/filtroFilialViaFK) existe na
+ * tabela antes de montar o WHERE. Sem isso, um cliente novo cujo primeiro registro sincronizado
+ * não trouxe esse campo (NULL/ausente só naquela linha, então a coluna nunca nasceu na criação
+ * automática da tabela) trava o pull pra sempre — foi exatamente esse o sintoma em produção
+ * (NOTAS_FISCAIS.ID_LOJA). Cria a coluna em vez de simplesmente pular o filtro: pular trataria
+ * "coluna ausente" como "sem restrição de loja", vazando dados de outra loja pro cliente.
+ */
+async function garantirColunaFiltro(db, nomeTabela, schemaName, coluna, colunasAtuais) {
+  if (!coluna || colunasAtuais.has(coluna)) return colunasAtuais;
+  const tipo = /^(id_.+|srv_id)$/i.test(coluna) ? 'NUMERIC' : 'TIMESTAMP';
+  try {
+    await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${coluna} ${tipo}`);
+  } catch (e) {
+    if (isMissingTableError(e)) return colunasAtuais;
+    throw e;
+  }
+  colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+  return getColunasServidor(db, nomeTabela, schemaName);
+}
+
 async function registrarFilial(db, idLoja, nomeFilial) {
   if (!idLoja) return;
   await execute(db,
@@ -116,7 +137,10 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
         }
       }
 
+      let colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
+
       if (filtroFilialEfetivo && idLoja) {
+        colunas = await garantirColunaFiltro(db, nomeTabela, req.schemaName, filtroFilialEfetivo, colunas);
         params.push(idLoja);
         whereExtra += ` AND ${filtroFilialEfetivo} = $${params.length}`;
       }
@@ -124,17 +148,15 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       // Tabelas filhas sem ID_LOJA próprio: filtra via FK para PEDIDOS
       // filtroFilialViaFK é a coluna FK local (ex: ID_PEDIDO), sempre apontando para PEDIDOS.ID_PEDIDO
       if (filtroFilialViaFK && idLoja) {
+        colunas = await garantirColunaFiltro(db, nomeTabela, req.schemaName, filtroFilialViaFK, colunas);
         params.push(idLoja);
         whereExtra += ` AND ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
       }
 
       // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.
       // Usa o cache de colunas para evitar quebrar quando o nome da coluna difere no banco.
-      if (colunaData) {
-        const colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
-        if (colunas.has(colunaData)) {
-          whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`;
-        }
+      if (colunaData && colunas.has(colunaData)) {
+        whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`;
       }
 
       const sql = `SELECT * FROM ${nomeTabela}
@@ -267,9 +289,13 @@ router.get('/StatusTabelas', auth, async (req, res) => {
           const params = [];
           let whereFilial = '';
           if (idLoja && filtroFilial) {
+            const colunas = await getColunasServidor(db, tabela, req.schemaName);
+            await garantirColunaFiltro(db, tabela, req.schemaName, filtroFilial, colunas);
             params.push(idLoja);
             whereFilial = ` WHERE ${filtroFilial} = $${params.length}`;
           } else if (idLoja && filtroFilialViaFK) {
+            const colunas = await getColunasServidor(db, tabela, req.schemaName);
+            await garantirColunaFiltro(db, tabela, req.schemaName, filtroFilialViaFK, colunas);
             params.push(idLoja);
             whereFilial = ` WHERE ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
           }
