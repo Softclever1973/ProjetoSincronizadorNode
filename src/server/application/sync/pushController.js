@@ -1,6 +1,6 @@
 const { query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
 const { colunasCache, getColunasServidor, getColunasComputadas, seqsSrvIdInicializadas, constraintsUqAdicionadas } = require('#server/infrastructure/cache/tenantCache.js');
-const { criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { criarTabelaSeNecessario, COLUNAS_IGNORADAS_SERVIDOR } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('#server/domain/schema.js');
 const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 
@@ -125,12 +125,29 @@ async function garantirColunasServidor(db, nomeTabela, schemaName, registro, pks
     await criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadasDeRegistro(registro), pks, temSrvId);
     colunasCache.invalidate(schemaName, nomeTabela);
     colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
-  } else if (temSrvId && !colunasServidor.has('SRV_ID')) {
+    return { colunasServidor, computadas, tabelaJaExistia };
+  }
+
+  if (temSrvId && !colunasServidor.has('SRV_ID')) {
     // Migração: tabela existe (criada antes do srvId ser ativado) sem coluna SRV_ID.
     // Adiciona como coluna comum nullable — não destrói a PK original da tabela.
     await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS srv_id INTEGER`);
     // Só colunas e pk — computadas não muda numa migração de coluna comum (mesmo
     // comportamento de antes da TenantCache, preservado de propósito).
+    colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+    colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
+  }
+
+  // Colunas que o registro atual tem mas a tabela não — acontece quando a tabela nasceu a
+  // partir de um primeiro registro que não trazia esse campo (ex.: ausente/NULL no Firebird
+  // só naquela linha). Sem isso, a coluna nunca aparece, mesmo que registros futuros a tragam
+  // — foi o caso real de NOTAS_FISCAIS.ID_LOJA após um reset de tenant.
+  const colunasFaltantes = colunasTipadasDeRegistro(registro)
+    .filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome) && !colunasServidor.has(nome));
+  if (colunasFaltantes.length > 0) {
+    for (const { nome, tipoPg } of colunasFaltantes) {
+      await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${nome} ${tipoPg}`);
+    }
     colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
     colunasServidor = await getColunasServidor(db, nomeTabela, schemaName);
   }

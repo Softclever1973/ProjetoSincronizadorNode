@@ -248,13 +248,26 @@ const TABELAS = [
     pk: 'ID_NOTA_FISCAL',
     grupo: GRUPOS.FINANCEIRO,
     filtroFilial: 'ID_LOJA',
-    generator: 'GEN_NOTAS_FISCAIS',  // confirmar nome no Firebird
+    generator: 'NOTA_FISCAL',
     colunaData: 'DATA_EMISSAO',
-    defaultAtivo: false,
+    defaultAtivo: true,
     srvId: true,
     fks: [
       { coluna: 'ID_CLIENTE', tabela: 'CLIENTES', traduzirSrvId: true, pkRef: 'ID_CLIENTE' },
-      { coluna: 'ID_EMPRESA', tabela: 'EMPRESAS', traduzirSrvId: true, pkRef: 'ID_EMPRESA' },
+      { coluna: 'ID_EMPRESA', tabela: 'EMPRESAS' },
+    ],
+  }),
+  tabela({
+    nome: 'NOTAS_FISCAIS_ITENS',
+    pk: 'ID_NOTA_FISCAL_ITEM',
+    grupo: GRUPOS.FINANCEIRO,
+    filtroFilialViaFK: 'ID_NOTA_FISCAL',
+    generator: 'NOTA_FISCAL_ITEM',
+    defaultAtivo: true,
+    srvId: true,
+    fks: [
+      { coluna: 'ID_NOTA_FISCAL', tabela: 'NOTAS_FISCAIS' },
+      { coluna: 'ID_PRODUTO', tabela: 'PRODUTOS', traduzirSrvId: true, pkRef: 'ID_PRODUTO' },
     ],
   }),
 
