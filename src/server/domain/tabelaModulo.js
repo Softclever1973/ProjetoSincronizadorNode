@@ -10,6 +10,7 @@ const TABELA_MODULO = Object.freeze({
   FORNECEDORES: 'fornecedores',
   MOVIMENTACOES: 'produtos_movimentacao',
   NOTAS_FISCAIS: 'notas_fiscais',
+  NOTAS_FISCAIS_ITENS: 'notas_fiscais',
 });
 
 module.exports = { TABELA_MODULO };
