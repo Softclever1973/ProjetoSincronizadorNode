@@ -116,6 +116,10 @@ const TABELAS = [
   tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'EMPRESAS', pk: 'ID_EMPRESA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  // Sem PK/índice único declarado no Firebird; TIPO_OPERACAO (código curto, ex. "DV") é a chave
+  // usada na prática pela aplicação Delphi e por NOTAS_FISCAIS.TIPO_OPERACAO — confirmado sem
+  // duplicatas em produção antes de usar como pk aqui.
+  tabela({ nome: 'TIPOS_DE_OPERACOES', pk: 'TIPO_OPERACAO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
 
   // ── Cadastros base ──────────────────────────────────────────────────────────
   tabela({ nome: 'CENTROS_DE_CUSTO', pk: 'CODIGO_CENTRO_DE_CUSTO', grupo: GRUPOS.CADASTROS }),
