@@ -183,12 +183,12 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
     expect(Number(res.body.srvId)).toBeGreaterThan(500); // não colide com o SRV_ID pré-existente
   });
 
-  test('CODIGO duplicado é bloqueado quando sync_config.codigo_interno_unico = S', async () => {
+  test('CODIGO duplicado é bloqueado quando parametros.codigo_interno_unico = S', async () => {
     // db-init.js não semeia 'codigo_interno_unico' por padrão (só chega via sync do Firebird)
     // — schema recém-criado não tem essa linha, então UPDATE não bastaria; precisa de upsert.
     await pool.query(`
-      INSERT INTO ${TEST_SCHEMA}.sync_config (chave, valor) VALUES ('codigo_interno_unico', 'S')
-      ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor
+      INSERT INTO ${TEST_SCHEMA}.parametros (chave, parametro) VALUES ('codigo_interno_unico', 'S')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
 
     await request(app)
@@ -205,10 +205,10 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
     expect(res.body.erro).toMatch(/já está em uso por outro produto/);
   });
 
-  test('CODIGO duplicado é permitido quando sync_config.codigo_interno_unico != S', async () => {
+  test('CODIGO duplicado é permitido quando parametros.codigo_interno_unico != S', async () => {
     await pool.query(`
-      INSERT INTO ${TEST_SCHEMA}.sync_config (chave, valor) VALUES ('codigo_interno_unico', 'N')
-      ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor
+      INSERT INTO ${TEST_SCHEMA}.parametros (chave, parametro) VALUES ('codigo_interno_unico', 'N')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
 
     await request(app)

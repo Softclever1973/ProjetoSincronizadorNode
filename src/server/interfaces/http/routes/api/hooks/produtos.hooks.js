@@ -3,16 +3,16 @@
  */
 const { query } = require('#server/infrastructure/db.js');
 
-// Unicidade de CODIGO quando parâmetro 122 = 'S' no Firebird da filial (sync_config.codigo_interno_unico)
+// Unicidade de CODIGO quando parâmetro 122 = 'S' no Firebird da filial (parametros.codigo_interno_unico)
 async function validarUnicidade(db, { registro }) {
   const codigoKey = Object.keys(registro).find(k => k.toUpperCase() === 'CODIGO');
   const codigoVal = codigoKey ? String(registro[codigoKey] ?? '').trim() : '';
   if (!codigoVal) return;
 
   const [cfg] = await query(db,
-    `SELECT valor FROM sync_config WHERE chave = 'codigo_interno_unico'`
+    `SELECT parametro FROM parametros WHERE chave = 'codigo_interno_unico'`
   ).catch(() => [null]);
-  if (cfg?.VALOR !== 'S') return;
+  if (cfg?.PARAMETRO !== 'S') return;
 
   const srvIdKey = Object.keys(registro).find(k => k.toUpperCase() === 'SRV_ID');
   const srvIdAtual = srvIdKey !== undefined ? registro[srvIdKey] : null;

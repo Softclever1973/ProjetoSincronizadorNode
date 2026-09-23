@@ -202,7 +202,7 @@ Na primeira inicialização, o servidor cria automaticamente (idempotente — se
 | `permissoes_plano` | Nível (`--`/`r-`/`rw`) de cada módulo por plano — ver [Autenticação e Permissões](#autenticação-e-permissões-api-web) |
 | `permissoes_role` | Nível de cada módulo por role (`dono`/`gerente`/`vendedor`) |
 
-Cada schema de empresa provisionado via `create-empresa.js` recebe também `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map` e as funções de trigger `fn_seq_atualizacao()`/`fn_registrar_delecao()`.
+Cada schema de empresa provisionado via `create-empresa.js` recebe também `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map` e as funções de trigger `fn_seq_atualizacao()`/`fn_registrar_delecao()`.
 
 ### 4. Criar a primeira empresa
 
@@ -435,7 +435,7 @@ Módulo `faturamento` (leitura):
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `sync_config` (módulo `configuracoes`) |
+| GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `parametros` (era `sync_config`, módulo `configuracoes`) |
 | GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`) |
 | GET | `/api/:schema/filiais` | Filiais registradas em `sync_filiais` |
 | GET | `/api/:schema/plano` | Plano atual + `modulos` (permissão efetiva de cada módulo para o usuário) |

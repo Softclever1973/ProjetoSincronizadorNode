@@ -70,7 +70,7 @@ node scripts/create-empresa.js --schema=empresa_jb --token=TOKEN_NOVO [--nome="J
 
 - Schema isolado com o nome informado
 - Sequências: `seq_atualizacao_matriz`, `seq_srv_id`
-- Tabelas: `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map`
+- Tabelas: `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map`
 - Funções de trigger: `fn_seq_atualizacao()`, `fn_registrar_delecao()`
 - Registro em `public.sync_tenants`
 
@@ -147,7 +147,7 @@ node scripts/reset-empresa.js --schema=empresa_jb ^
 | Parte | Ação |
 |-------|------|
 | PostgreSQL — tabelas de dados | `DROP TABLE ... CASCADE` para todas as tabelas fora da infraestrutura (PRODUTOS, CLIENTES, etc.) |
-| PostgreSQL — infraestrutura | `TRUNCATE` de `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map` |
+| PostgreSQL — infraestrutura | `TRUNCATE` de `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map` |
 | PostgreSQL — sequências | `seq_atualizacao_matriz` e `seq_srv_id` reiniciadas em 1 |
 | Firebird | `DELETE` de `SYNC_ALTERACOES_PENDENTES`, `SYNC_VERSOES_SERVIDOR`, `SYNC_ERROS` |
 | Firebird | `ULTIMOS_REGISTROS_MATRIZ` cursores zerados |

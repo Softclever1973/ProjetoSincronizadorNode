@@ -4,7 +4,7 @@
  * ninguém mudou local; este PDV grava de volta via setParam quando outro PDV mudou primeiro.
  * Parâmetros não-globais seguem o comportamento legado: envio unidirecional, sem reconciliação.
  */
-const { getParam, setParam } = require('#client/infrastructure/firebird/db.js');
+const { setParam, getParamDetalhado } = require('#client/infrastructure/firebird/db.js');
 const { atualizarParametros, buscarParametros } = require('#client/http.js');
 const { paramsSyncMap } = require('#client/infrastructure/config/paramsSyncMap.js');
 const { lerEstado, salvarEstado, decidirAcao } = require('#client/parametrosGlobaisState.js');
@@ -25,11 +25,15 @@ async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
   const agoraIso = new Date().toISOString();
 
   for (const { fbId, chave, global } of paramsSyncMap) {
-    const fbVal = (await getParam(db, fbId).catch(() => '')) || null;
+    // getParamDetalhado (não getParam) — pega NOME_DA_TABELA/DESCRICAO/OBSERVACOES da
+    // mesma linha do Firebird, pra levar pro Postgres.parametros junto do valor.
+    const detalhado = await getParamDetalhado(db, fbId).catch(() => ({ valor: '', nomeDaTabela: null, descricao: null, observacoes: null }));
+    const fbVal = detalhado.valor || null;
+    const metadados = { id_parametro: fbId, nome_da_tabela: detalhado.nomeDaTabela, descricao: detalhado.descricao, observacoes: detalhado.observacoes };
 
     if (!global) {
       // Comportamento legado: envio unidirecional por PDV, sem reconciliação.
-      if (fbVal) pushPayload[chave] = fbVal;
+      if (fbVal) pushPayload[chave] = { valor: fbVal, ...metadados };
       continue;
     }
 
@@ -38,7 +42,7 @@ async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
     const { acao, valor } = decidirAcao({ local: fbVal, conhecido, servidor });
 
     if (acao === 'push') {
-      pushPayload[chave] = valor;
+      pushPayload[chave] = { valor, ...metadados };
       novoEstado[chave] = { valor, origem: 'push', atualizadoEm: agoraIso };
     } else if (acao === 'pull') {
       pullList.push({ fbId, chave, valor });
@@ -67,7 +71,8 @@ async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
     try {
       await atualizarParametros(baseURI, pushPayload);
       const agora = new Date();
-      for (const [chave, valor] of Object.entries(pushPayload)) {
+      for (const [chave, dado] of Object.entries(pushPayload)) {
+        const valor = dado.valor; // pushPayload[chave] agora é { valor, id_parametro, ... }, não string crua
         const anterior = contextoSync.parametrosSincronizados[chave];
         if (anterior?.valor !== valor) {
           log(`[Parametros] '${chave}' sincronizado com o servidor: ${valor}`);

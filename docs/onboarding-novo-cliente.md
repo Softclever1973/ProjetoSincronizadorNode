@@ -40,7 +40,7 @@ node scripts/create-empresa.js \
 
 **O que esse script faz:**
 - Cria o schema PostgreSQL `empresa_kr`
-- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config` e as funções `fn_seq_atualizacao()` e `fn_registrar_delecao()`
+- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`) e as funções `fn_seq_atualizacao()` e `fn_registrar_delecao()`
 - Registra o par `(token, schema_name)` em `public.sync_tenants`
 - O servidor detecta o novo token automaticamente — **não precisa reiniciar**
 

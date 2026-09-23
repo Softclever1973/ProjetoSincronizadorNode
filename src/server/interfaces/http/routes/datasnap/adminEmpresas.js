@@ -248,7 +248,7 @@ router.put('/empresas/:schema/plano', async (req, res) => {
 // Requer: body.confirmar === schema E body.senhaReset === RESET_SECRET.
 
 const TABELAS_INFRA = new Set([
-  'filiais_bloqueadas', 'registros_deletados', 'sync_filiais', 'sync_config', 'srv_id_map',
+  'filiais_bloqueadas', 'registros_deletados', 'sync_filiais', 'parametros', 'srv_id_map',
 ]);
 
 router.post('/empresas/:schema/reset', async (req, res) => {

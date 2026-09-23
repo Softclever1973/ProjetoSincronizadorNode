@@ -50,7 +50,7 @@ const TABELAS_INFRA = new Set([
   'filiais_bloqueadas',
   'registros_deletados',
   'sync_filiais',
-  'sync_config',
+  'parametros',
   'srv_id_map',
 ]);
 

@@ -1,5 +1,6 @@
-// Mapeia parâmetros do Firebird (PARAMETROS.ID_PARAMETRO) pras chaves de sync_config
-// no servidor — fonte única usada tanto pelo ciclo de sync (index.js) quanto pela tela
+// Mapeia parâmetros do Firebird (PARAMETROS.ID_PARAMETRO) pras chaves da tabela
+// parametros (era sync_config) no servidor — fonte única usada tanto pelo ciclo de
+// sync (index.js) quanto pela tela
 // de Parâmetros (webui.js).
 // `global: true` marca parâmetros que devem convergir pro mesmo valor em todos os PDVs:
 // o servidor grava de volta no Firebird (setParam) quando outro PDV mudou primeiro.

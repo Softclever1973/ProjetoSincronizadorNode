@@ -101,4 +101,28 @@ async function setParam(db, idParametro, valor) {
   );
 }
 
-module.exports = { getConnection, query, execute, closeConnection, getParam, setParam, tabelaExiste, getTabelasExistentes, opcoes };
+/**
+ * Lê a linha inteira de PARAMETROS pelo ID — usado por syncParametrosGlobais.js pra levar
+ * pro Postgres.parametros também NOME_DA_TABELA/DESCRICAO/OBSERVACOES, não só o valor
+ * (getParam continua só devolvendo o valor, pros ~10 outros usos que esperam string crua).
+ * As demais colunas de PARAMETROS (COMPONENTE, NOME_DO_RELATORIO, ALTURA, ...) são
+ * posicionamento/estilo de tela do Delphi — fora de escopo aqui.
+ */
+async function getParamDetalhado(db, idParametro) {
+  const rows = await query(
+    db,
+    'SELECT PARAMETRO, NOME_DA_TABELA, DESCRICAO, OBSERVACOES FROM PARAMETROS WHERE ID_PARAMETRO = ?',
+    [idParametro]
+  );
+  if (rows.length === 0) return { valor: '', nomeDaTabela: null, descricao: null, observacoes: null };
+  const r = rows[0];
+  const T = v => (typeof v === 'string' ? v.trim() : v) || null;
+  return {
+    valor: T(r.PARAMETRO) || '',
+    nomeDaTabela: T(r.NOME_DA_TABELA),
+    descricao: T(r.DESCRICAO),
+    observacoes: T(r.OBSERVACOES),
+  };
+}
+
+module.exports = { getConnection, query, execute, closeConnection, getParam, setParam, getParamDetalhado, tabelaExiste, getTabelasExistentes, opcoes };

@@ -127,8 +127,8 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       let filtroFilialEfetivo = filtroFilial;
       if (nomeTabela === 'CLIENTES') {
         try {
-          const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
-          filtroFilialEfetivo = cfg?.VALOR ?? null;
+          const [cfg] = await query(db, `SELECT parametro FROM parametros WHERE chave = $1`, ['filtro_filial_clientes']);
+          filtroFilialEfetivo = cfg?.PARAMETRO ?? null;
           if (filtroFilialEfetivo && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilialEfetivo)) {
             filtroFilialEfetivo = null;
           }
@@ -281,8 +281,8 @@ router.get('/StatusTabelas', auth, async (req, res) => {
           const filtroFilialViaFK = filtrosPorTabela.get(tabela)?.filtroFilialViaFK ?? null;
           if (tabela === 'CLIENTES') {
             try {
-              const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
-              filtroFilial = cfg?.VALOR && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.VALOR) ? cfg.VALOR : null;
+              const [cfg] = await query(db, `SELECT parametro FROM parametros WHERE chave = $1`, ['filtro_filial_clientes']);
+              filtroFilial = cfg?.PARAMETRO && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.PARAMETRO) ? cfg.PARAMETRO : null;
             } catch { filtroFilial = null; }
           }
 
@@ -687,10 +687,10 @@ router.get('/BuscarParametros', auth, async (req, res) => {
     const chaves = [...CHAVES_GLOBAIS];
     const placeholders = chaves.map((_, i) => `$${i + 1}`).join(', ');
     const parametros = await withTenantConnection(req.schemaName, async (db) => {
-      const rows = await query(db, `SELECT chave, valor FROM sync_config WHERE chave IN (${placeholders})`, chaves);
-      // valor IS NULL vira chave ausente no JSON (não `null`) — o cliente usa
+      const rows = await query(db, `SELECT chave, parametro FROM parametros WHERE chave IN (${placeholders})`, chaves);
+      // parametro IS NULL vira chave ausente no JSON (não `null`) — o cliente usa
       // "servidor === undefined" pra saber que o servidor ainda não tem valor.
-      return Object.fromEntries(rows.filter(r => r.VALOR !== null).map(r => [r.CHAVE, r.VALOR]));
+      return Object.fromEntries(rows.filter(r => r.PARAMETRO !== null).map(r => [r.CHAVE, r.PARAMETRO]));
     });
     res.json({ parametros });
   } catch (e) {
@@ -704,16 +704,37 @@ router.post('/AtualizarParametros', auth, async (req, res) => {
   const schema = req.schemaName;
   try {
     await withTenantConnection(schema, async (db) => {
-      for (const [chave, valor] of Object.entries(parametros)) {
+      for (const [chave, dado] of Object.entries(parametros)) {
         if (!CHAVES_ACEITAS.has(chave)) continue;
-        const valorStr = String(valor);
-        const rows = await query(db, 'SELECT valor FROM sync_config WHERE chave = $1', [chave]);
-        const dadosAntes = rows.length > 0 ? { chave, valor: rows[0].VALOR } : null;
-        if (dadosAntes?.valor === valorStr) continue;
+        // Cliente antigo manda só o valor (string/número); cliente novo manda um objeto
+        // com os campos descritivos também (id_parametro, nome_da_tabela, descricao,
+        // observacoes), lidos da linha inteira do PARAMETROS no Firebird — não só a coluna
+        // PARAMETRO. Mantém compatível com client.exe ainda não recompilado (deploys
+        // separados entre cliente e servidor).
+        const ehObjeto     = dado && typeof dado === 'object';
+        const valorStr     = String(ehObjeto ? dado.valor : dado);
+        const idParametro  = ehObjeto ? (dado.id_parametro ?? null) : null;
+        const nomeDaTabela = ehObjeto ? (dado.nome_da_tabela ?? null) : null;
+        const descricao    = ehObjeto ? (dado.descricao ?? null) : null;
+        const observacoes  = ehObjeto ? (dado.observacoes ?? null) : null;
+
+        const rows = await query(db, 'SELECT parametro FROM parametros WHERE chave = $1', [chave]);
+        const dadosAntes = rows.length > 0 ? { chave, valor: rows[0].PARAMETRO } : null;
+        // Cliente antigo (sem objeto): mantém o atalho de pular write sem mudança real.
+        // Cliente novo: sempre grava, pra descrição/observações no Firebird não ficarem
+        // desatualizadas no Postgres só porque o valor não mudou.
+        if (!ehObjeto && dadosAntes?.valor === valorStr) continue;
+
         await execute(db,
-          `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
-           ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
-          [chave, valorStr]
+          `INSERT INTO parametros (chave, id_parametro, nome_da_tabela, descricao, parametro, observacoes)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (chave) DO UPDATE SET
+             parametro      = EXCLUDED.parametro,
+             id_parametro   = COALESCE(EXCLUDED.id_parametro, parametros.id_parametro),
+             nome_da_tabela = COALESCE(EXCLUDED.nome_da_tabela, parametros.nome_da_tabela),
+             descricao      = COALESCE(EXCLUDED.descricao, parametros.descricao),
+             observacoes    = COALESCE(EXCLUDED.observacoes, parametros.observacoes)`,
+          [chave, idParametro, nomeDaTabela, descricao, valorStr, observacoes]
         );
         registrarAuditLog(req, schema, 'SYNC_CONFIG', dadosAntes ? 'UPDATE' : 'INSERT', chave,
           { chave, valor: valorStr, _fonte: 'sync_client' }, dadosAntes);

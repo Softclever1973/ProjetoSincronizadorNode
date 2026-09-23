@@ -219,21 +219,79 @@ function ddlTenant(schema) {
        RETURN OLD;
      END;
      $$ LANGUAGE plpgsql`,
-    `CREATE TABLE IF NOT EXISTS ${schema}.sync_config (
-  chave TEXT PRIMARY KEY,
-  valor TEXT
+    // ── parametros (era sync_config) ─────────────────────────────────────────────
+    // 2026-09: sync_config virou parametros, espelhando as colunas "de negócio" da
+    // PARAMETROS real do Firebird (ID_PARAMETRO, NOME_DA_TABELA, DESCRICAO, PARAMETRO,
+    // OBSERVACOES — as demais colunas da tabela do Firebird são posicionamento/estilo de
+    // tela do Delphi, fora de escopo aqui) + srv_id (chave primária nova, só Postgres) e
+    // chave (mantida do sync_config antigo — é o que o resto do código já usa pra achar a
+    // linha certa; nem todo parâmetro tem ID_PARAMETRO, ex. filtro_filial_clientes é
+    // só-web, sem origem no Firebird, por isso id_parametro é opcional).
+    //
+    // Migração idempotente: tenant novo já nasce com a estrutura final (bloco seguinte é
+    // no-op pra ele); tenant existente com sync_config antigo (chave TEXT PRIMARY KEY,
+    // valor TEXT) é migrado passo a passo, preservando os dados.
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'sync_config')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'parametros') THEN
+         EXECUTE 'ALTER TABLE ${schema}.sync_config RENAME TO parametros';
+       END IF;
+     END $$`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.parametros (
+  srv_id         SERIAL PRIMARY KEY,
+  id_parametro   INTEGER,
+  chave          TEXT NOT NULL UNIQUE,
+  nome_da_tabela TEXT,
+  descricao      TEXT,
+  parametro      TEXT,
+  observacoes    TEXT
 )`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('filtro_filial_clientes', NULL)
+    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS srv_id SERIAL`,
+    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS id_parametro INTEGER`,
+    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS nome_da_tabela TEXT`,
+    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS descricao TEXT`,
+    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS observacoes TEXT`,
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'parametros' AND column_name = 'valor')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'parametros' AND column_name = 'parametro') THEN
+         EXECUTE 'ALTER TABLE ${schema}.parametros RENAME COLUMN valor TO parametro';
+       END IF;
+     END $$`,
+    // sync_config antigo tinha PK em chave (constraint auto-nomeada sync_config_pkey,
+    // sobrevive ao RENAME TABLE — Postgres não renomeia constraints sozinho); troca pra
+    // srv_id como PK e chave vira só UNIQUE. EXCEPTION WHEN OTHERS cobre tenant novo, que
+    // já nasce com essas constraints (nomes colidem com o que o CREATE TABLE já criou).
+    `ALTER TABLE ${schema}.parametros DROP CONSTRAINT IF EXISTS sync_config_pkey`,
+    `DO $$ BEGIN
+       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_pkey PRIMARY KEY (srv_id);
+     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+    `DO $$ BEGIN
+       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_chave_key UNIQUE (chave);
+     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+    `DO $$ BEGIN
+       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_id_parametro_key UNIQUE (id_parametro);
+     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+    // Backfill do id_parametro pras chaves que já sincronizam com o Firebird hoje — mesmo
+    // mapa de src/client/infrastructure/config/paramsSyncMap.js (mantenha em sincronia
+    // manual, igual ao resto desse arquivo já faz com CHAVES_ACEITAS/CHAVES_GLOBAIS).
+    `UPDATE ${schema}.parametros SET id_parametro = 67    WHERE chave = 'utilizar_codigo_interno'    AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 122   WHERE chave = 'codigo_interno_unico'       AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 71    WHERE chave = 'venda_saldo_negativo'       AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 45051 WHERE chave = 'modalidade_frete'           AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 91    WHERE chave = 'forma_preenchimento_pedido' AND id_parametro IS NULL`,
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('filtro_filial_clientes', NULL, NULL)
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('venda_saldo_negativo', 'N')
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('venda_saldo_negativo', 71, 'N')
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('modalidade_frete', NULL)
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('modalidade_frete', 45051, NULL)
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('forma_preenchimento_pedido', 'Pela rotina específica')
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('forma_preenchimento_pedido', 91, 'Pela rotina específica')
  ON CONFLICT (chave) DO NOTHING`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (

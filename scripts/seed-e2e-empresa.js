@@ -26,7 +26,7 @@ const SENHA    = 'senha123456';
 const ID_LOJA  = 1;
 
 // SALDO_ATUAL baixo de propósito — usado pelo teste de bloqueio de saldo negativo
-// (venda_saldo_negativo = 'N' é o default de sync_config, ver src/db-init.js).
+// (venda_saldo_negativo = 'N' é o default de parametros, ver src/db-init.js).
 const PRODUTO_SALDO_BAIXO = { ID_PRODUTO: 2, SRV_ID: 2, CODIGO: 'PROD002', DESCRICAO: 'Produto Saldo Baixo E2E', UNIDADE: 'UN', PRECO_VENDA: 5, SALDO_ATUAL: 2 };
 const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 1, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
 
@@ -153,7 +153,7 @@ async function upsertProduto(db, p) {
 }
 
 async function seed() {
-  // 1) Schema + infraestrutura padrão (sync_config, sync_filiais, srv_id_map, seq_atualizacao_matriz...)
+  // 1) Schema + infraestrutura padrão (parametros, sync_filiais, srv_id_map, seq_atualizacao_matriz...)
   await initializeTenantSchema(SCHEMA);
 
   // 2) Registra o schema em public.sync_tenants — usuarios_empresas.schema_name tem FK pra cá.
@@ -204,7 +204,7 @@ async function seed() {
 
     // Garante que venda_saldo_negativo comece em 'N' (bloqueia saldo negativo) — pode ter
     // sido deixado em 'S' por uma rodada anterior do teste de bloqueio de saldo.
-    await execute(db, `UPDATE sync_config SET valor = 'N' WHERE chave = 'venda_saldo_negativo'`);
+    await execute(db, `UPDATE parametros SET parametro = 'N' WHERE chave = 'venda_saldo_negativo'`);
   });
 
   // 6) Usuário de login (role gerente, loja 1 — sem select de loja no wizard, sem exigir vendedor)

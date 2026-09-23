@@ -171,9 +171,12 @@ function atualizarRegime(baseURI, regime) {
 }
 
 /**
- * Envia parâmetros lidos do Firebird ao servidor para armazenamento em sync_config.
+ * Envia parâmetros lidos do Firebird ao servidor para armazenamento em `parametros`
+ * (era sync_config). O servidor aceita tanto o valor cru (compat. com client.exe antigo,
+ * ainda não recompilado) quanto um objeto rico — ex: { codigo_interno_unico: { valor: 'S',
+ * id_parametro: 122, nome_da_tabela: 'PRODUTOS', descricao: '...', observacoes: '...' } }.
  * @param {string} baseURI
- * @param {Record<string, string>} parametros — ex: { codigo_interno_unico: 'S' }
+ * @param {Record<string, string|object>} parametros
  */
 function atualizarParametros(baseURI, parametros) {
   return post(
