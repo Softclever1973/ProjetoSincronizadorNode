@@ -617,3 +617,34 @@ Aplicado nas rotas: `pedidos.js`, `movimentacaoCaixas.js`, `distribuicao.js`.
 | Distribuição | Sem rastreamento por item — somente cabeçalho e status |
 
 Para roadmap de evolução deste sistema, consulte o plano KR de Oliveira.
+
+---
+
+## 16. Como Adicionar um Novo Parâmetro Sincronizado (Firebird → Postgres)
+
+Parâmetros são valores individuais da tabela `PARAMETROS` do Firebird (ex.: `venda_saldo_negativo`, `modalidade_frete`) espelhados na tabela `parametros` do schema do tenant no Postgres — diferente de uma tabela inteira (§10). O fluxo é: cliente lê `PARAMETROS.ID_PARAMETRO` no Firebird a cada ciclo → `POST /AtualizarParametros` → servidor grava em `parametros` (coluna `chave`). Parâmetros `global: true` também voltam pro Firebird das outras filiais via `GET /BuscarParametros` (`setParam`), pra convergir todos os PDVs pro mesmo valor.
+
+Não existe um único lugar central — são até 4 arquivos, mantidos em sincronia manual (cada um tem comentário apontando os outros):
+
+1. **`src/client/infrastructure/config/paramsSyncMap.js`** — fonte principal, lado cliente. Adicione:
+   ```js
+   { fbId: <ID_PARAMETRO no Firebird>, chave: '<nome_da_chave>', global: true|false },
+   ```
+   `global: true` = reconcilia pro mesmo valor em todos os PDVs do tenant; `global: false` = cada PDV mantém o seu (ex.: `modalidade_frete`).
+
+2. **`src/server/interfaces/http/routes/datasnap/sincronizacao.js`** — allowlist do servidor. Adicione a mesma `chave` em `CHAVES_ACEITAS` (senão `POST /AtualizarParametros` descarta silenciosamente). Se `global: true`, adicione também em `CHAVES_GLOBAIS`.
+
+3. **`src/server/infrastructure/db-init.js`** (dentro de `ddlTenant()`, bloco de criação da tabela `parametros`) — adicione um backfill:
+   ```sql
+   UPDATE ${schema}.parametros SET id_parametro = <fbId> WHERE chave = '<chave>' AND id_parametro IS NULL
+   ```
+   e, se quiser um valor padrão pra tenants que ainda não têm a linha:
+   ```sql
+   INSERT INTO ${schema}.parametros (chave, id_parametro, parametro) VALUES ('<chave>', <fbId>, '<valor padrão>') ON CONFLICT (chave) DO NOTHING
+   ```
+
+4. **`src/server/domain/validacao.js`** — só se o papel `dono` puder editar o parâmetro manualmente pela tela Configurações (`PUT /api/:schema/admin/sync-config`). Adicione a `chave` em `CHAVES_PERMITIDAS`. Não é necessário se o fluxo é só Firebird → web.
+
+Não é preciso mexer em `src/client/interfaces/webui/routes/parametros.routes.js` nem em `parametros.ejs` (tela local do cliente em `http://localhost:3001/parametros`) — a listagem lá é genérica (lê toda `PARAMETROS` do Firebird) e o status de sincronização por linha já usa `paramsSyncMap` automaticamente, incluindo o botão "⟳ Sincronizar com o servidor" que dispara o ciclo sob demanda.
+
+Depois de editar os 3-4 arquivos, reinicie o cliente (recarrega `paramsSyncMap.js`) — não precisa recriar a tabela `parametros`, o backfill do passo 3 roda a cada start do servidor via `migrarTodosSchemas()`.
