@@ -228,14 +228,28 @@ function ddlTenant(schema) {
     // linha certa; nem todo parâmetro tem ID_PARAMETRO, ex. filtro_filial_clientes é
     // só-web, sem origem no Firebird, por isso id_parametro é opcional).
     //
-    // Migração idempotente: tenant novo já nasce com a estrutura final (bloco seguinte é
-    // no-op pra ele); tenant existente com sync_config antigo (chave TEXT PRIMARY KEY,
-    // valor TEXT) é migrado passo a passo, preservando os dados.
+    // Migração idempotente: se sync_config existe e parametros ainda não, recria do zero
+    // com a ordem de coluna definitiva e copia os dados — não usa ALTER TABLE ADD COLUMN
+    // pra isso porque no Postgres toda coluna adicionada por ADD COLUMN vai pro final da
+    // tabela (não pra onde o comando aparece na lista), o que bagunçaria a ordem pedida
+    // (srv_id, id_parametro, chave, nome_da_tabela, descricao, parametro, observacoes) pra
+    // quem já tinha sync_config. Tenant novo cai direto no CREATE TABLE IF NOT EXISTS
+    // abaixo, que já nasce com a ordem certa.
     `DO $$
      BEGIN
        IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'sync_config')
           AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'parametros') THEN
-         EXECUTE 'ALTER TABLE ${schema}.sync_config RENAME TO parametros';
+         EXECUTE 'CREATE TABLE ${schema}.parametros (
+           srv_id         SERIAL PRIMARY KEY,
+           id_parametro   INTEGER,
+           chave          TEXT NOT NULL UNIQUE,
+           nome_da_tabela TEXT,
+           descricao      TEXT,
+           parametro      TEXT,
+           observacoes    TEXT
+         )';
+         EXECUTE 'INSERT INTO ${schema}.parametros (chave, parametro) SELECT chave, valor FROM ${schema}.sync_config';
+         EXECUTE 'DROP TABLE ${schema}.sync_config';
        END IF;
      END $$`,
     `CREATE TABLE IF NOT EXISTS ${schema}.parametros (
@@ -247,29 +261,6 @@ function ddlTenant(schema) {
   parametro      TEXT,
   observacoes    TEXT
 )`,
-    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS srv_id SERIAL`,
-    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS id_parametro INTEGER`,
-    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS nome_da_tabela TEXT`,
-    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS descricao TEXT`,
-    `ALTER TABLE ${schema}.parametros ADD COLUMN IF NOT EXISTS observacoes TEXT`,
-    `DO $$
-     BEGIN
-       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'parametros' AND column_name = 'valor')
-          AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = '${schema}' AND table_name = 'parametros' AND column_name = 'parametro') THEN
-         EXECUTE 'ALTER TABLE ${schema}.parametros RENAME COLUMN valor TO parametro';
-       END IF;
-     END $$`,
-    // sync_config antigo tinha PK em chave (constraint auto-nomeada sync_config_pkey,
-    // sobrevive ao RENAME TABLE — Postgres não renomeia constraints sozinho); troca pra
-    // srv_id como PK e chave vira só UNIQUE. EXCEPTION WHEN OTHERS cobre tenant novo, que
-    // já nasce com essas constraints (nomes colidem com o que o CREATE TABLE já criou).
-    `ALTER TABLE ${schema}.parametros DROP CONSTRAINT IF EXISTS sync_config_pkey`,
-    `DO $$ BEGIN
-       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_pkey PRIMARY KEY (srv_id);
-     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
-    `DO $$ BEGIN
-       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_chave_key UNIQUE (chave);
-     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
     `DO $$ BEGIN
        ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_id_parametro_key UNIQUE (id_parametro);
      EXCEPTION WHEN OTHERS THEN NULL; END $$`,

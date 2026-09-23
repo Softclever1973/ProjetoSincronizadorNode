@@ -2,6 +2,12 @@ const express = require('express');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { normalizarBlobs } = require('#client/infrastructure/firebird/db-utils.js');
 const { paramsSyncMap } = require('#client/infrastructure/config/paramsSyncMap.js');
+const { syncParametrosGlobais } = require('#client/application/syncParametrosGlobais.js');
+
+function logComHora(msg) {
+  const hora = new Date().toLocaleTimeString('pt-BR');
+  console.log(`[${hora}] ${msg}`);
+}
 
 function criarParametrosRouter(contexto) {
   const router = express.Router();
@@ -30,6 +36,31 @@ function criarParametrosRouter(contexto) {
       res.render('parametros', { rows: normalizado, error: null, sincronizados });
     } catch (e) {
       res.render('parametros', { rows: [], error: `Erro ao ler parâmetros: ${e.message}`, sincronizados: {} });
+    } finally {
+      await closeConnection(db);
+    }
+  });
+
+  // Dispara syncParametrosGlobais sob demanda (mesma função do ciclo automático de 30s em
+  // index.js) — útil pra não esperar o próximo ciclo depois de mudar um parâmetro no
+  // Firebird e querer ver o efeito no Postgres na hora.
+  router.post('/parametros/sincronizar', async (_req, res) => {
+    if (!contexto.baseURI) {
+      return res.status(503).json({ ok: false, message: 'Ainda não conectado ao servidor — aguarde o primeiro ciclo de sincronização.' });
+    }
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
+    try {
+      await syncParametrosGlobais(db, contexto.baseURI, contexto, logComHora);
+      const sincronizados = {};
+      for (const { fbId, chave } of paramsSyncMap) {
+        sincronizados[fbId] = { chave, ...(contexto.parametrosSincronizados?.[chave] || {}) };
+      }
+      res.json({ ok: true, sincronizados });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
     } finally {
       await closeConnection(db);
     }
