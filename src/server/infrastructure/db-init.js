@@ -272,6 +272,7 @@ function ddlTenant(schema) {
     `UPDATE ${schema}.parametros SET id_parametro = 71    WHERE chave = 'venda_saldo_negativo'       AND id_parametro IS NULL`,
     `UPDATE ${schema}.parametros SET id_parametro = 45051 WHERE chave = 'modalidade_frete'           AND id_parametro IS NULL`,
     `UPDATE ${schema}.parametros SET id_parametro = 91    WHERE chave = 'forma_preenchimento_pedido' AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 40000 WHERE chave = 'serie_nfe'                 AND id_parametro IS NULL`,
     `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
  VALUES ('filtro_filial_clientes', NULL, NULL)
  ON CONFLICT (chave) DO NOTHING`,
@@ -283,6 +284,9 @@ function ddlTenant(schema) {
  ON CONFLICT (chave) DO NOTHING`,
     `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
  VALUES ('forma_preenchimento_pedido', 91, 'Pela rotina específica')
+ ON CONFLICT (chave) DO NOTHING`,
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, nome_da_tabela, descricao, parametro)
+ VALUES ('serie_nfe', 40000, 'NF-E', 'Série do documento fiscal', '6')
  ON CONFLICT (chave) DO NOTHING`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (

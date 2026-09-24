@@ -11,6 +11,7 @@ const paramsSyncMap = [
   { fbId: 71,    chave: 'venda_saldo_negativo',        global: true  },
   { fbId: 45051, chave: 'modalidade_frete',            global: false },
   { fbId: 91,    chave: 'forma_preenchimento_pedido',  global: true  },
+  { fbId: 40000, chave: 'serie_nfe',                   global: true  },
 ];
 
 module.exports = { paramsSyncMap };
