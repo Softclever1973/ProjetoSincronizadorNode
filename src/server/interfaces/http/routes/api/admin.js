@@ -70,7 +70,7 @@ router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
     const rows = await withTenantConnection(schema, db =>
-      query(db, `SELECT chave, parametro FROM parametros WHERE chave IN ('venda_saldo_negativo', 'modalidade_frete', 'forma_preenchimento_pedido')`)
+      query(db, `SELECT chave, parametro FROM parametros WHERE chave IN ('venda_saldo_negativo', 'modalidade_frete', 'forma_preenchimento_pedido', 'serie_nfe')`)
     );
     res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.PARAMETRO])));
   } catch (e) {

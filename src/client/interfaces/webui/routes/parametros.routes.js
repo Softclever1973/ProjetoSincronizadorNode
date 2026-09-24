@@ -43,7 +43,9 @@ function criarParametrosRouter(contexto) {
 
   // Dispara syncParametrosGlobais sob demanda (mesma função do ciclo automático de 30s em
   // index.js) — útil pra não esperar o próximo ciclo depois de mudar um parâmetro no
-  // Firebird e querer ver o efeito no Postgres na hora.
+  // Firebird e querer ver o efeito no Postgres na hora. aplicarPull:false de propósito: esse
+  // botão é client→server only — nunca deve gravar no Firebird local o que vier do servidor
+  // (isso continua sendo só o ciclo automático). Ver comentário em syncParametrosGlobais.js.
   router.post('/parametros/sincronizar', async (_req, res) => {
     if (!contexto.baseURI) {
       return res.status(503).json({ ok: false, message: 'Ainda não conectado ao servidor — aguarde o primeiro ciclo de sincronização.' });
@@ -53,7 +55,7 @@ function criarParametrosRouter(contexto) {
       return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
     }
     try {
-      await syncParametrosGlobais(db, contexto.baseURI, contexto, logComHora);
+      await syncParametrosGlobais(db, contexto.baseURI, contexto, logComHora, { aplicarPull: false });
       const sincronizados = {};
       for (const { fbId, chave } of paramsSyncMap) {
         sincronizados[fbId] = { chave, ...(contexto.parametrosSincronizados?.[chave] || {}) };

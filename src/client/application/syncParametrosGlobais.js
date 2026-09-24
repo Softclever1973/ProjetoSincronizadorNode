@@ -9,7 +9,7 @@ const { atualizarParametros, buscarParametros } = require('#client/http.js');
 const { paramsSyncMap } = require('#client/infrastructure/config/paramsSyncMap.js');
 const { lerEstado, salvarEstado, decidirAcao } = require('#client/parametrosGlobaisState.js');
 
-async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
+async function syncParametrosGlobais(db, baseURI, contextoSync, log, { aplicarPull = true } = {}) {
   let parametrosServidor = {};
   try {
     const [{ parametros: resp } = {}] = await buscarParametros(baseURI);
@@ -44,10 +44,15 @@ async function syncParametrosGlobais(db, baseURI, contextoSync, log) {
     if (acao === 'push') {
       pushPayload[chave] = { valor, ...metadados };
       novoEstado[chave] = { valor, origem: 'push', atualizadoEm: agoraIso };
-    } else if (acao === 'pull') {
+    } else if (acao === 'pull' && aplicarPull) {
       pullList.push({ fbId, chave, valor });
       novoEstado[chave] = { valor, origem: 'pull', atualizadoEm: agoraIso };
     }
+    // acao === 'pull' com aplicarPull=false (botão manual "Sincronizar com o servidor" da
+    // WebUI): não grava nada no Firebird local nem mexe no estado — fica como está, e o
+    // próximo ciclo automático (aplicarPull=true, padrão) decide normalmente. O botão manual
+    // é intencionalmente client→server only; puxar do servidor pro Firebird continua sendo
+    // responsabilidade exclusiva do ciclo de 30s.
   }
 
   // Aplica pulls no Firebird ANTES de persistir o estado — se falhar,
