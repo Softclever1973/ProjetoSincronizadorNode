@@ -123,6 +123,74 @@ router.put('/permissoes/role', async (req, res) => {
   }
 });
 
+// ── GET /superadmin/empresas/:schema/permissoes ───────────────────────────────
+// 3ª camada de permissão: overrides específicos de UMA empresa, por role (schema, role,
+// modulo), que vencem plano×role pro módulo marcado. Ausência de linha = sem override
+// (herda plano×role normalmente pra aquele role). Frontend já tem a lista completa de
+// módulos via GET /permissoes — aqui só as linhas.
+
+router.get('/empresas/:schema/permissoes', async (req, res) => {
+  const { schema } = req.params;
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    const { rows } = await pool.query(
+      'SELECT role, modulo, nivel FROM public.permissoes_empresa WHERE schema_name = $1 ORDER BY role, modulo',
+      [schema]
+    );
+    res.json({ overrides: rows });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── PUT /superadmin/empresas/:schema/permissoes ───────────────────────────────
+// Upsert de um override (schema, role, modulo) -> nivel.
+
+router.put('/empresas/:schema/permissoes', async (req, res) => {
+  const { schema } = req.params;
+  const { role, modulo, nivel } = req.body;
+  if (!ROLES_VALIDOS_PERMISSOES.includes(role)) return res.status(400).json({ erro: `Role inválido: ${role}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+  if (!NIVEL_VALIDO.has(nivel)) return res.status(400).json({ erro: `Nível inválido: ${nivel}` });
+
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await pool.query(
+      `INSERT INTO public.permissoes_empresa (schema_name, role, modulo, nivel) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (schema_name, role, modulo) DO UPDATE SET nivel = EXCLUDED.nivel`,
+      [schema, role, modulo, nivel]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── DELETE /superadmin/empresas/:schema/permissoes/:role/:modulo ──────────────
+// Remove o override, revertendo o módulo pra herdar plano×role normalmente (pra esse role).
+
+router.delete('/empresas/:schema/permissoes/:role/:modulo', async (req, res) => {
+  const { schema, role, modulo } = req.params;
+  if (!ROLES_VALIDOS_PERMISSOES.includes(role)) return res.status(400).json({ erro: `Role inválido: ${role}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await pool.query(
+      'DELETE FROM public.permissoes_empresa WHERE schema_name = $1 AND role = $2 AND modulo = $3',
+      [schema, role, modulo]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
 // ── POST /superadmin/empresas ─────────────────────────────────────────────────
 // Cria empresa + conta do dono em uma única transação.
 

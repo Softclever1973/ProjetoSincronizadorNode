@@ -151,6 +151,35 @@ const DDL_CONTROLE = [
   )`,
   _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
   _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
+  // Migração (2026-09-28): override por empresa (cliente) — 3ª camada além de plano×role.
+  // Diferente de permissoes_plano/permissoes_role, aqui a AUSÊNCIA de linha significa
+  // "sem override, usa o efetivo de plano×role normalmente" (não fail-closed) — por isso
+  // não tem seed nenhum: uma empresa sem nenhuma linha aqui se comporta 100% como hoje.
+  // Quando existe uma linha pra (schema_name, role, modulo), ela vence sobre plano×role —
+  // pode tanto restringir quanto LIBERAR além do que o plano cobre (ex. cliente compra uma
+  // função avulsa sem mudar de plano) — ver domain/permissoes.js#permissaoEfetiva.
+  //
+  // Revisão (2026-09-28, mesmo dia): a 1ª versão não tinha `role` na chave — um override
+  // valia pra empresa inteira, qualquer usuário. Usuário pediu que fosse configurável por
+  // role dentro da empresa também (ex. a função comprada só pro dono, não pro vendedor) —
+  // mesma granularidade de permissoes_role, só que escopada por schema_name. Migração
+  // recria a tabela do zero se ela existir na forma antiga (sem coluna role) — sem
+  // preservar dado, porque a versão antiga nunca chegou a rodar em produção (só em teste
+  // local, que já reportou não estar funcionando mesmo).
+  `DO $$
+   BEGIN
+     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'permissoes_empresa')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permissoes_empresa' AND column_name = 'role') THEN
+       DROP TABLE public.permissoes_empresa;
+     END IF;
+   END $$`,
+  `CREATE TABLE IF NOT EXISTS public.permissoes_empresa (
+    schema_name TEXT NOT NULL REFERENCES public.sync_tenants(schema_name),
+    role        TEXT NOT NULL CHECK (role IN ('vendedor', 'gerente', 'dono')),
+    modulo      TEXT NOT NULL,
+    nivel       TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (schema_name, role, modulo)
+  )`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)

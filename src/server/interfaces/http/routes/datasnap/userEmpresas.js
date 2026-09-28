@@ -20,7 +20,7 @@ router.get('/', authJwt, async (req, res) => {
     );
     const rows = await Promise.all(result.rows.map(async r => ({
       ...r,
-      modulos: await obterPermissoesEfetivas(r.plano, req.userRoles?.[r.schema_name]),
+      modulos: await obterPermissoesEfetivas(r.plano, req.userRoles?.[r.schema_name], r.schema_name),
     })));
     res.json(rows);
   } catch (e) {

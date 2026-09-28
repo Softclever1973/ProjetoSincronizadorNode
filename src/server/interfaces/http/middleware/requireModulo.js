@@ -22,7 +22,7 @@ function _autorizado(nivel, nivelExigido) {
 async function resolverNivelModulo(req, schema, modulo) {
   const role  = req.userRoles?.[schema];
   const plano = await _planoDoSchema(schema);
-  return obterNivelEfetivo(plano, role, modulo);
+  return obterNivelEfetivo(plano, role, modulo, schema);
 }
 
 /** Middleware fixo: gate para uma rota cujo módulo é conhecido em tempo de definição da rota. */
