@@ -8,6 +8,7 @@ const {
 } = require('#client/http.js');
 const { salvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('#client/infrastructure/firebird/db-utils.js');
+const { estaPausado } = require('./controle');
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
@@ -227,7 +228,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
   let totalAtualizados = 0;
   let continuar = true;
 
-  while (continuar) {
+  // Cursor é salvo por registro, então interromper no meio do lote retoma do ponto certo.
+  while (continuar && !estaPausado()) {
     const cursor = await getUltimaAtualizacao(db, nome);
 
     let registros;
@@ -254,6 +256,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
 
     for (const registro of registros) {
+      if (estaPausado()) break;
       const pks = Array.isArray(pk) ? pk : [pk];
       const pkValor = pks.map(p => String(registro[p] ?? '')).join('|');
 
@@ -534,7 +537,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
   let totalDeletados = 0;
   let continuarDelete = true;
 
-  while (continuarDelete) {
+  while (continuarDelete && !estaPausado()) {
     const cursorDelete = await getUltimaDelecao(db, nome);
 
     let registrosDeletados;
@@ -553,6 +556,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
 
     for (const rd of registrosDeletados) {
+      if (estaPausado()) break;
       try {
         await deletarRegistro(db, nome, pk, rd.ID_REGISTROS);
         totalDeletados++;

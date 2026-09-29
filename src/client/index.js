@@ -205,6 +205,7 @@ async function main() {
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
   const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
+  const { estaPausado } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
@@ -335,9 +336,20 @@ async function main() {
     iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 
+  let avisouPausa = false;
+  let temMaisPendentes = false;
+
   async function executarCiclo() {
     if (rodando) return;
+    if (estaPausado()) {
+      if (!avisouPausa) log('Sincronização pausada pelo operador — retome em http://localhost:3001/status');
+      avisouPausa = true;
+      return;
+    }
+    avisouPausa = false;
     rodando = true;
+    contextoSync.cicloEmAndamento = true;
+    temMaisPendentes = false;
     await verificarAtualizacaoSeNecessario(); // primeiro passo do ciclo — ver comentário acima
     let db;
     try {
@@ -346,6 +358,7 @@ async function main() {
       log(`Firebird indisponível no ciclo: ${e.message} — aguardando próximo intervalo`);
       salvarErro({ operacao: 'ciclo', mensagem: e.message });
       rodando = false;
+      contextoSync.cicloEmAndamento = false;
       return;
     }
     try {
@@ -433,6 +446,7 @@ async function main() {
       }
 
       for (const tabela of tabelasParaSincronizar) {
+        if (estaPausado()) break;
         try {
           await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
         } catch (e) {
@@ -443,8 +457,10 @@ async function main() {
       }
 
       for (const tabela of tabelasParaSincronizar) {
+        if (estaPausado()) break;
         try {
-          await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
+          const r = await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
+          if (r?.temMais) temMaisPendentes = true;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log(`[${tabela.nome}] Erro no push: ${msg}`);
@@ -452,7 +468,7 @@ async function main() {
         }
       }
 
-      log('Ciclo concluído.');
+      log(estaPausado() ? 'Ciclo interrompido — sincronização pausada.' : 'Ciclo concluído.');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`Erro no ciclo: ${msg}`);
@@ -460,8 +476,13 @@ async function main() {
     } finally {
       await closeConnection(db);
       rodando = false;
+      contextoSync.cicloEmAndamento = false;
+      contextoSync.ultimoCicloFim = Date.now();
     }
   }
+
+  // Retomar pela web UI dispara um ciclo na hora, sem esperar o intervalo.
+  contextoSync.executarCicloAgora = () => { setTimeout(cicloComAutoAtualizacao, 0); };
 
   log(`Cliente iniciado. Intervalo: ${INTERVALO_MS / 1000}s`);
 
@@ -483,6 +504,8 @@ async function main() {
   async function cicloComAutoAtualizacao() {
     await executarCiclo();
     await aplicarAtualizacaoSeNecessario();
+    // Lote de push encheu: emenda outro ciclo em vez de esperar o intervalo inteiro.
+    if (temMaisPendentes && !estaPausado()) setTimeout(cicloComAutoAtualizacao, 1000);
   }
 
   // Pausa breve para o Firebird liberar a sessão do setup antes do primeiro ciclo.

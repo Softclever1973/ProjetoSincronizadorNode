@@ -41,7 +41,10 @@
 <div id="painel-envio" style="display:none;margin-bottom:20px;padding:16px;background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span style="font-size:13px;font-weight:bold;color:#555">Enviando ao servidor...</span>
-    <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
+    <span style="display:flex;align-items:center;gap:10px">
+      <button type="button" id="envio-btn-pausa" onclick="alternarPausaEnvio(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar</button>
+      <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
+    </span>
   </div>
   <div style="background:#eee;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px">
     <div id="envio-barra" style="height:100%;width:0%;background:#2980b9;transition:width 0.5s ease;border-radius:4px"></div>
@@ -50,6 +53,7 @@
     <span id="envio-contador">0 enviados de 0</span>
     <span id="envio-tempo"></span>
   </div>
+  <div id="envio-aviso" style="display:none;margin-top:10px;padding:8px 10px;border-radius:4px;font-size:12px"></div>
 </div>
 
 <% for (const [grupo, tabelas] of Object.entries(grupos)) { %>
@@ -186,6 +190,12 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tabelas: selecionadas })
       });
+      if (response.status === 409) {
+        resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#fff3cd;color:#856404';
+        resultado.textContent = (await response.json()).message;
+        acompanharEnfileiramento();
+        return;
+      }
       var reader   = response.body.getReader();
       var decoder  = new TextDecoder();
       var buffer   = '';
@@ -209,11 +219,7 @@
           var dados = JSON.parse(dadosStr);
 
           if (tipo === 'progresso') {
-            barra.style.width = dados.porcentagem + '%';
-            pct.textContent   = dados.porcentagem + '%';
-            tabela.textContent = dados.tabela + (dados.enfileiradosNaTabela > 0 ? ' (' + dados.enfileiradosNaTabela + ' registros)' : '');
-            contador.textContent = dados.processadas + ' / ' + dados.total + ' tabelas — ' + dados.totalEnfileirados + ' registros enfileirados';
-            tempo.textContent  = formatarTempo(dados.restanteSegundos);
+            renderProgressoCarga(dados);
           } else if (tipo === 'concluido') {
             barra.style.width = '100%';
             pct.textContent   = '100%';
@@ -267,39 +273,128 @@
     return m + 'min ' + (s > 0 ? s + 's ' : '') + 'restantes';
   }
 
+  function renderProgressoCarga(dados) {
+    document.getElementById('painel-carga').style.display = 'block';
+    document.getElementById('carga-barra').style.width = dados.porcentagem + '%';
+    document.getElementById('carga-pct').textContent = dados.porcentagem + '%';
+    document.getElementById('carga-tabela').textContent = dados.tabela
+      ? dados.tabela + (dados.enfileiradosNaTabela > 0 ? ' (' + dados.enfileiradosNaTabela + ' registros)' : '')
+      : 'Preparando...';
+    document.getElementById('carga-contador').textContent = dados.processadas + ' / ' + dados.total + ' tabelas — ' + dados.totalEnfileirados + ' registros enfileirados';
+    document.getElementById('carga-tempo').textContent = dados.restanteSegundos != null ? formatarTempo(dados.restanteSegundos) : 'enfileirando...';
+  }
+
+  // Após F5 durante o enfileiramento: acompanha por polling até virar a fase de envio.
+  function acompanharEnfileiramento() {
+    var btn = document.getElementById('btn-carga-inicial');
+    btn.disabled = true;
+    btn.textContent = 'Processando...';
+    var timer = setInterval(async function() {
+      try {
+        var d = await (await fetch('/api/carga-inicial/progresso')).json();
+        if (d.fase === 'enfileirando') { renderProgressoCarga(d); return; }
+        clearInterval(timer);
+        btn.disabled = false;
+        btn.textContent = 'Forçar Carga Inicial';
+        document.getElementById('carga-tabela').textContent = 'Concluído';
+        document.getElementById('carga-barra').style.width = '100%';
+        document.getElementById('carga-pct').textContent = '100%';
+        document.getElementById('carga-tempo').textContent = '';
+        if (d.ativo) iniciarPollingEnvio();
+      } catch (e) { /* tenta de novo no próximo tick */ }
+    }, 1000);
+  }
+
+  function atualizarBotaoPausaEnvio(pausado) {
+    var b = document.getElementById('envio-btn-pausa');
+    b.style.display = '';
+    b.dataset.pausado = pausado ? '1' : '0';
+    b.textContent = pausado ? '▶ Retomar' : '⏸ Pausar';
+    b.style.borderColor = b.style.color = pausado ? '#27ae60' : '#e67e22';
+  }
+
+  // Mesma pausa global da barra superior; recarrega pra atualizar o botão/banner da nav.
+  async function alternarPausaEnvio(b) {
+    var pausado = b.dataset.pausado === '1';
+    b.disabled = true;
+    try {
+      var r = await fetch(pausado ? '/api/sync/retomar' : '/api/sync/pausar', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      location.reload();
+    } catch (e) {
+      alert('Não foi possível ' + (pausado ? 'retomar' : 'pausar') + ': ' + e.message);
+      b.disabled = false;
+    }
+  }
+
+  var _timerEnvio = null;
   function iniciarPollingEnvio() {
     var painel   = document.getElementById('painel-envio');
     var barra    = document.getElementById('envio-barra');
     var pct      = document.getElementById('envio-pct');
     var contador = document.getElementById('envio-contador');
     var tempo    = document.getElementById('envio-tempo');
+    var aviso    = document.getElementById('envio-aviso');
     painel.style.display = 'block';
 
-    var timer = setInterval(async function() {
+    function mostrarAviso(html, fundo, cor) {
+      if (!html) { aviso.style.display = 'none'; return; }
+      aviso.style.cssText = 'display:block;margin-top:10px;padding:8px 10px;border-radius:4px;font-size:12px;background:' + fundo + ';color:' + cor;
+      aviso.innerHTML = html;
+    }
+
+    async function tick() {
       try {
-        var r = await fetch('/api/carga-inicial/progresso');
-        var d = await r.json();
-        if (!d.ativo) {
-          barra.style.width = '100%';
-          pct.textContent   = '100%';
-          contador.textContent = 'Todos enviados!';
-          tempo.textContent = 'Concluído em ' + (d.decorrido || '') + 's';
-          clearInterval(timer);
-          return;
-        }
+        var d = await (await fetch('/api/carga-inicial/progresso')).json();
+        if (!d.ativo) { clearInterval(_timerEnvio); painel.style.display = 'none'; return; }
         barra.style.width   = d.porcentagem + '%';
         pct.textContent     = d.porcentagem + '%';
-        contador.textContent = d.enviados + ' enviados de ' + d.total + ' (' + d.pendentes + ' aguardando)';
-        var restante = d.decorrido > 0 && d.enviados > 0
-          ? Math.round((d.decorrido / d.enviados) * (d.total - d.enviados))
-          : null;
-        tempo.textContent = formatarTempo(restante);
-        if (d.porcentagem >= 100) clearInterval(timer);
-      } catch(e) {
-        clearInterval(timer);
-      }
-    }, 3000);
+        contador.textContent = d.enviados + ' enviados de ' + d.total + (d.pendentes > 0 ? ' (' + d.pendentes + ' aguardando)' : '');
+
+        var avisos = [];
+        if (d.inativas && d.inativas.length) {
+          avisos.push('Tabela(s) inativa(s), não serão enviadas até serem ativadas: <b>' + d.inativas.join(', ') + '</b>');
+        }
+
+        if (d.concluido) {
+          document.getElementById('envio-btn-pausa').style.display = 'none';
+          tempo.textContent = 'Concluído em ' + d.decorrido + 's';
+          contador.textContent = 'Todos enviados! (' + d.total + ')';
+          clearInterval(_timerEnvio);
+          mostrarAviso(avisos.join('<br>'), '#fff3cd', '#856404');
+          return;
+        }
+
+        atualizarBotaoPausaEnvio(d.pausado);
+        if (d.pausado) {
+          tempo.textContent = 'pausado';
+          avisos.unshift('⏸ Envio pausado — clique em "Retomar" para continuar de onde parou.');
+        } else if (d.semProgresso) {
+          tempo.textContent = 'sem progresso';
+          var resto = (d.restantesPorTabela || []).map(function(t) { return t.tabela + ': ' + t.pendentes; }).join(', ');
+          avisos.unshift('Nenhum registro enviado nos últimos minutos. Restantes — ' + resto + '. Veja a aba <a href="/erros">Erros</a>.');
+        } else if (d.enviados === 0) {
+          tempo.textContent = d.cicloEmAndamento ? 'enviando...' : 'aguardando próximo ciclo...';
+        } else {
+          tempo.textContent = formatarTempo(Math.round((d.decorrido / d.enviados) * (d.total - d.enviados)));
+        }
+        mostrarAviso(avisos.join('<br>'), d.semProgresso ? '#f8d7da' : '#fff3cd', d.semProgresso ? '#721c24' : '#856404');
+      } catch(e) { /* servidor local ocupado — tenta no próximo tick */ }
+    }
+
+    if (_timerEnvio) clearInterval(_timerEnvio);
+    tick();
+    _timerEnvio = setInterval(tick, 3000);
   }
+
+  // Ao abrir/recarregar a página, retoma o acompanhamento do que estiver em andamento.
+  (async function retomarAcompanhamento() {
+    try {
+      var d = await (await fetch('/api/carga-inicial/progresso')).json();
+      if (d.fase === 'enfileirando') { renderProgressoCarga(d); acompanharEnfileiramento(); }
+      else if (d.ativo) iniciarPollingEnvio();
+    } catch (e) { /* sem acompanhamento */ }
+  })();
 
   async function toggleTodos(ativo) {
     var r = await fetch('/configuracoes/toggle-todos', {

@@ -34,6 +34,12 @@
   <a href="/parametros" <%- currentPage === 'parametros' ? 'aria-current="page"' : '' %>>Parâmetros</a>
   <% } %>
   <div style="margin-left:auto;display:flex;align-items:center;gap:10px">
+    <% const _pausado = typeof syncPausa !== 'undefined' && syncPausa && syncPausa.pausado; %>
+    <button type="button" id="btn-sync-pausa" onclick="alternarPausaSync()" data-pausado="<%= _pausado ? '1' : '0' %>"
+      title="<%= _pausado ? 'Retoma a sincronização agora' : 'Para a sincronização no próximo registro (sem fechar o programa)' %>"
+      style="padding:3px 12px;font-size:12px;border:1px solid <%= _pausado ? '#27ae60' : '#e67e22' %>;border-radius:var(--radius-sm);background:white;color:<%= _pausado ? '#27ae60' : '#e67e22' %>;cursor:pointer;font-family:var(--font-sans);font-weight:bold">
+      <%= _pausado ? '▶ Retomar sincronização' : '⏸ Pausar sincronização' %>
+    </button>
     <span style="font-size:12px;color:var(--color-text-muted)"><%= usuarioLogado %></span>
     <form method="post" action="/logout" style="margin:0">
       <button type="submit"
@@ -43,6 +49,29 @@
     </form>
   </div>
 </nav>
+
+<% if (typeof syncPausa !== 'undefined' && syncPausa && syncPausa.pausado) { %>
+<div id="banner-sync-pausada" role="status" style="margin:0 0 16px;padding:10px 14px;border-radius:6px;background:#fff3cd;color:#856404;font-size:13px">
+  ⏸ Sincronização pausada<%= syncPausa.por ? ' por ' + syncPausa.por : '' %><%= syncPausa.desde ? ' em ' + new Date(syncPausa.desde).toLocaleString('pt-BR') : '' %>.
+  Nada é enviado nem recebido até retomar. As alterações feitas no Sirius continuam sendo registradas e sobem quando retomar.
+</div>
+<% } %>
+<script>
+  async function alternarPausaSync() {
+    var btn = document.getElementById('btn-sync-pausa');
+    var pausado = btn.dataset.pausado === '1';
+    if (!pausado && !confirm('Pausar a sincronização? O ciclo atual para no próximo registro.')) return;
+    btn.disabled = true;
+    try {
+      var r = await fetch(pausado ? '/api/sync/retomar' : '/api/sync/pausar', { method: 'POST' });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      location.reload();
+    } catch (e) {
+      alert('Não foi possível ' + (pausado ? 'retomar' : 'pausar') + ': ' + e.message);
+      btn.disabled = false;
+    }
+  }
+</script>
 
 <!-- Preenchido no load e mantido em tempo real via SSE 'atualizacao-status' — ver
      renderBannerAtualizacao() em scripts.ejs. Server-side só fornece o estado inicial. -->

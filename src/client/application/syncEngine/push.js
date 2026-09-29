@@ -3,10 +3,15 @@ const { enviarRegistro } = require('#client/http.js');
 const { atualizarOuSalvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { registrarEcho } = require('./echos');
 const { salvarErro } = require('#client/infrastructure/persistence/erros.js');
+const { estaPausado } = require('./controle');
+
+// Máximo de pendentes por tabela num ciclo — evita carregar milhões na memória de uma vez.
+const LOTE_PUSH = 2000;
 
 /**
  * Envia ao servidor os registros locais que foram alterados desde o último sync.
  * Detecta conflitos e os salva para resolução manual via interface web.
+ * Retorna { temMais } quando o lote encheu e ainda pode haver pendentes.
  */
 async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
   const { nome, pk } = configTabela;
@@ -15,22 +20,24 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
   try {
     pendentes = await query(
       db,
-      `SELECT PK_VALOR FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? ORDER BY TIMESTAMP_ALTERACAO`,
+      `SELECT FIRST ${LOTE_PUSH} PK_VALOR FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? ORDER BY TIMESTAMP_ALTERACAO`,
       [nome]
     );
   } catch {
     // Tabela ainda não existe (setup não rodou ou falhou)
-    return;
+    return { temMais: false };
   }
 
-  if (pendentes.length === 0) return;
+  if (pendentes.length === 0) return { temMais: false };
 
-  log(`[${nome}] ${pendentes.length} registro(s) pendente(s) para enviar ao servidor`);
+  log(`[${nome}] ${pendentes.length}${pendentes.length === LOTE_PUSH ? '+' : ''} registro(s) pendente(s) para enviar ao servidor`);
 
   let totalEnviados = 0;
   let totalConflitos = 0;
+  let interrompido = false;
 
   for (const pendente of pendentes) {
+    if (estaPausado()) { interrompido = true; break; }
     const pks = Array.isArray(pk) ? pk : [pk];
     const pkValor = pendente.PK_VALOR;
     const pkValores = pkValor.split('|');
@@ -218,6 +225,9 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
   if (totalEnviados > 0) log(`[${nome}] ${totalEnviados} registro(s) enviado(s) ao servidor`);
   if (totalConflitos > 0) log(`[${nome}] ${totalConflitos} conflito(s) — acesse http://localhost:<porta_webui>/conflitos`);
+  if (interrompido) log(`[${nome}] envio pausado pelo operador`);
+  // Sem nenhum envio no lote (tudo falhou), não força ciclo imediato — evita laço sobre os mesmos pendentes.
+  return { temMais: !interrompido && pendentes.length === LOTE_PUSH && totalEnviados + totalConflitos > 0 };
 }
 
 module.exports = { empurrarTabela };

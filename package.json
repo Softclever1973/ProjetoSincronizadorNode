@@ -53,6 +53,7 @@
       "conflitos.json",
       "tabelas-config.json",
       "parametros-sync.json",
+      "sync-pausa.json",
       ".update-pending.json"
     ]
   }

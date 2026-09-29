@@ -9,6 +9,8 @@ const { criarErrosRouter } = require('./interfaces/webui/routes/erros.routes');
 const { criarParametrosRouter } = require('./interfaces/webui/routes/parametros.routes');
 const { criarAtualizacaoRouter } = require('./interfaces/webui/routes/atualizacao.routes');
 const { criarEventosRouter } = require('./interfaces/webui/routes/eventos.routes');
+const { criarControleRouter } = require('./interfaces/webui/routes/controle.routes');
+const { estadoPausa } = require('./application/syncEngine/controle');
 
 const PORTA_PADRAO = 3001;
 
@@ -57,6 +59,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.locals.atualizacaoDisponivel = contexto.atualizacaoDisponivel || null;
     res.locals.atualizacaoStatus = contexto.atualizacaoStatus || null;
     res.locals.resetPendente = contexto.resetPendente || null;
+    res.locals.syncPausa = estadoPausa();
     next();
   });
 
@@ -76,6 +79,7 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
   app.use(criarParametrosRouter(contexto));
   app.use(criarAtualizacaoRouter(contexto));
   app.use(criarEventosRouter());
+  app.use(criarControleRouter(contexto));
 
   // Durante um respawn de atualização (updater.js), o processo antigo ainda segura a
   // porta por até JANELA_LIVENESS_MS (~10s) enquanto observa se o novo se mantém de pé —
