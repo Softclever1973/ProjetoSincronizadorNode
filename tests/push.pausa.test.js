@@ -4,11 +4,11 @@ jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({ atualiz
 jest.mock('../src/client/application/syncEngine/echos', () => ({ registrarEcho: jest.fn() }));
 jest.mock('../src/client/infrastructure/persistence/erros', () => ({ salvarErro: jest.fn() }));
 // Mock pra não gravar sync-pausa.json no cwd durante o teste.
-jest.mock('../src/client/application/syncEngine/controle', () => ({ estaPausado: jest.fn(() => false) }));
+jest.mock('../src/client/application/syncEngine/controle', () => ({ envioEstaPausado: jest.fn(() => false) }));
 
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro } = require('../src/client/http');
-const { estaPausado } = require('../src/client/application/syncEngine/controle');
+const { envioEstaPausado: estaPausado } = require('../src/client/application/syncEngine/controle');
 const { empurrarTabela } = require('../src/client/application/syncEngine/push');
 const { mockQueryPorSql } = require('./helpers/mockQuery');
 

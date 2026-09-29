@@ -1,7 +1,7 @@
 const express = require('express');
 const TABELAS = require('#client/domain/tabelas.js');
 const { lerConfig, salvarConfig, defaultAtivo, tabelaAtiva } = require('#client/infrastructure/config/tabelasConfig.js');
-const { estaPausado } = require('#client/application/syncEngine/controle.js');
+const { estaPausado, envioEstaPausado } = require('#client/application/syncEngine/controle.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { clearConflitos } = require('#client/infrastructure/persistence/conflitos.js');
 const { aplicarResetLocal } = require('#client/application/resetLocal.js');
@@ -184,13 +184,14 @@ function criarConfiguracoesRouter(contexto) {
 
       if (estadoEnvio.ultimosPendentes === null || pendentes < estadoEnvio.ultimosPendentes) estadoEnvio.ultimaMudanca = Date.now();
       estadoEnvio.ultimosPendentes = pendentes;
-      const pausado = estaPausado();
+      const pausado = envioEstaPausado();
+      const pausaGlobal = estaPausado();
       const semProgresso = pendentes > 0 && !pausado && !contexto.cicloEmAndamento
         && Date.now() - estadoEnvio.ultimaMudanca > SEM_PROGRESSO_MS;
 
       const dados = {
         ativo: true, total, enviados, pendentes, porcentagem, decorrido,
-        pausado, cicloEmAndamento: !!contexto.cicloEmAndamento, semProgresso, inativas,
+        pausado, pausaGlobal, cicloEmAndamento: !!contexto.cicloEmAndamento, semProgresso, inativas,
         restantesPorTabela: porTabela.map(r => ({ tabela: String(r.NOME_TABELA).trim(), pendentes: Number(r.TOTAL || 0) })),
       };
       if (porcentagem >= 100 || pendentes === 0) {

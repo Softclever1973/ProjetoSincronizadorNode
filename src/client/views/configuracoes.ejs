@@ -42,7 +42,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span style="font-size:13px;font-weight:bold;color:#555">Enviando ao servidor...</span>
     <span style="display:flex;align-items:center;gap:10px">
-      <button type="button" id="envio-btn-pausa" onclick="alternarPausaEnvio(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar</button>
+      <button type="button" id="envio-btn-pausa" onclick="alternarPausaEnvio(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar envio</button>
       <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
     </span>
   </div>
@@ -305,20 +305,21 @@
     }, 1000);
   }
 
-  function atualizarBotaoPausaEnvio(pausado) {
+  // Com a sincronização inteira pausada, o controle é o da barra superior — esconde este.
+  function atualizarBotaoPausaEnvio(pausado, pausaGlobal) {
     var b = document.getElementById('envio-btn-pausa');
-    b.style.display = '';
+    b.style.display = pausaGlobal ? 'none' : '';
     b.dataset.pausado = pausado ? '1' : '0';
-    b.textContent = pausado ? '▶ Retomar' : '⏸ Pausar';
+    b.textContent = pausado ? '▶ Retomar envio' : '⏸ Pausar envio';
     b.style.borderColor = b.style.color = pausado ? '#27ae60' : '#e67e22';
   }
 
-  // Mesma pausa global da barra superior; recarrega pra atualizar o botão/banner da nav.
+  // Pausa só o push; recarrega pra atualizar o banner da nav.
   async function alternarPausaEnvio(b) {
     var pausado = b.dataset.pausado === '1';
     b.disabled = true;
     try {
-      var r = await fetch(pausado ? '/api/sync/retomar' : '/api/sync/pausar', { method: 'POST' });
+      var r = await fetch(pausado ? '/api/sync/retomar-envio' : '/api/sync/pausar-envio', { method: 'POST' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       location.reload();
     } catch (e) {
@@ -365,10 +366,13 @@
           return;
         }
 
-        atualizarBotaoPausaEnvio(d.pausado);
-        if (d.pausado) {
+        atualizarBotaoPausaEnvio(d.pausado, d.pausaGlobal);
+        if (d.pausaGlobal) {
           tempo.textContent = 'pausado';
-          avisos.unshift('⏸ Envio pausado — clique em "Retomar" para continuar de onde parou.');
+          avisos.unshift('⏸ Sincronização inteira pausada — use "Retomar sincronização" na barra superior.');
+        } else if (d.pausado) {
+          tempo.textContent = 'envio pausado';
+          avisos.unshift('⏸ Envio pausado — o recebimento do servidor continua. Clique em "Retomar envio" para continuar de onde parou.');
         } else if (d.semProgresso) {
           tempo.textContent = 'sem progresso';
           var resto = (d.restantesPorTabela || []).map(function(t) { return t.tabela + ': ' + t.pendentes; }).join(', ');

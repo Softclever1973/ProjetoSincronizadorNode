@@ -1,17 +1,19 @@
 const fs   = require('fs');
 const path = require('path');
 
-// Pausa global da sincronização, gravada em arquivo pra sobreviver a reinício/auto-atualização.
+// Pausas da sincronização, gravadas em arquivo pra sobreviver a reinício/auto-atualização.
+// `pausado` para tudo (pull+push); `envioPausado` para só o push, o pull continua.
 const CAMINHO = path.join(process.cwd(), 'sync-pausa.json');
+
+const VAZIO = { pausado: false, desde: null, por: null, envioPausado: false, envioDesde: null, envioPor: null };
 
 let _pausa = _ler();
 
 function _ler() {
   try {
-    const d = JSON.parse(fs.readFileSync(CAMINHO, 'utf8'));
-    return d?.pausado ? { pausado: true, desde: d.desde || null, por: d.por || null } : { pausado: false };
+    return { ...VAZIO, ...JSON.parse(fs.readFileSync(CAMINHO, 'utf8')) };
   } catch {
-    return { pausado: false };
+    return { ...VAZIO };
   }
 }
 
@@ -26,17 +28,30 @@ function _gravar() {
 }
 
 function pausar(por = null) {
-  _pausa = { pausado: true, desde: new Date().toISOString(), por };
+  _pausa = { ..._pausa, pausado: true, desde: new Date().toISOString(), por };
   _gravar();
 }
 
 function retomar() {
-  _pausa = { pausado: false };
+  _pausa = { ..._pausa, pausado: false, desde: null, por: null };
+  _gravar();
+}
+
+function pausarEnvio(por = null) {
+  _pausa = { ..._pausa, envioPausado: true, envioDesde: new Date().toISOString(), envioPor: por };
+  _gravar();
+}
+
+function retomarEnvio() {
+  _pausa = { ..._pausa, envioPausado: false, envioDesde: null, envioPor: null };
   _gravar();
 }
 
 function estaPausado() { return _pausa.pausado; }
 
+// Push para com qualquer uma das duas pausas.
+function envioEstaPausado() { return _pausa.pausado || _pausa.envioPausado; }
+
 function estadoPausa() { return { ..._pausa }; }
 
-module.exports = { pausar, retomar, estaPausado, estadoPausa };
+module.exports = { pausar, retomar, pausarEnvio, retomarEnvio, estaPausado, envioEstaPausado, estadoPausa };

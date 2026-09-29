@@ -205,7 +205,7 @@ async function main() {
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
   const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
-  const { estaPausado } = require('./application/syncEngine/controle');
+  const { estaPausado, envioEstaPausado } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
@@ -337,6 +337,7 @@ async function main() {
   }
 
   let avisouPausa = false;
+  let avisouPausaEnvio = false;
   let temMaisPendentes = false;
 
   async function executarCiclo() {
@@ -456,8 +457,14 @@ async function main() {
         }
       }
 
+      if (envioEstaPausado() && !estaPausado()) {
+        if (!avisouPausaEnvio) log('Envio ao servidor pausado pelo operador — só recebendo do servidor.');
+        avisouPausaEnvio = true;
+      } else {
+        avisouPausaEnvio = false;
+      }
       for (const tabela of tabelasParaSincronizar) {
-        if (estaPausado()) break;
+        if (envioEstaPausado()) break;
         try {
           const r = await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
           if (r?.temMais) temMaisPendentes = true;
@@ -505,7 +512,7 @@ async function main() {
     await executarCiclo();
     await aplicarAtualizacaoSeNecessario();
     // Lote de push encheu: emenda outro ciclo em vez de esperar o intervalo inteiro.
-    if (temMaisPendentes && !estaPausado()) setTimeout(cicloComAutoAtualizacao, 1000);
+    if (temMaisPendentes && !envioEstaPausado()) setTimeout(cicloComAutoAtualizacao, 1000);
   }
 
   // Pausa breve para o Firebird liberar a sessão do setup antes do primeiro ciclo.

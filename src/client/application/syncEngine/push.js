@@ -3,7 +3,7 @@ const { enviarRegistro } = require('#client/http.js');
 const { atualizarOuSalvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { registrarEcho } = require('./echos');
 const { salvarErro } = require('#client/infrastructure/persistence/erros.js');
-const { estaPausado } = require('./controle');
+const { envioEstaPausado } = require('./controle');
 
 // Máximo de pendentes por tabela num ciclo — evita carregar milhões na memória de uma vez.
 const LOTE_PUSH = 2000;
@@ -37,7 +37,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
   let interrompido = false;
 
   for (const pendente of pendentes) {
-    if (estaPausado()) { interrompido = true; break; }
+    if (envioEstaPausado()) { interrompido = true; break; }
     const pks = Array.isArray(pk) ? pk : [pk];
     const pkValor = pendente.PK_VALOR;
     const pkValores = pkValor.split('|');
