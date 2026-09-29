@@ -26,7 +26,10 @@
 <div id="painel-carga" style="display:none;margin-bottom:20px;padding:16px;background:white;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.12)">
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span id="carga-tabela" style="font-size:13px;color:#555;font-family:monospace">Preparando...</span>
-    <span id="carga-pct" style="font-size:14px;font-weight:bold;color:#e67e22">0%</span>
+    <span style="display:flex;align-items:center;gap:10px">
+      <button type="button" id="carga-btn-parar" onclick="pararCarga(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #c0392b;border-radius:4px;background:white;color:#c0392b;cursor:pointer;font-weight:bold">⏹ Parar</button>
+      <span id="carga-pct" style="font-size:14px;font-weight:bold;color:#e67e22">0%</span>
+    </span>
   </div>
   <div style="background:#eee;border-radius:4px;height:10px;overflow:hidden;margin-bottom:8px">
     <div id="carga-barra" style="height:100%;width:0%;background:#e67e22;transition:width 0.25s ease;border-radius:4px"></div>
@@ -43,6 +46,7 @@
     <span style="font-size:13px;font-weight:bold;color:#555">Enviando ao servidor...</span>
     <span style="display:flex;align-items:center;gap:10px">
       <button type="button" id="envio-btn-pausa" onclick="alternarPausaEnvio(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar envio</button>
+      <button type="button" id="envio-btn-parar" onclick="pararCarga(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #c0392b;border-radius:4px;background:white;color:#c0392b;cursor:pointer;font-weight:bold">⏹ Parar</button>
       <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
     </span>
   </div>
@@ -221,6 +225,7 @@
           if (tipo === 'progresso') {
             renderProgressoCarga(dados);
           } else if (tipo === 'concluido') {
+            document.getElementById('carga-btn-parar').style.display = 'none';
             barra.style.width = '100%';
             pct.textContent   = '100%';
             tabela.textContent = 'Concluído';
@@ -228,6 +233,8 @@
             resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#d4edda;color:#155724';
             resultado.textContent = dados.totalEnfileirados + ' registro(s) enfileirados para envio. Os dados serão sincronizados nos próximos ciclos.';
             if (dados.totalEnfileirados > 0) iniciarPollingEnvio();
+          } else if (tipo === 'parado') {
+            mostrarCargaParada(dados.removidos);
           } else if (tipo === 'erro') {
             resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#f8d7da;color:#721c24';
             resultado.textContent = 'Erro: ' + dados.message;
@@ -273,7 +280,37 @@
     return m + 'min ' + (s > 0 ? s + 's ' : '') + 'restantes';
   }
 
+  // Cancela a carga: durante o enfileiramento para após a tabela atual; durante o envio tira o resto da fila.
+  async function pararCarga(btn) {
+    if (!confirm('Parar a carga inicial?\n\nO que ainda não foi enviado sai da fila (inclusive alterações locais dessas tabelas que estavam aguardando). Para enviar de novo será preciso forçar a carga outra vez.')) return;
+    btn.disabled = true;
+    try {
+      var r = await fetch('/api/carga-inicial/parar', { method: 'POST' });
+      var d = await r.json();
+      if (!r.ok || !d.ok) throw new Error(d.message || ('HTTP ' + r.status));
+      if (d.fase === 'enfileirando') {
+        btn.textContent = 'Parando...';
+      } else {
+        iniciarPollingEnvio();
+      }
+    } catch (e) {
+      alert('Não foi possível parar: ' + e.message);
+      btn.disabled = false;
+    }
+  }
+
+  function mostrarCargaParada(removidos) {
+    document.getElementById('carga-btn-parar').style.display = 'none';
+    document.getElementById('carga-tabela').textContent = 'Parado pelo operador';
+    document.getElementById('carga-tempo').textContent = '';
+    var resultado = document.getElementById('carga-resultado');
+    resultado.style.cssText = 'display:block;margin-top:12px;padding:10px;border-radius:4px;font-size:13px;background:#f8d7da;color:#721c24';
+    resultado.textContent = 'Carga parada — ' + removidos + ' registro(s) retirados da fila. Nada mais será enviado desta carga.';
+  }
+
   function renderProgressoCarga(dados) {
+    var bp = document.getElementById('carga-btn-parar');
+    if (!bp.disabled) bp.style.display = '';
     document.getElementById('painel-carga').style.display = 'block';
     document.getElementById('carga-barra').style.width = dados.porcentagem + '%';
     document.getElementById('carga-pct').textContent = dados.porcentagem + '%';
@@ -296,6 +333,8 @@
         clearInterval(timer);
         btn.disabled = false;
         btn.textContent = 'Forçar Carga Inicial';
+        if (d.parado) { mostrarCargaParada(d.removidos); return; }
+        document.getElementById('carga-btn-parar').style.display = 'none';
         document.getElementById('carga-tabela').textContent = 'Concluído';
         document.getElementById('carga-barra').style.width = '100%';
         document.getElementById('carga-pct').textContent = '100%';
@@ -357,6 +396,15 @@
           avisos.push('Tabela(s) inativa(s), não serão enviadas até serem ativadas: <b>' + d.inativas.join(', ') + '</b>');
         }
 
+        document.getElementById('envio-btn-parar').style.display = (d.concluido || d.parado) ? 'none' : '';
+        if (d.parado) {
+          document.getElementById('envio-btn-pausa').style.display = 'none';
+          tempo.textContent = 'parado';
+          contador.textContent = d.enviados + ' enviados de ' + d.total + ' antes de parar';
+          clearInterval(_timerEnvio);
+          mostrarAviso('⏹ Envio parado pelo operador — ' + d.removidos + ' registro(s) retirados da fila. Para enviar de novo, use "Forçar Carga Inicial".', '#f8d7da', '#721c24');
+          return;
+        }
         if (d.concluido) {
           document.getElementById('envio-btn-pausa').style.display = 'none';
           tempo.textContent = 'Concluído em ' + d.decorrido + 's';

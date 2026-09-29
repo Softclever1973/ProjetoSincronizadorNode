@@ -3,7 +3,7 @@ const { enviarRegistro } = require('#client/http.js');
 const { atualizarOuSalvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { registrarEcho } = require('./echos');
 const { salvarErro } = require('#client/infrastructure/persistence/erros.js');
-const { envioEstaPausado } = require('./controle');
+const { envioEstaPausado, geracaoEnvio } = require('./controle');
 
 // Máximo de pendentes por tabela num ciclo — evita carregar milhões na memória de uma vez.
 const LOTE_PUSH = 2000;
@@ -35,9 +35,10 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
   let totalEnviados = 0;
   let totalConflitos = 0;
   let interrompido = false;
+  const geracao = geracaoEnvio();
 
   for (const pendente of pendentes) {
-    if (envioEstaPausado()) { interrompido = true; break; }
+    if (envioEstaPausado() || geracaoEnvio() !== geracao) { interrompido = true; break; }
     const pks = Array.isArray(pk) ? pk : [pk];
     const pkValor = pendente.PK_VALOR;
     const pkValores = pkValor.split('|');
@@ -155,6 +156,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
     try {
       log(`[${nome}] Enviando (${Array.isArray(pk) ? pk.map(p => `${p}=${registroParaEnviar[p]}`).join(', ') : `${pk}=${registroParaEnviar[pk]}`}) ao servidor`);
       const resultado = await enviarRegistro(baseURI, idLoja, nome, pk, registroParaEnviar, ultimaVersaoConhecida, false, idPDV, nomeFilial, false, configTabela.srvId ?? false);
+      for (const aviso of (resultado?.avisos || [])) log(`[${nome}] AVISO do servidor (${pkValor}): ${aviso}`);
 
       if (resultado.conflito) {
         // Remove dos pendentes para não re-enviar indefinidamente no próximo ciclo
@@ -225,7 +227,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
   if (totalEnviados > 0) log(`[${nome}] ${totalEnviados} registro(s) enviado(s) ao servidor`);
   if (totalConflitos > 0) log(`[${nome}] ${totalConflitos} conflito(s) — acesse http://localhost:<porta_webui>/conflitos`);
-  if (interrompido) log(`[${nome}] envio pausado pelo operador`);
+  if (interrompido) log(`[${nome}] envio ${envioEstaPausado() ? 'pausado' : 'interrompido'} pelo operador`);
   // Sem nenhum envio no lote (tudo falhou), não força ciclo imediato — evita laço sobre os mesmos pendentes.
   return { temMais: !interrompido && pendentes.length === LOTE_PUSH && totalEnviados + totalConflitos > 0 };
 }

@@ -54,4 +54,12 @@ function envioEstaPausado() { return _pausa.pausado || _pausa.envioPausado; }
 
 function estadoPausa() { return { ..._pausa }; }
 
-module.exports = { pausar, retomar, pausarEnvio, retomarEnvio, estaPausado, envioEstaPausado, estadoPausa };
+// "Parar" da carga: incrementa a geração pra o push em andamento largar o lote já carregado na memória.
+let _geracaoEnvio = 0;
+function interromperEnvioAtual() { _geracaoEnvio++; }
+function geracaoEnvio() { return _geracaoEnvio; }
+
+module.exports = {
+  pausar, retomar, pausarEnvio, retomarEnvio, estaPausado, envioEstaPausado, estadoPausa,
+  interromperEnvioAtual, geracaoEnvio,
+};

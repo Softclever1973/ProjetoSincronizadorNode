@@ -10,7 +10,7 @@ async function generatorExiste(db, nome) {
   return (rows[0].CNT || 0) > 0;
 }
 
-async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFiltro = null) {
+async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFiltro = null, deveParar = () => false) {
   const lista = tabelasFiltro && tabelasFiltro.length > 0
     ? TABELAS.filter(t => tabelasFiltro.includes(t.nome))
     : TABELAS;
@@ -18,6 +18,7 @@ async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFilt
   let totalEnfileirados = 0;
 
   for (let i = 0; i < total; i++) {
+    if (deveParar()) { log('[SETUP] Carga inicial interrompida pelo operador'); break; }
     const tabela = lista[i];
     let enfileiradosNaTabela = 0;
 

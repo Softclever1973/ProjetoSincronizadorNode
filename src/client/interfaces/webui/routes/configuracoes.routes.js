@@ -1,7 +1,7 @@
 const express = require('express');
 const TABELAS = require('#client/domain/tabelas.js');
 const { lerConfig, salvarConfig, defaultAtivo, tabelaAtiva } = require('#client/infrastructure/config/tabelasConfig.js');
-const { estaPausado, envioEstaPausado } = require('#client/application/syncEngine/controle.js');
+const { estaPausado, envioEstaPausado, interromperEnvioAtual } = require('#client/application/syncEngine/controle.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { clearConflitos } = require('#client/infrastructure/persistence/conflitos.js');
 const { aplicarResetLocal } = require('#client/application/resetLocal.js');
@@ -13,6 +13,48 @@ function criarConfiguracoesRouter(contexto) {
   let estadoEnvio = null;
   // Estado da fase de enfileiramento da carga inicial (null = nenhuma em andamento)
   let estadoEnfileiramento = null;
+  // "Parar" pedido durante o enfileiramento: termina a tabela atual e desfaz a fila da carga.
+  let pararCarga = false;
+
+  // Tira da fila o que a carga enfileirou e larga o lote que o push já tem em memória.
+  async function removerPendentesDaCarga(db) {
+    const tabelas = estadoEnvio?.tabelas || [];
+    let removidos = 0;
+    if (tabelas.length > 0) {
+      const ph = tabelas.map(() => '?').join(', ');
+      const cnt = await dbQuery(db, `SELECT COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA IN (${ph})`, tabelas).catch(() => [{ TOTAL: 0 }]);
+      removidos = Number(cnt[0]?.TOTAL || 0);
+      await dbExecute(db, `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA IN (${ph})`, tabelas);
+    }
+    interromperEnvioAtual();
+    const dados = { ativo: true, parado: true, removidos, total: estadoEnvio?.total || 0, enviados: 0, pendentes: 0, porcentagem: 0 };
+    if (estadoEnvio) {
+      dados.enviados = Math.max(0, (estadoEnvio.total || 0) - (estadoEnvio.ultimosPendentes ?? estadoEnvio.total ?? 0));
+      estadoEnvio.ultimoResultado = { em: Date.now(), dados };
+    }
+    console.log(`[Carga] Parada pelo operador — ${removidos} pendente(s) removido(s) da fila`);
+    return removidos;
+  }
+
+  router.post('/api/carga-inicial/parar', async (_req, res) => {
+    if (estadoEnfileiramento) {
+      pararCarga = true;
+      return res.json({ ok: true, fase: 'enfileirando', message: 'Parando após a tabela atual...' });
+    }
+    if (!estadoEnvio || estadoEnvio.ultimoResultado) return res.status(409).json({ ok: false, message: 'Nenhum envio de carga em andamento.' });
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
+    try {
+      const removidos = await removerPendentesDaCarga(db);
+      res.json({ ok: true, fase: 'enviando', removidos });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: e.message });
+    } finally {
+      await closeConnection(db);
+    }
+  });
 
   async function getTabelasExistentesFirebird() {
     let db;
@@ -90,6 +132,7 @@ function criarConfiguracoesRouter(contexto) {
 
     // O trabalho continua mesmo se a aba for recarregada; o estado fica aqui pra tela reencontrar.
     estadoEnfileiramento = { processadas: 0, total: 0, tabela: null, totalEnfileirados: 0, porcentagem: 0 };
+    pararCarga = false;
     const enviar = (evento, dados) => {
       if (evento === 'progresso') estadoEnfileiramento = { ...dados };
       if (!res.writableEnded) res.write(`event: ${evento}\ndata: ${JSON.stringify(dados)}\n\n`);
@@ -132,10 +175,15 @@ function criarConfiguracoesRouter(contexto) {
           ? Math.round((decorrido / processadas) * (total - processadas))
           : null;
         enviar('progresso', { processadas, total, tabela, enfileiradosNaTabela, totalEnfileirados: acumulado, porcentagem, restanteSegundos });
-      }, tabelasFiltro);
+      }, tabelasFiltro, () => pararCarga);
 
       iniciarAcompanhamento(totalEnfileirados, tabelasFiltro);
-      enviar('concluido', { totalEnfileirados, duracaoSegundos: Math.round((Date.now() - inicio) / 1000) });
+      if (pararCarga) {
+        const removidos = await removerPendentesDaCarga(db);
+        enviar('parado', { removidos });
+      } else {
+        enviar('concluido', { totalEnfileirados, duracaoSegundos: Math.round((Date.now() - inicio) / 1000) });
+      }
     } catch (e) {
       enviar('erro', { message: e.message });
     } finally {

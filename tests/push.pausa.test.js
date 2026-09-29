@@ -4,7 +4,7 @@ jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({ atualiz
 jest.mock('../src/client/application/syncEngine/echos', () => ({ registrarEcho: jest.fn() }));
 jest.mock('../src/client/infrastructure/persistence/erros', () => ({ salvarErro: jest.fn() }));
 // Mock pra não gravar sync-pausa.json no cwd durante o teste.
-jest.mock('../src/client/application/syncEngine/controle', () => ({ envioEstaPausado: jest.fn(() => false) }));
+jest.mock('../src/client/application/syncEngine/controle', () => ({ envioEstaPausado: jest.fn(() => false), geracaoEnvio: jest.fn(() => 0) }));
 
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro } = require('../src/client/http');
@@ -42,6 +42,21 @@ describe('empurrarTabela — pausa e lote', () => {
     await empurrarTabela({}, 'http://srv', 5, config, noopLog);
 
     expect(enviarRegistro).toHaveBeenCalledTimes(1);
+  });
+
+  test('"Parar" da carga (nova geração) larga o lote já carregado na memória', async () => {
+    const { geracaoEnvio } = require('../src/client/application/syncEngine/controle');
+    mockQueryPorSql(query, [
+      ['SYNC_ALTERACOES_PENDENTES', [{ PK_VALOR: '1' }, { PK_VALOR: '2' }, { PK_VALOR: '3' }]],
+      ['SELECT * FROM MOVIMENTACOES', [{ ID_MOVIMENTACAO: 1 }]],
+    ]);
+    enviarRegistro.mockImplementation(async () => { geracaoEnvio.mockReturnValue(1); return {}; });
+
+    const r = await empurrarTabela({}, 'http://srv', 5, config, noopLog);
+
+    expect(enviarRegistro).toHaveBeenCalledTimes(1);
+    expect(r).toEqual({ temMais: false });
+    geracaoEnvio.mockReturnValue(0);
   });
 
   test('busca os pendentes com FIRST (lote limitado)', async () => {
