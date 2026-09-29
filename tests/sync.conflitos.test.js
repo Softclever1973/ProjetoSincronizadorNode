@@ -77,7 +77,7 @@ beforeEach(() => {
 
 describe('sincronizarTabela — colisão de PK (pendente local + nunca recebido do servidor)', () => {
   test('registro deletado localmente: apenas avança o cursor, sem conflito', async () => {
-    const registro = { ID_PRODUTO: 99, ID_ULTIMA_ATUALIZACAO_MATRIZ: 500 };
+    const registro = { ID_PRODUTO: 99, NOME: 'Criado no servidor', ID_ULTIMA_ATUALIZACAO_MATRIZ: 500 };
 
     query
       .mockResolvedValueOnce([{}])   // SYNC_ALTERACOES_PENDENTES → pendente=true
@@ -91,7 +91,7 @@ describe('sincronizarTabela — colisão de PK (pendente local + nunca recebido 
   });
 
   test('colisão real: dois registros criados independentemente com o mesmo PK gera conflito', async () => {
-    const registro = { ID_PRODUTO: 99, ID_ULTIMA_ATUALIZACAO_MATRIZ: 500 };
+    const registro = { ID_PRODUTO: 99, NOME: 'Criado no servidor', ID_ULTIMA_ATUALIZACAO_MATRIZ: 500 };
     const localExistente = { ID_PRODUTO: 99, NOME: 'Criado localmente' };
 
     query
@@ -128,7 +128,7 @@ describe('sincronizarTabela — pendente local + registro já conhecido dos dois
   });
 
   test('servidor tem versão mais nova E há mudança local pendente: conflito real', async () => {
-    const registro = { ID_PRODUTO: 20, ID_ULTIMA_ATUALIZACAO_MATRIZ: 200 };
+    const registro = { ID_PRODUTO: 20, NOME: 'Alterado no servidor', ID_ULTIMA_ATUALIZACAO_MATRIZ: 200 };
     const localRow = { ID_PRODUTO: 20, NOME: 'Alterado localmente' };
 
     query
@@ -177,7 +177,7 @@ describe('sincronizarTabela — eco de push (sem pendente local)', () => {
 
 describe('sincronizarTabela — proteção contra overwrite (nunca visto do servidor, sem pendente)', () => {
   test('registro já existe localmente sem histórico de sync: salva conflito em vez de sobrescrever', async () => {
-    const registro = { ID_PRODUTO: 40, ID_ULTIMA_ATUALIZACAO_MATRIZ: 400 };
+    const registro = { ID_PRODUTO: 40, NOME: 'Versão do servidor', ID_ULTIMA_ATUALIZACAO_MATRIZ: 400 };
     const localRow = { ID_PRODUTO: 40, NOME: 'Dado local não sincronizado' };
 
     query
@@ -198,6 +198,22 @@ describe('sincronizarTabela — proteção contra overwrite (nunca visto do serv
     expect(salvarCursor).toHaveBeenCalledWith({}, 'PRODUTOS', 400, 0);
     // proteção age antes do upsertRegistro — nenhuma query de metadado deve rodar
     expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  test('local igual ao servidor (só ID_LOJA vazio = loja da filial): não gera conflito e registra a versão', async () => {
+    const registro = { ID_PRODUTO: 41, NOME: 'Igual', ID_LOJA: 1, ID_ULTIMA_ATUALIZACAO_MATRIZ: 410 };
+    const localRow = { ID_PRODUTO: 41, NOME: 'Igual', ID_LOJA: null };
+
+    query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([localRow]);
+
+    await rodarCiclo(registro);
+
+    expect(salvarConflito).not.toHaveBeenCalled();
+    expect(salvarCursor).toHaveBeenCalledWith({}, 'PRODUTOS', 410, 0);
+    expect(execute.mock.calls.some(([, sql, p]) => sql.includes('SYNC_VERSOES_SERVIDOR') && p[2] === 410)).toBe(true);
   });
 });
 

@@ -9,6 +9,35 @@ const {
 const { salvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('#client/infrastructure/firebird/db-utils.js');
 const { estaPausado } = require('./controle');
+const { camposDivergentes } = require('#client/domain/conflitos.js');
+
+// Traduz FKs do servidor (SRV_ID) pro PK local, pra comparar com o registro do Firebird.
+async function traduzirFKsServidor(db, configTabela, registro) {
+  let r = registro;
+  for (const fkRef of (configTabela.fks || [])) {
+    if (!fkRef.traduzirSrvId || !fkRef.pkRef || r[fkRef.coluna] == null) continue;
+    const rows = await query(db, `SELECT FIRST 1 ${fkRef.pkRef} FROM ${fkRef.tabela} WHERE SRV_ID = ?`, [r[fkRef.coluna]]).catch(() => []);
+    if (rows.length > 0 && rows[0][fkRef.pkRef] != null) r = { ...r, [fkRef.coluna]: rows[0][fkRef.pkRef] };
+  }
+  return r;
+}
+
+// Local e servidor iguais (descontando o que o próprio sync altera): não é conflito, só registra a versão.
+async function resolverSemDiferenca(db, configTabela, idLoja, local, registro, pkValor, log) {
+  const servidorTraduzido = await traduzirFKsServidor(db, configTabela, registro);
+  if (camposDivergentes(local, servidorTraduzido, { idLoja, configTabela }).length > 0) return false;
+  const versao = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+  if (versao) {
+    await execute(db,
+      `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+       VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+      [configTabela.nome, pkValor, versao]
+    ).catch(() => {});
+    await salvarCursor(db, configTabela.nome, versao, 0).catch(() => {});
+  }
+  log(`[${configTabela.nome}] pk=${pkValor} igual ao servidor — sem conflito, versão ${versao} registrada`);
+  return true;
+}
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
@@ -294,6 +323,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               continue;
             }
 
+            // Mesmo registro dos dois lados (ex. após carga inicial): o push pendente segue normal.
+            if (await resolverSemDiferenca(db, configTabela, idLoja, existeLocal[0], registro, pkValor, log)) continue;
+
             // Colisão real: usuário criou um registro e o servidor também criou um com o mesmo PK.
             // Não há precedência automática — salva conflito para resolução manual.
             salvarConflito({
@@ -325,6 +357,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             const localRows = await query(db,
               `SELECT * FROM ${nome} WHERE ${whereParts}`, whereValores
             ).catch(() => []);
+
+            // Servidor chegou no mesmo estado do local: nada a decidir, o push pendente segue normal.
+            if (localRows.length > 0 && await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;
 
             if (localRows.length > 0) {
               salvarConflito({
@@ -373,6 +408,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           ).catch(() => []);
 
           if (localRows.length > 0) {
+            if (await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;
             salvarConflito({
               tabela: nome,
               pk,

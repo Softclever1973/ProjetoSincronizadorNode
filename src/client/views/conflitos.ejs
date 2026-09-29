@@ -29,6 +29,27 @@
     <% } %>
   </p>
 
+  <% if (!mostrarResolvidos && numSemDiferenca > 0) { %>
+    <div role="status" style="margin-bottom:16px;padding:10px 14px;border-radius:6px;background:#e8f4fd;color:#1c5a85;font-size:13px;display:flex;align-items:center;gap:12px">
+      <span style="flex:1"><strong><%= numSemDiferenca %></strong> conflito(s) não têm diferença real (ex.: ID_LOJA vazio no local = loja <%= idLoja %> no servidor). Podem ser descartados sem alterar nenhum dado.</span>
+      <button type="button" id="btn-descartar-sem-dif" onclick="descartarSemDiferenca(this)" style="padding:6px 14px;border:none;border-radius:4px;background:#2980b9;color:white;font-size:12px;font-weight:bold;cursor:pointer">Descartar <%= numSemDiferenca %></button>
+    </div>
+    <script>
+      async function descartarSemDiferenca(btn) {
+        btn.disabled = true;
+        try {
+          var r = await fetch('/conflitos/descartar-sem-diferenca', { method: 'POST' });
+          var d = await r.json();
+          if (!r.ok || !d.ok) throw new Error(d.message || ('HTTP ' + r.status));
+          location.reload();
+        } catch (e) {
+          alert('Não foi possível descartar: ' + e.message);
+          btn.disabled = false;
+        }
+      }
+    </script>
+  <% } %>
+
   <%- paginacaoHTML %>
 
   <% for (const c of conflitos) { %>
