@@ -5,7 +5,7 @@ const { withTenantConnection, query, execute, isMissingTableError, pool } = requ
 const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
 const { planoValido } = require('#server/domain/planos.js');
 const { colunasCache, getColunasServidor, getPkServidor } = require('#server/infrastructure/cache/tenantCache.js');
-const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario, colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const {
   alocarSrvId,
@@ -376,6 +376,21 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
  * retorna { conflito: true, versaoServidor: {...} } para resolução manual.
  * Se forcar=true, aplica sem verificar conflito.
  */
+// Complementa o erro do Postgres com a coluna/valor culpados quando ele informa (not null, tamanho, FK, unique).
+function detalheErroPg(e, registro) {
+  const partes = [];
+  if (e.column) partes.push(`coluna ${String(e.column).toUpperCase()}${registro && e.column.toUpperCase() in registro ? `="${registro[e.column.toUpperCase()]}"` : ''}`);
+  if (e.constraint) partes.push(`constraint ${e.constraint}`);
+  if (e.detail) partes.push(e.detail);
+  if (e.code === '22001' && registro) {
+    // "valor longo demais": o Postgres não diz a coluna — aponta os textos mais longos do registro.
+    const longos = Object.entries(registro).filter(([, v]) => typeof v === 'string' && v.length > 20)
+      .sort((a, b) => b[1].length - a[1].length).slice(0, 3).map(([k, v]) => `${k}(${v.length})`);
+    if (longos.length) partes.push(`textos mais longos: ${longos.join(', ')}`);
+  }
+  return partes.length ? ` [${partes.join(' | ')}]` : '';
+}
+
 router.post('/ReceberRegistro', auth, async (req, res) => {
   const idLoja = parseInt(req.query.idLoja, 10);
   const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
@@ -394,6 +409,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
     return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
   }
 
+  const avisos = [];
   try {
     await withTenantConnection(req.schemaName, async (db) => {
       try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
@@ -510,11 +526,34 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         const updateSet = nonConflictCols.length > 0
           ? nonConflictCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
           : `${conflictTarget} = EXCLUDED.${conflictTarget}`;
-        await execute(db,
-          `INSERT INTO ${nomeTabela} (${colunasFinais.join(', ')}) VALUES (${placeholders})
-           ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`,
-          valoresFinais
-        );
+        const sqlUpsert = `INSERT INTO ${nomeTabela} (${colunasFinais.join(', ')}) VALUES (${placeholders})
+           ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`;
+        try {
+          await execute(db, sqlUpsert, valoresFinais);
+        } catch (e) {
+          // 22P02: texto numa coluna NUMERIC do Postgres (coluna texto no Firebird). '' vira NULL; o resto é nomeado no erro.
+          if (e.code !== '22P02') throw e;
+          const numericas = new Set((await colunasTabela(db, req.schemaName, nomeTabela))
+            .filter(c => ['numeric', 'integer', 'bigint', 'smallint', 'double precision', 'real'].includes(c.DATA_TYPE))
+            .map(c => c.COLUMN_NAME));
+          const naoNumericos = [];
+          const vazios = [];
+          colunasFinais.forEach((c, i) => {
+            const v = valoresFinais[i];
+            if (!numericas.has(c.toUpperCase()) || typeof v !== 'string') return;
+            if (v.trim() === '') { valoresFinais[i] = null; vazios.push(c); }
+            else if (!Number.isFinite(Number(v))) naoNumericos.push(`${c}="${v}"`);
+          });
+          if (naoNumericos.length > 0) {
+            throw new Error(`coluna(s) ${naoNumericos.join(', ')}: texto em coluna numérica no servidor (no Firebird a coluna é texto)`);
+          }
+          if (vazios.length > 0) {
+            const aviso = `coluna(s) ${vazios.join(', ')}: texto vazio ('') em coluna numérica no servidor — gravado como NULL`;
+            avisos.push(aviso);
+            console.warn(`[ReceberRegistro] ${req.schemaName}.${nomeTabela} ${pks.map(p => `${p}=${registro[p]}`).join(',')}: ${aviso}`);
+          }
+          await execute(db, sqlUpsert, valoresFinais);
+        }
 
         dispararEfeitosPosUpsert(req.schemaName, { nomeTabela, atual, registro });
 
@@ -535,7 +574,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         }
       }
 
-      res.json({ ok: true, novoId, srvId });
+      res.json({ ok: true, novoId, srvId, ...(avisos.length > 0 ? { avisos } : {}) });
     });
   } catch (e) {
     if (isMissingTableError(e)) {
@@ -545,7 +584,7 @@ router.post('/ReceberRegistro', auth, async (req, res) => {
         colunasCache.invalidate(req.schemaName, nomeTabela);
       }
     }
-    res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
+    res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}${detalheErroPg(e, req.body?.registro)}` });
   }
 });
 

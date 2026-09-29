@@ -78,6 +78,36 @@ describe('POST /ReceberRegistro — recuperação de sequência seq_srv_id_<tabe
   });
 });
 
+describe('POST /ReceberRegistro — texto do Firebird em coluna NUMERIC do servidor', () => {
+  // ID_* nulo no 1º registro vira NUMERIC (inferirTipoPg); no Firebird a coluna pode ser VARCHAR.
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.tipo_texto_sync_teste CASCADE`);
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 1, ID_REDUZIDO: null } });
+    expect(r.status).toBe(200);
+  });
+
+  test("'' em coluna numérica é gravado como NULL (antes: 'sintaxe de entrada é inválida para tipo numeric')", async () => {
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 2, ID_REDUZIDO: '' } });
+    expect(r.status).toBe(200);
+    expect(r.body.avisos[0]).toMatch(/ID_REDUZIDO/);
+    const { rows } = await pool.query(`SELECT id_reduzido FROM ${TEST_SCHEMA}.tipo_texto_sync_teste WHERE id = 2`);
+    expect(rows[0].id_reduzido).toBeNull();
+  });
+
+  test('texto não numérico devolve erro nomeando a coluna', async () => {
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 3, ID_REDUZIDO: 'ABC' } });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toMatch(/ID_REDUZIDO="ABC"/);
+  });
+
+  test('NOT NULL violado: erro traz a coluna', async () => {
+    await pool.query(`ALTER TABLE ${TEST_SCHEMA}.tipo_texto_sync_teste ADD COLUMN IF NOT EXISTS obrigatoria TEXT NOT NULL DEFAULT 'x'`);
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 4, OBRIGATORIA: null } });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toMatch(/coluna OBRIGATORIA="null"/);
+  });
+});
+
 describe('POST /AtualizarPlano — PARAMETROS(45004) do Firebird → sync_tenants.plano', () => {
   afterEach(async () => {
     await pool.query(`UPDATE public.sync_tenants SET plano = 'LITE1' WHERE schema_name = $1`, [TEST_SCHEMA]);
