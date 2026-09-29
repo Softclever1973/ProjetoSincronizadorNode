@@ -37,6 +37,31 @@ describe('permissaoEfetiva — interseção plano ∩ role', () => {
   });
 });
 
+describe('permissaoEfetiva — funções binárias (Liberado)', () => {
+  const plano = mapa({ pedidos: 'rw', pedidos_inserir: 'rw' });
+
+  test("'r-' herdado do role vale como liberado ('rw'), igual a tela mostra", () => {
+    const role = mapa({ pedidos: 'rw', pedidos_inserir: 'r-' });
+    expect(permissaoEfetiva(plano, role, 'pedidos_inserir')).toBe('rw');
+  });
+
+  test("override de empresa 'r-' também vale como liberado", () => {
+    const role = mapa({ pedidos: 'rw', pedidos_inserir: '--' });
+    expect(permissaoEfetiva(plano, role, 'pedidos_inserir', mapa({ pedidos_inserir: 'r-' }))).toBe('rw');
+  });
+
+  test("pai em 'r-' continua capando a função binária (sem escrita)", () => {
+    const role = mapa({ pedidos: 'r-', pedidos_inserir: 'rw' });
+    expect(podeEscrever(permissaoEfetiva(plano, role, 'pedidos_inserir'))).toBe(false);
+  });
+
+  test("função não binária mantém 'r-' (produtos_movimentacao)", () => {
+    const p = mapa({ produtos: 'rw', produtos_movimentacao: 'rw' });
+    const role = mapa({ produtos: 'rw', produtos_movimentacao: 'r-' });
+    expect(permissaoEfetiva(p, role, 'produtos_movimentacao')).toBe('r-');
+  });
+});
+
 describe('resolverPermissoesEfetivas', () => {
   test('retorna uma entrada para cada módulo conhecido, mesmo com matrizes esparsas', () => {
     const matrizPlano = mapa({ produtos: 'rw' });

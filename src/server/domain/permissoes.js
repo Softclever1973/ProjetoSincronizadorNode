@@ -38,6 +38,8 @@ function permissaoEfetiva(matrizPlano, matrizRole, modulo, matrizEmpresa) {
     const rankRole   = NIVEL_RANK[nivelRole]  ?? 0;
     nivel = rankPlano <= rankRole ? (nivelPlano in NIVEL_RANK ? nivelPlano : '--') : (nivelRole in NIVEL_RANK ? nivelRole : '--');
   }
+  // Função binária não tem "só leitura": a tela mostra 'r-' (linha antiga) como Liberado, então vale 'rw'.
+  if (nivel === 'r-' && MODULOS_DEF[modulo]?.binario) nivel = 'rw';
 
   const pai = MODULOS_DEF[modulo]?.subDe;
   if (pai) {
