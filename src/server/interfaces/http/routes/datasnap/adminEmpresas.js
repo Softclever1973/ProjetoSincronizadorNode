@@ -6,6 +6,7 @@ const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('#server/domain/planos.js');
 const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('#server/domain/modulos.js');
 const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoesCache.js');
+const sessoes = require('#server/infrastructure/cache/sessoesCache.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
 
@@ -757,6 +758,47 @@ router.post('/usuarios', async (req, res) => {
     res.status(500).json({ erro: e.message });
   } finally {
     client.release();
+  }
+});
+
+// ── GET /superadmin/sessoes ───────────────────────────────────────────────────
+// Usuários com atividade nos últimos 2 minutos (memória do processo; zera ao reiniciar).
+router.get('/sessoes', async (req, res) => {
+  try {
+    const online = sessoes.listarOnline();
+    if (!online.length) return res.json([]);
+    const { rows } = await pool.query(
+      'SELECT id, email, nome, is_super_admin FROM public.usuarios WHERE id = ANY($1::int[])',
+      [online.map(s => s.id)]
+    );
+    const porId = new Map(rows.map(r => [r.id, r]));
+    res.json(online.map(s => ({
+      id:           s.id,
+      email:        porId.get(s.id)?.email ?? null,
+      nome:         porId.get(s.id)?.nome ?? s.nome ?? null,
+      isSuperAdmin: porId.get(s.id)?.is_super_admin === true,
+      schema:       s.schema,
+      ip:           s.ip,
+      userAgent:    s.userAgent,
+      ultimo:       new Date(s.ultimo).toISOString(),
+      voce:         s.id === req.userId,
+    })));
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
+  }
+});
+
+// ── POST /superadmin/usuarios/:id/desconectar ─────────────────────────────────
+// Derruba todas as sessões do usuário (não bloqueia novo login — para isso, desativar o usuário).
+router.post('/usuarios/:id/desconectar', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ erro: 'id inválido' });
+  if (id === req.userId) return res.status(400).json({ erro: 'Você não pode desconectar a si mesmo' });
+  try {
+    if (!await sessoes.revogarSessoes(id)) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ erro: e.message });
   }
 });
 

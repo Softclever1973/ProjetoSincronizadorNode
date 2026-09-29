@@ -193,6 +193,9 @@ router.post('/refresh', authJwt, async (req, res) => {
   }
 });
 
+// Sinal de vida da aba aberta: o authJwt registra a atividade (lista de online) e recusa sessão revogada.
+router.post('/ping', authJwt, (req, res) => res.json({ ok: true }));
+
 router.post('/logout', authJwt, (req, res) => {
   const token = req.headers.authorization.slice(7);
   tokenBlacklist.revogar(token);

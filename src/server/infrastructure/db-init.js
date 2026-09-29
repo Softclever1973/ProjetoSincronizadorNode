@@ -94,6 +94,9 @@ const DDL_CONTROLE = [
      ADD COLUMN IF NOT EXISTS reset_token_hash TEXT`,
   `ALTER TABLE public.usuarios
      ADD COLUMN IF NOT EXISTS reset_token_expira TIMESTAMPTZ`,
+  // Migração: "Desconectar" do superadmin — tokens emitidos antes deste instante são recusados
+  `ALTER TABLE public.usuarios
+     ADD COLUMN IF NOT EXISTS sessao_revogada_em TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS public.audit_log (
     id          SERIAL       PRIMARY KEY,
     id_usuario  INTEGER      REFERENCES public.usuarios(id),

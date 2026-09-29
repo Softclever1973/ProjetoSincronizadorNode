@@ -50,6 +50,7 @@ function encerrarComErro(err) {
   const { initializeDatabase, migrarTodosSchemas } = require('./server/infrastructure/db-init');
   const { recarregarEmpresas } = require('./server/infrastructure/cache/empresasCache');
   const { recarregarPermissoes } = require('./server/infrastructure/cache/permissoesCache');
+  const { carregarRevogacoes }   = require('./server/infrastructure/cache/sessoesCache');
   const { agendarLimpeza }     = require('./limpeza');
 
   const sincronizacaoRoutes      = require('./server/interfaces/http/routes/datasnap/sincronizacao');
@@ -154,6 +155,7 @@ function encerrarComErro(err) {
   try {
     await initializeDatabase();
     await migrarTodosSchemas().catch(e => console.error(`[migração] ${e.message}`));
+    await carregarRevogacoes();
     app.listen(config.portaHttp, () => {
       console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
       console.log(`Banco: ${config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@')}`);
