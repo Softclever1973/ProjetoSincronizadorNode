@@ -169,7 +169,7 @@ const TABELAS = [
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS_SISPAG', pk: 'ID_FORMA_DE_PAGAMENTO_SISPAG', grupo: GRUPOS.FORNECEDORES }),
 
   // ── Transportadores ─────────────────────────────────────────────────────────
-  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR', srvId: true }),
+  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR', defaultAtivo: true, srvId: true }),
   tabela({ nome: 'TRANSP_CONTATOS_ADICIONAIS', pk: 'ID_TRANS_CONTATO_ADICIONAL', grupo: GRUPOS.TRANSPORTADORES, generator: 'NOVO_TRANSP_CONTATO_ADICIONAL', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
   tabela({ nome: 'TRANSPORTADORES_PLACAS', pk: 'ID_TRANSPORTADOR_PLACA', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
 
