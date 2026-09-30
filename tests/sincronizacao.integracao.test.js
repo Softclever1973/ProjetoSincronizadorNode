@@ -246,6 +246,15 @@ describe('GET /StatusTabelas — restringe total/maxId à loja quando a tabela t
     expect(linhaLoja2.total).toBe(1);
     expect(linhaLoja2.maxId).toBe(maxIdEmpresaInteira);
   });
+
+  test('contar=0 — só maxId, total null (página Status abre sem esperar COUNT)', async () => {
+    const filtros = JSON.stringify([{ nome: 'STATUS_FILTRO_SYNC_TESTE', filtroFilial: 'ID_LOJA' }]);
+    const comTotal = acharTabela(await statusTabelas({ idLoja: 1, filtros }), 'STATUS_FILTRO_SYNC_TESTE');
+    const res = await statusTabelas({ idLoja: 1, filtros, contar: 0 });
+    const linha = res.body.find(t => t.tabela === 'STATUS_FILTRO_SYNC_TESTE');
+    expect(linha.total).toBeNull();
+    expect(Number(linha.maxId)).toBe(comTotal.maxId);
+  });
 });
 
 describe('GET /RegistrosParaAtualizar — autocura quando a coluna do filtroFilial não existe ainda', () => {
@@ -370,5 +379,46 @@ describe('POST /ReceberRegistros — lote', () => {
     expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [] })).status).toBe(400);
     const grande = Array.from({ length: 201 }, (_, i) => ({ registro: { ID: 1000 + i } }));
     expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: grande })).status).toBe(400);
+  });
+});
+
+describe('POST /GarantirTabela — tabela existente ganha as colunas faltantes com o tipo do Firebird', () => {
+  const garantir = colunas => request(app)
+    .post('/datasnap/rest/TSMSincronizacao/GarantirTabela')
+    .query({ token: TEST_TOKEN })
+    .send({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', pks: ['ID'], colunas });
+
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.garantir_sync_teste CASCADE`);
+    // Nasceu pelo push com ID_REDUZIDO nulo → NUMERIC (inferirTipoPg).
+    const r = await receberRegistro({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', registro: { ID: 1, ID_REDUZIDO: null } });
+    expect(r.status).toBe(200);
+  });
+
+  const tipoColuna = async nome => (await pool.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'garantir_sync_teste' AND column_name = $2`,
+    [TEST_SCHEMA, nome])).rows[0]?.data_type;
+
+  test('cria ID_* texto como TEXT (não NUMERIC) e aponta a coluna já criada com tipo errado', async () => {
+    const r = await garantir([
+      { nome: 'ID', tipo: 'numero' },
+      { nome: 'ID_REDUZIDO', tipo: 'texto' },
+      { nome: 'ID_EXTERNO', tipo: 'texto' },
+      { nome: 'PRECO', tipo: 'numero' },
+    ]);
+    expect(r.status).toBe(200);
+    expect(r.body.adicionadas).toEqual(['ID_EXTERNO', 'PRECO']);
+    expect(r.body.divergentes).toEqual(['ID_REDUZIDO']);
+    expect(await tipoColuna('id_externo')).toBe('text');
+    expect(await tipoColuna('preco')).toBe('numeric');
+
+    // Push seguinte com texto na coluna nova passa.
+    const push = await receberRegistro({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', registro: { ID: 2, ID_EXTERNO: 'AB-12' } });
+    expect(push.status).toBe(200);
+  });
+
+  test('segunda chamada não adiciona nada', async () => {
+    const r = await garantir([{ nome: 'ID', tipo: 'numero' }, { nome: 'ID_EXTERNO', tipo: 'texto' }]);
+    expect(r.body.adicionadas).toEqual([]);
   });
 });

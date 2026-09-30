@@ -245,7 +245,7 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
 
 /**
  * GET /datasnap/rest/TSMSincronizacao/StatusTabelas
- * Query params: token, idLoja, filtros (JSON: [{ nome, filtroFilial, filtroFilialViaFK }])
+ * Query params: token, idLoja, filtros (JSON: [{ nome, filtroFilial, filtroFilialViaFK }]), contar (0 = total null)
  *
  * Retorna para cada tabela: total de registros e o maior ID_ULTIMA_ATUALIZACAO_MATRIZ.
  * Usado pelo cliente para verificar se está tudo sincronizado. `filtros` restringe o
@@ -255,6 +255,8 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
  */
 router.get('/StatusTabelas', auth, async (req, res) => {
   const idLoja = req.query.idLoja ? parseInt(req.query.idLoja, 10) : null;
+  // contar=0: só MAX (rápido); COUNT(*) varre a tabela inteira e fica pra uma chamada separada.
+  const contar = req.query.contar !== '0';
   let filtrosPorTabela = new Map();
   try {
     const lista = JSON.parse(req.query.filtros || '[]');
@@ -310,13 +312,13 @@ router.get('/StatusTabelas', auth, async (req, res) => {
           }
 
           const rows = await query(db,
-            `SELECT COUNT(*) AS TOTAL, MAX(ID_ULTIMA_ATUALIZACAO_MATRIZ) AS MAX_ID
+            `SELECT ${contar ? 'COUNT(*)' : 'NULL'} AS TOTAL, MAX(ID_ULTIMA_ATUALIZACAO_MATRIZ) AS MAX_ID
              FROM ${tabela}${whereFilial}`,
             params
           );
           status.push({
             tabela,
-            total: rows[0].TOTAL || 0,
+            total: contar ? (rows[0].TOTAL || 0) : null,
             maxId: rows[0].MAX_ID || 0,
           });
         } catch {
@@ -645,6 +647,21 @@ const TIPO_PG_POR_TAG = {
   binario: 'BYTEA',
 };
 
+// Tabela já existe: cria as colunas que faltam com o tipo real do Firebird e aponta texto no Firebird × numérico aqui.
+async function completarColunas(db, schemaName, nomeTabela, colunasServidor, colunasTipadas) {
+  const faltantes = colunasTipadas.filter(c => !COLUNAS_IGNORADAS_SERVIDOR.has(c.nome) && !colunasServidor.has(c.nome));
+  for (const { nome, tipoPg } of faltantes) {
+    await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${nome} ${tipoPg}`);
+  }
+  if (faltantes.length > 0) colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+
+  const tipoPg = new Map((await colunasTabela(db, schemaName, nomeTabela)).map(c => [c.COLUMN_NAME, c.DATA_TYPE]));
+  const divergentes = colunasTipadas
+    .filter(c => c.tipoPg === 'TEXT' && tipoPg.get(c.nome) === 'numeric')
+    .map(c => c.nome);
+  return { criada: false, adicionadas: faltantes.map(c => c.nome), divergentes };
+}
+
 /**
  * POST /datasnap/rest/TSMSincronizacao/GarantirTabela
  * Body: { tabela, colunas: [{ nome, tipo }], pks, temSrvId }
@@ -652,8 +669,8 @@ const TIPO_PG_POR_TAG = {
  * Cria a tabela no servidor com a estrutura correta mesmo sem nenhum registro pra inferir
  * tipo por valor — necessário pra tabelas que existem na filial mas estão vazias (instalação
  * nova, sem dados ainda): sem isso, criarTabelaSeNecessario só roda dentro de ReceberRegistro,
- * que nunca é chamado se não há nada pra empurrar, e a tabela nunca nasce no servidor. No-op
- * se a tabela já existe (idempotente, mesma checagem de colunasServidor usada em ReceberRegistro).
+ * que nunca é chamado se não há nada pra empurrar, e a tabela nunca nasce no servidor. Se a
+ * tabela já existe, só completa as colunas faltantes (ver completarColunas).
  */
 router.post('/GarantirTabela', auth, async (req, res) => {
   const { tabela, colunas, pks, temSrvId = false } = req.body || {};
@@ -677,14 +694,16 @@ router.post('/GarantirTabela', auth, async (req, res) => {
   }
 
   try {
-    await withTenantConnection(req.schemaName, async (db) => {
+    const resultado = await withTenantConnection(req.schemaName, async (db) => {
       const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       if (colunasServidor.size === 0) {
         await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadas, pksArr, temSrvId);
         colunasCache.invalidate(req.schemaName, nomeTabela);
+        return { criada: true, adicionadas: [], divergentes: [] };
       }
+      return completarColunas(db, req.schemaName, nomeTabela, colunasServidor, colunasTipadas);
     });
-    res.json({ ok: true });
+    res.json({ ok: true, ...resultado });
   } catch (e) {
     res.status(500).json({ message: `Erro ao garantir tabela: ${e.message}` });
   }

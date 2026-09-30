@@ -4,7 +4,7 @@ const https = require('https');
 // GET simples que devolve o corpo já parseado como JSON — usado pelas rotas que consultam
 // o servidor diretamente (status, auditoria), não pelo fluxo de sync (ver ../../http.js,
 // cujo get() sempre normaliza o retorno pra array e trata 401/erro de status).
-function getJSON(url) {
+function getJSON(url, timeoutMs = 15_000) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
     const urlObj = new URL(url);
@@ -24,7 +24,7 @@ function getJSON(url) {
       });
     });
 
-    req.setTimeout(15_000, () => req.destroy(new Error('Timeout de 15s ao conectar ao servidor')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timeout de ${timeoutMs / 1000}s ao conectar ao servidor`)));
     req.on('error', reject);
     req.end();
   });

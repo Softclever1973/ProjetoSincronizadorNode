@@ -438,7 +438,9 @@ async function main() {
           const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
           const colunas = await getColunasTipadas(db, tabela.nome);
           if (colunas.length > 0) {
-            await garantirTabela(baseURI, tabela.nome, colunas, pks, !!tabela.srvId);
+            const r = await garantirTabela(baseURI, tabela.nome, colunas, pks, !!tabela.srvId);
+            if (r?.adicionadas?.length) log(`[${tabela.nome}] Colunas criadas no servidor com o tipo do Firebird: ${r.adicionadas.join(', ')}`);
+            if (r?.divergentes?.length) log(`[${tabela.nome}] Aviso: colunas texto no Firebird e numéricas no servidor: ${r.divergentes.join(', ')}`);
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);

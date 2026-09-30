@@ -52,7 +52,8 @@ describe('requireModulo', () => {
     expect(pool.query).toHaveBeenCalledWith(
       'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', ['empresa_kr']
     );
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('SAFIRA1', 'dono', 'financeiro');
+    // 4º argumento: schema, pro override por empresa.
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('SAFIRA1', 'dono', 'financeiro', 'empresa_kr');
     expect(next).toHaveBeenCalled();
   });
 
@@ -81,7 +82,7 @@ describe('requireModuloDaTabela', () => {
 
     await middleware(req, res, next);
 
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'produtos');
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'produtos', 'empresa_kr');
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
   });
@@ -110,7 +111,7 @@ describe('requireModuloDaTabela', () => {
 
     await middleware(req, res, next);
 
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'pedidos');
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'pedidos', 'empresa_kr');
     expect(next).toHaveBeenCalled();
   });
 });

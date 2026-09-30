@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../src/server/infrastructure/db');
 const crudRouter = require('../src/server/interfaces/http/routes/api/crud');
 const { TEST_SCHEMA, setupTestSchema, truncateTestSchema } = require('./helpers/testSchema');
+const { fixarOverrides, limparOverrides } = require('./helpers/permissoesReais');
 
 const app = express();
 app.use(express.json());
@@ -227,6 +228,12 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
 
 describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.js: requireRoleOuVendedorEm)', () => {
   const AUTH_VENDEDOR = `Bearer ${tokenPara('vendedor')}`;
+
+  // Níveis do seed fixados por override da empresa de teste — a matriz global é editável pela tela.
+  beforeAll(() => fixarOverrides(TEST_SCHEMA, 'vendedor', {
+    pedidos: 'rw', pedidos_inserir: 'rw', pedidos_editar: 'rw', produtos: 'r-', clientes: 'r-',
+  }));
+  afterAll(() => limparOverrides(TEST_SCHEMA));
 
   test('vendedor consegue criar um pedido', async () => {
     const res = await request(app)
