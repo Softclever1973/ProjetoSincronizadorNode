@@ -77,7 +77,8 @@ function encerrarComErro(err) {
     next();
   });
 
-  app.use(express.json());
+  // 10mb: o push em lote (ReceberRegistros) passa fácil do padrão de 100kb com tabelas largas.
+  app.use(express.json({ limit: '10mb' }));
 
   // ---------------------------------------------------------------------------
   // Rotas — espelham o padrão DataSnap: /datasnap/rest/{Classe}/{Metodo}

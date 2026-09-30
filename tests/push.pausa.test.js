@@ -1,5 +1,8 @@
 jest.mock('../src/client/infrastructure/firebird/db', () => ({ query: jest.fn(), execute: jest.fn() }));
-jest.mock('../src/client/http', () => ({ enviarRegistro: jest.fn() }));
+jest.mock('../src/client/http', () => ({
+  enviarRegistro: jest.fn(),
+  enviarRegistros: jest.fn(() => Promise.reject(Object.assign(new Error('404'), { status: 404 }))),
+}));
 jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({ atualizarOuSalvarConflito: jest.fn() }));
 jest.mock('../src/client/application/syncEngine/echos', () => ({ registrarEcho: jest.fn() }));
 jest.mock('../src/client/infrastructure/persistence/erros', () => ({ salvarErro: jest.fn() }));

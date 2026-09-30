@@ -328,3 +328,47 @@ describe('filtroFilialViaFK — tabela filha filtra pela loja do pai certo (NOTA
     expect(Number(s.maxId)).toBe(4);
   });
 });
+
+describe('POST /ReceberRegistros — lote', () => {
+  const receberLote = body => request(app)
+    .post('/datasnap/rest/TSMSincronizacao/ReceberRegistros')
+    .query({ token: TEST_TOKEN, idLoja: 1 })
+    .send(body);
+
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.lote_sync_teste CASCADE`);
+    const r = await receberRegistro({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registro: { ID: 1, QTD: 5, NOME: 'base' } });
+    expect(r.status).toBe(200);
+  });
+
+  test('aplica cada registro isoladamente: um erro não derruba os outros', async () => {
+    const r = await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [
+      { registro: { ID: 10, QTD: 1, NOME: 'ok 1' } },
+      { registro: { ID: 11, QTD: 'abc', NOME: 'quebra' } },
+      { registro: { ID: 12, QTD: 3, NOME: 'ok 2' } },
+    ] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.resultados).toHaveLength(3);
+    expect(r.body.resultados[0]).toMatchObject({ ok: true });
+    expect(r.body.resultados[1].erro).toMatch(/QTD="abc"/);
+    expect(r.body.resultados[2]).toMatchObject({ ok: true });
+    const { rows } = await pool.query(`SELECT id FROM ${TEST_SCHEMA}.lote_sync_teste WHERE id IN (10, 11, 12) ORDER BY id`);
+    expect(rows.map(x => Number(x.id))).toEqual([10, 12]);
+  });
+
+  test('conflito de versão volta por registro, igual à rota unitária', async () => {
+    const { rows: [atual] } = await pool.query(`SELECT id_ultima_atualizacao_matriz v FROM ${TEST_SCHEMA}.lote_sync_teste WHERE id = 1`);
+    const r = await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [
+      { registro: { ID: 1, QTD: 9, NOME: 'local' }, ultimaVersaoConhecida: Number(atual.v) - 1 },
+    ] });
+    expect(r.status).toBe(200);
+    expect(r.body.resultados[0]).toMatchObject({ conflito: true });
+  });
+
+  test('lote vazio ou acima do limite é recusado', async () => {
+    expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [] })).status).toBe(400);
+    const grande = Array.from({ length: 201 }, (_, i) => ({ registro: { ID: 1000 + i } }));
+    expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: grande })).status).toBe(400);
+  });
+});
