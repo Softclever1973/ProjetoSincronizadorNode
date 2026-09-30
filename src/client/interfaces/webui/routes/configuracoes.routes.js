@@ -169,12 +169,13 @@ function criarConfiguracoesRouter(contexto) {
         await dbExecute(db, `DELETE FROM SYNC_ERROS`).catch(() => {});
         try { clearConflitos(); } catch {}
       }
-      const totalEnfileirados = await enfileirarTodosRegistros(db, log, ({ processadas, total, tabela, enfileiradosNaTabela, totalEnfileirados: acumulado, porcentagem }) => {
+      const totalEnfileirados = await enfileirarTodosRegistros(db, log, ({ processadas, total, tabela, enfileiradosNaTabela, totalNaTabela, totalEnfileirados: acumulado, porcentagem }) => {
         const decorrido = (Date.now() - inicio) / 1000;
-        const restanteSegundos = processadas >= 1 && decorrido > 0
-          ? Math.round((decorrido / processadas) * (total - processadas))
+        // Estimativa pela porcentagem (que já anda por lote dentro da tabela), não por tabelas concluídas.
+        const restanteSegundos = porcentagem >= 1 && decorrido > 2
+          ? Math.round((decorrido / porcentagem) * (100 - porcentagem))
           : null;
-        enviar('progresso', { processadas, total, tabela, enfileiradosNaTabela, totalEnfileirados: acumulado, porcentagem, restanteSegundos });
+        enviar('progresso', { processadas, total, tabela, enfileiradosNaTabela, totalNaTabela, totalEnfileirados: acumulado, porcentagem, restanteSegundos });
       }, tabelasFiltro, () => pararCarga);
 
       iniciarAcompanhamento(totalEnfileirados, tabelasFiltro);

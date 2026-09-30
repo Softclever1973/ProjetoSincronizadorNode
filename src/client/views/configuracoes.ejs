@@ -314,8 +314,11 @@
     document.getElementById('painel-carga').style.display = 'block';
     document.getElementById('carga-barra').style.width = dados.porcentagem + '%';
     document.getElementById('carga-pct').textContent = dados.porcentagem + '%';
+    var fmtN = function(n) { return Number(n || 0).toLocaleString('pt-BR'); };
     document.getElementById('carga-tabela').textContent = dados.tabela
-      ? dados.tabela + (dados.enfileiradosNaTabela > 0 ? ' (' + dados.enfileiradosNaTabela + ' registros)' : '')
+      ? dados.tabela + (dados.totalNaTabela > 0
+          ? ' (' + fmtN(dados.enfileiradosNaTabela) + ' de ' + fmtN(dados.totalNaTabela) + ' registros)'
+          : (dados.enfileiradosNaTabela > 0 ? ' (' + fmtN(dados.enfileiradosNaTabela) + ' registros)' : ''))
       : 'Preparando...';
     document.getElementById('carga-contador').textContent = dados.processadas + ' / ' + dados.total + ' tabelas — ' + dados.totalEnfileirados + ' registros enfileirados';
     document.getElementById('carga-tempo').textContent = dados.restanteSegundos != null ? formatarTempo(dados.restanteSegundos) : 'enfileirando...';

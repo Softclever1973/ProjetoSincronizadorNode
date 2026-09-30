@@ -10,6 +10,53 @@ async function generatorExiste(db, nome) {
   return (rows[0].CNT || 0) > 0;
 }
 
+// Registros por lote no enfileiramento da carga inicial — cada lote é uma transação curta.
+const LOTE_ENFILEIRAR = 5000;
+
+// MERGE (não INSERT) pra não falhar se o trigger enfileirar a mesma PK durante a carga.
+function _sqlMergePendentes(nomeTabela, pkExpressao, where = '') {
+  return `MERGE INTO SYNC_ALTERACOES_PENDENTES s
+          USING (SELECT ${pkExpressao} AS PK_VAL FROM ${nomeTabela} ${where}) src
+          ON s.NOME_TABELA = '${nomeTabela}' AND s.PK_VALOR = src.PK_VAL
+          WHEN NOT MATCHED THEN INSERT (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
+          VALUES ('${nomeTabela}', src.PK_VAL, CURRENT_TIMESTAMP)`;
+}
+
+/**
+ * Enfileira uma tabela em lotes por faixa de PK (keyset), avisando o progresso a cada lote.
+ * PK composta (tabelas pequenas) vai num MERGE só. Retorna false se parou no meio.
+ */
+async function _enfileirarTabela(db, tabela, totalNaTabela, aoAvancar, deveParar) {
+  const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
+  const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
+  if (pks.length > 1) {
+    await execute(db, _sqlMergePendentes(tabela.nome, pkExpressao));
+    aoAvancar(totalNaTabela);
+    return true;
+  }
+
+  const pk = pks[0];
+  let ultimo = null;
+  let feitos = 0;
+  while (true) {
+    if (deveParar()) return false;
+    const filtro = ultimo === null ? `WHERE ${pk} IS NOT NULL` : `WHERE ${pk} > ?`;
+    const params = ultimo === null ? [] : [ultimo];
+    const [faixa] = await query(db,
+      `SELECT COUNT(*) AS N, MAX(${pk}) AS ULTIMO FROM (SELECT FIRST ${LOTE_ENFILEIRAR} ${pk} FROM ${tabela.nome} ${filtro} ORDER BY ${pk}) AS L`,
+      params);
+    const n = Number(faixa?.N || 0);
+    if (n === 0) return true;
+    const limites = ultimo === null ? `WHERE ${pk} <= ?` : `WHERE ${pk} > ? AND ${pk} <= ?`;
+    await execute(db, _sqlMergePendentes(tabela.nome, pkExpressao, limites),
+      ultimo === null ? [faixa.ULTIMO] : [ultimo, faixa.ULTIMO]);
+    ultimo = faixa.ULTIMO;
+    feitos += n;
+    aoAvancar(feitos);
+    if (n < LOTE_ENFILEIRAR) return true;
+  }
+}
+
 async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFiltro = null, deveParar = () => false) {
   const lista = tabelasFiltro && tabelasFiltro.length > 0
     ? TABELAS.filter(t => tabelasFiltro.includes(t.nome))
@@ -21,33 +68,42 @@ async function enfileirarTodosRegistros(db, log, onProgresso = null, tabelasFilt
     if (deveParar()) { log('[SETUP] Carga inicial interrompida pelo operador'); break; }
     const tabela = lista[i];
     let enfileiradosNaTabela = 0;
+    let totalNaTabela = 0;
+    // Progresso dentro da tabela: a barra anda por lote, não só quando a tabela termina.
+    const avisar = (feitos) => {
+      if (!onProgresso) return;
+      const fracao = totalNaTabela > 0 ? Math.min(1, feitos / totalNaTabela) : 1;
+      onProgresso({
+        processadas: i + (fracao >= 1 ? 1 : 0), total, tabela: tabela.nome,
+        enfileiradosNaTabela: feitos, totalNaTabela, totalEnfileirados: totalEnfileirados + feitos,
+        porcentagem: Math.round(((i + fracao) / total) * 100),
+      });
+    };
 
     if (!(await tabelaExiste(db, tabela.nome))) {
       log(`[SETUP] Tabela ${tabela.nome} não existe — pulando enfileiramento`);
     } else {
-      const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
-      const pkExpressao = pks.map(p => `CAST(${p} AS VARCHAR(100))`).join(" || '|' || ");
       try {
-        await execute(db,
-          `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
-           SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP FROM ${tabela.nome}`
-        );
+        totalNaTabela = Number((await query(db, `SELECT COUNT(*) AS CNT FROM ${tabela.nome}`))[0]?.CNT || 0);
+        avisar(0);
+        const completou = await _enfileirarTabela(db, tabela, totalNaTabela, avisar, deveParar);
         const cnt = await query(db,
           `SELECT COUNT(*) AS CNT FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ?`,
           [tabela.nome]
         );
         enfileiradosNaTabela = Number(cnt[0]?.CNT || 0);
         if (enfileiradosNaTabela > 0) {
-          log(`[SETUP] ${tabela.nome}: ${enfileiradosNaTabela} registro(s) enfileirado(s)`);
+          log(`[SETUP] ${tabela.nome}: ${enfileiradosNaTabela} registro(s) enfileirado(s)${completou ? '' : ' (interrompido no meio)'}`);
           totalEnfileirados += enfileiradosNaTabela;
         }
+        if (!completou) { log('[SETUP] Carga inicial interrompida pelo operador'); break; }
       } catch (e) {
         log(`[SETUP] Aviso: não foi possível enfileirar ${tabela.nome}: ${e.message}`);
       }
     }
 
     if (onProgresso) {
-      onProgresso({ processadas: i + 1, total, tabela: tabela.nome, enfileiradosNaTabela, totalEnfileirados, porcentagem: Math.round(((i + 1) / total) * 100) });
+      onProgresso({ processadas: i + 1, total, tabela: tabela.nome, enfileiradosNaTabela, totalNaTabela, totalEnfileirados, porcentagem: Math.round(((i + 1) / total) * 100) });
     }
   }
 
