@@ -3,7 +3,7 @@ jest.mock('../src/client/http', () => ({ enviarRegistro: jest.fn(), enviarRegist
 jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({ atualizarOuSalvarConflito: jest.fn(() => 'c1') }));
 jest.mock('../src/client/application/syncEngine/echos', () => ({ registrarEcho: jest.fn() }));
 jest.mock('../src/client/infrastructure/persistence/erros', () => ({ salvarErro: jest.fn() }));
-jest.mock('../src/client/application/syncEngine/controle', () => ({ envioEstaPausado: jest.fn(() => false), geracaoEnvio: jest.fn(() => 0) }));
+jest.mock('../src/client/application/syncEngine/controle', () => ({ envioEstaPausado: jest.fn(() => false), cargaEstaPausada: jest.fn(() => false), geracaoEnvio: jest.fn(() => 0) }));
 
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
 const { enviarRegistro, enviarRegistros } = require('../src/client/http');

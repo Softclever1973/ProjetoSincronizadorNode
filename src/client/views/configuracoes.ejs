@@ -45,7 +45,7 @@
   <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
     <span style="font-size:13px;font-weight:bold;color:#555">Enviando ao servidor...</span>
     <span style="display:flex;align-items:center;gap:10px">
-      <button type="button" id="envio-btn-pausa" onclick="alternarPausaEnvio(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar envio</button>
+      <button type="button" id="envio-btn-pausa" onclick="alternarPausaCarga(this)" title="Pausa só esta carga; as alterações do dia a dia continuam sendo enviadas" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #e67e22;border-radius:4px;background:white;color:#e67e22;cursor:pointer;font-weight:bold">⏸ Pausar carga</button>
       <button type="button" id="envio-btn-parar" onclick="pararCarga(this)" style="display:none;padding:3px 10px;font-size:12px;border:1px solid #c0392b;border-radius:4px;background:white;color:#c0392b;cursor:pointer;font-weight:bold">⏹ Parar</button>
       <span id="envio-pct" style="font-size:14px;font-weight:bold;color:#2980b9">0%</span>
     </span>
@@ -348,20 +348,20 @@
   }
 
   // Com a sincronização inteira pausada, o controle é o da barra superior — esconde este.
-  function atualizarBotaoPausaEnvio(pausado, pausaGlobal) {
+  function atualizarBotaoPausaCarga(pausado, pausaGlobal) {
     var b = document.getElementById('envio-btn-pausa');
     b.style.display = pausaGlobal ? 'none' : '';
     b.dataset.pausado = pausado ? '1' : '0';
-    b.textContent = pausado ? '▶ Retomar envio' : '⏸ Pausar envio';
+    b.textContent = pausado ? '▶ Retomar carga' : '⏸ Pausar carga';
     b.style.borderColor = b.style.color = pausado ? '#27ae60' : '#e67e22';
   }
 
-  // Pausa só o push; recarrega pra atualizar o banner da nav.
-  async function alternarPausaEnvio(b) {
+  // Pausa só os pendentes da carga; recarrega pra atualizar o banner da nav.
+  async function alternarPausaCarga(b) {
     var pausado = b.dataset.pausado === '1';
     b.disabled = true;
     try {
-      var r = await fetch(pausado ? '/api/sync/retomar-envio' : '/api/sync/pausar-envio', { method: 'POST' });
+      var r = await fetch(pausado ? '/api/sync/retomar-carga' : '/api/sync/pausar-carga', { method: 'POST' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       location.reload();
     } catch (e) {
@@ -417,13 +417,13 @@
           return;
         }
 
-        atualizarBotaoPausaEnvio(d.pausado, d.pausaGlobal);
+        atualizarBotaoPausaCarga(d.pausado, d.pausaGlobal);
         if (d.pausaGlobal) {
           tempo.textContent = 'pausado';
           avisos.unshift('⏸ Sincronização inteira pausada — use "Retomar sincronização" na barra superior.');
         } else if (d.pausado) {
-          tempo.textContent = 'envio pausado';
-          avisos.unshift('⏸ Envio pausado — o recebimento do servidor continua. Clique em "Retomar envio" para continuar de onde parou.');
+          tempo.textContent = 'carga pausada';
+          avisos.unshift('⏸ Carga pausada — só ela para. As alterações do dia a dia continuam sendo enviadas e o recebimento do servidor também. Clique em "Retomar carga" para continuar de onde parou.');
         } else if (d.semProgresso) {
           tempo.textContent = 'sem progresso';
           var resto = (d.restantesPorTabela || []).map(function(t) { return t.tabela + ': ' + t.pendentes; }).join(', ');

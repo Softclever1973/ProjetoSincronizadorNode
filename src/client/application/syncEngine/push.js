@@ -3,7 +3,8 @@ const { enviarRegistro, enviarRegistros } = require('#client/http.js');
 const { atualizarOuSalvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { registrarEcho } = require('./echos');
 const { salvarErro } = require('#client/infrastructure/persistence/erros.js');
-const { envioEstaPausado, geracaoEnvio } = require('./controle');
+const { envioEstaPausado, cargaEstaPausada, geracaoEnvio } = require('./controle');
+const { SQL_NAO_EH_CARGA, ehDaCarga } = require('#client/domain/filaCarga.js');
 
 // Máximo de pendentes por tabela num ciclo — evita carregar milhões na memória de uma vez.
 const LOTE_PUSH = 2000;
@@ -272,11 +273,14 @@ async function enviarLote(db, ctx, itens) {
 async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.log, idPDV = null, nomeFilial = '') {
   const { nome } = configTabela;
 
+  // Carga pausada: só as alterações do dia a dia sobem; os pendentes da carga esperam.
+  const semCarga = cargaEstaPausada();
   let pendentes;
   try {
     pendentes = await query(
       db,
-      `SELECT FIRST ${LOTE_PUSH} PK_VALOR FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA = ? ORDER BY TIMESTAMP_ALTERACAO`,
+      `SELECT FIRST ${LOTE_PUSH} PK_VALOR, TIMESTAMP_ALTERACAO FROM SYNC_ALTERACOES_PENDENTES
+       WHERE NOME_TABELA = ?${semCarga ? ` AND ${SQL_NAO_EH_CARGA}` : ''} ORDER BY TIMESTAMP_ALTERACAO`,
       [nome]
     );
   } catch {
@@ -292,7 +296,9 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
   let interrompido = false;
   let falhaRede = false;
   const geracao = geracaoEnvio();
-  const parar = () => envioEstaPausado() || geracaoEnvio() !== geracao;
+  // Pausar a carga no meio do envio só interrompe lote que tem pendente da carga.
+  const temCarga = pendentes.some(p => ehDaCarga(p.TIMESTAMP_ALTERACAO));
+  const parar = () => envioEstaPausado() || geracaoEnvio() !== geracao || (temCarga && cargaEstaPausada());
   const ctx = { baseURI, idLoja, configTabela, idPDV, nomeFilial, log, parar };
 
   let lote = [];
@@ -326,7 +332,7 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 
   if (total.enviado > 0) log(`[${nome}] ${total.enviado} registro(s) enviado(s) ao servidor`);
   if (total.conflito > 0) log(`[${nome}] ${total.conflito} conflito(s) — acesse http://localhost:<porta_webui>/conflitos`);
-  if (interrompido) log(`[${nome}] envio ${envioEstaPausado() ? 'pausado' : 'interrompido'} pelo operador`);
+  if (interrompido) log(`[${nome}] envio ${envioEstaPausado() ? 'pausado' : cargaEstaPausada() ? 'da carga pausado' : 'interrompido'} pelo operador`);
   // Sem nenhum envio no lote (tudo falhou) ou com falha de rede, não força ciclo imediato — evita laço.
   return { temMais: !interrompido && !falhaRede && pendentes.length === LOTE_PUSH && total.enviado + total.conflito > 0 };
 }

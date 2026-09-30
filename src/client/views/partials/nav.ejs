@@ -55,11 +55,11 @@
   ⏸ Sincronização pausada<%= syncPausa.por ? ' por ' + syncPausa.por : '' %><%= syncPausa.desde ? ' em ' + new Date(syncPausa.desde).toLocaleString('pt-BR') : '' %>.
   Nada é enviado nem recebido até retomar. As alterações feitas no Sirius continuam sendo registradas e sobem quando retomar.
 </div>
-<% } else if (typeof syncPausa !== 'undefined' && syncPausa && syncPausa.envioPausado) { %>
-<div id="banner-envio-pausado" role="status" style="margin:0 0 16px;padding:10px 14px;border-radius:6px;background:#fff3cd;color:#856404;font-size:13px;display:flex;align-items:center;gap:12px">
-  <span style="flex:1">⏸ Envio ao servidor pausado<%= syncPausa.envioPor ? ' por ' + syncPausa.envioPor : '' %><%= syncPausa.envioDesde ? ' em ' + new Date(syncPausa.envioDesde).toLocaleString('pt-BR') : '' %>.
-  O recebimento do servidor continua; as alterações locais ficam na fila até retomar.</span>
-  <button type="button" onclick="retomarEnvioSync(this)" style="padding:3px 12px;font-size:12px;border:1px solid #27ae60;border-radius:4px;background:white;color:#27ae60;cursor:pointer;font-weight:bold">▶ Retomar envio</button>
+<% } else if (typeof syncPausa !== 'undefined' && syncPausa && syncPausa.cargaPausada) { %>
+<div id="banner-carga-pausada" role="status" style="margin:0 0 16px;padding:10px 14px;border-radius:6px;background:#fff3cd;color:#856404;font-size:13px;display:flex;align-items:center;gap:12px">
+  <span style="flex:1">⏸ Carga inicial pausada<%= syncPausa.cargaPor ? ' por ' + syncPausa.cargaPor : '' %><%= syncPausa.cargaDesde ? ' em ' + new Date(syncPausa.cargaDesde).toLocaleString('pt-BR') : '' %>.
+  Só a carga espera; as alterações do dia a dia continuam sendo enviadas e o recebimento do servidor também.</span>
+  <button type="button" onclick="retomarCargaSync(this)" style="padding:3px 12px;font-size:12px;border:1px solid #27ae60;border-radius:4px;background:white;color:#27ae60;cursor:pointer;font-weight:bold">▶ Retomar carga</button>
 </div>
 <% } %>
 <script>
@@ -77,14 +77,14 @@
       btn.disabled = false;
     }
   }
-  async function retomarEnvioSync(btn) {
+  async function retomarCargaSync(btn) {
     btn.disabled = true;
     try {
-      var r = await fetch('/api/sync/retomar-envio', { method: 'POST' });
+      var r = await fetch('/api/sync/retomar-carga', { method: 'POST' });
       if (!r.ok) throw new Error('HTTP ' + r.status);
       location.reload();
     } catch (e) {
-      alert('Não foi possível retomar o envio: ' + e.message);
+      alert('Não foi possível retomar a carga: ' + e.message);
       btn.disabled = false;
     }
   }

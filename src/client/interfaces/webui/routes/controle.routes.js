@@ -1,5 +1,5 @@
 const express = require('express');
-const { pausar, retomar, pausarEnvio, retomarEnvio, estadoPausa } = require('#client/application/syncEngine/controle.js');
+const { pausar, retomar, pausarCarga, retomarCarga, estadoPausa } = require('#client/application/syncEngine/controle.js');
 const { obterSessao } = require('#client/interfaces/webui/authSession.js');
 
 function criarControleRouter(contexto) {
@@ -22,15 +22,15 @@ function criarControleRouter(contexto) {
     res.json(_estado());
   });
 
-  router.post('/api/sync/pausar-envio', (req, res) => {
-    pausarEnvio(obterSessao(req)?.usuario || null);
-    console.log('[Controle] Envio ao servidor pausado pela web UI — o recebimento continua.');
+  router.post('/api/sync/pausar-carga', (req, res) => {
+    pausarCarga(obterSessao(req)?.usuario || null);
+    console.log('[Controle] Carga inicial pausada pela web UI — alterações do dia a dia e recebimento continuam.');
     res.json(_estado());
   });
 
-  router.post('/api/sync/retomar-envio', (_req, res) => {
-    retomarEnvio();
-    console.log('[Controle] Envio ao servidor retomado pela web UI.');
+  router.post('/api/sync/retomar-carga', (_req, res) => {
+    retomarCarga();
+    console.log('[Controle] Carga inicial retomada pela web UI.');
     contexto.executarCicloAgora?.();
     res.json(_estado());
   });

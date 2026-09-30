@@ -1,7 +1,8 @@
 const express = require('express');
 const TABELAS = require('#client/domain/tabelas.js');
 const { lerConfig, salvarConfig, defaultAtivo, tabelaAtiva } = require('#client/infrastructure/config/tabelasConfig.js');
-const { estaPausado, envioEstaPausado, interromperEnvioAtual } = require('#client/application/syncEngine/controle.js');
+const { estaPausado, cargaEstaPausada, interromperEnvioAtual } = require('#client/application/syncEngine/controle.js');
+const { SQL_EH_CARGA } = require('#client/domain/filaCarga.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { clearConflitos } = require('#client/infrastructure/persistence/conflitos.js');
 const { aplicarResetLocal } = require('#client/application/resetLocal.js');
@@ -16,15 +17,16 @@ function criarConfiguracoesRouter(contexto) {
   // "Parar" pedido durante o enfileiramento: termina a tabela atual e desfaz a fila da carga.
   let pararCarga = false;
 
-  // Tira da fila o que a carga enfileirou e larga o lote que o push já tem em memória.
+  // Tira da fila o que a carga enfileirou (só a marca da carga — alteração real fica) e larga o lote em memória.
   async function removerPendentesDaCarga(db) {
     const tabelas = estadoEnvio?.tabelas || [];
     let removidos = 0;
     if (tabelas.length > 0) {
       const ph = tabelas.map(() => '?').join(', ');
-      const cnt = await dbQuery(db, `SELECT COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA IN (${ph})`, tabelas).catch(() => [{ TOTAL: 0 }]);
+      const where = `NOME_TABELA IN (${ph}) AND ${SQL_EH_CARGA}`;
+      const cnt = await dbQuery(db, `SELECT COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES WHERE ${where}`, tabelas).catch(() => [{ TOTAL: 0 }]);
       removidos = Number(cnt[0]?.TOTAL || 0);
-      await dbExecute(db, `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA IN (${ph})`, tabelas);
+      await dbExecute(db, `DELETE FROM SYNC_ALTERACOES_PENDENTES WHERE ${where}`, tabelas);
     }
     interromperEnvioAtual();
     const dados = { ativo: true, parado: true, removidos, total: estadoEnvio?.total || 0, enviados: 0, pendentes: 0, porcentagem: 0 };
@@ -221,8 +223,10 @@ function criarConfiguracoesRouter(contexto) {
       let porTabela = [];
       if (ativas.length > 0) {
         const ph = ativas.map(() => '?').join(', ');
+        // Só os pendentes da carga: alteração do dia a dia entrando na fila não atrasa a barra.
         porTabela = await dbQuery(db,
-          `SELECT NOME_TABELA, COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES WHERE NOME_TABELA IN (${ph}) GROUP BY NOME_TABELA`,
+          `SELECT NOME_TABELA, COUNT(*) AS TOTAL FROM SYNC_ALTERACOES_PENDENTES
+           WHERE NOME_TABELA IN (${ph}) AND ${SQL_EH_CARGA} GROUP BY NOME_TABELA`,
           ativas);
       }
       const pendentes = porTabela.reduce((s, r) => s + Number(r.TOTAL || 0), 0);
@@ -233,7 +237,7 @@ function criarConfiguracoesRouter(contexto) {
 
       if (estadoEnvio.ultimosPendentes === null || pendentes < estadoEnvio.ultimosPendentes) estadoEnvio.ultimaMudanca = Date.now();
       estadoEnvio.ultimosPendentes = pendentes;
-      const pausado = envioEstaPausado();
+      const pausado = cargaEstaPausada();
       const pausaGlobal = estaPausado();
       const semProgresso = pendentes > 0 && !pausado && !contexto.cicloEmAndamento
         && Date.now() - estadoEnvio.ultimaMudanca > SEM_PROGRESSO_MS;

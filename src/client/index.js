@@ -205,7 +205,7 @@ async function main() {
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
   const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
-  const { estaPausado, envioEstaPausado } = require('./application/syncEngine/controle');
+  const { estaPausado, envioEstaPausado, cargaEstaPausada } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
     verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
@@ -337,7 +337,7 @@ async function main() {
   }
 
   let avisouPausa = false;
-  let avisouPausaEnvio = false;
+  let avisouPausaCarga = false;
   let temMaisPendentes = false;
 
   async function executarCiclo() {
@@ -459,11 +459,11 @@ async function main() {
         }
       }
 
-      if (envioEstaPausado() && !estaPausado()) {
-        if (!avisouPausaEnvio) log('Envio ao servidor pausado pelo operador — só recebendo do servidor.');
-        avisouPausaEnvio = true;
+      if (cargaEstaPausada() && !estaPausado()) {
+        if (!avisouPausaCarga) log('Carga inicial pausada pelo operador — as alterações do dia a dia continuam sendo enviadas.');
+        avisouPausaCarga = true;
       } else {
-        avisouPausaEnvio = false;
+        avisouPausaCarga = false;
       }
       for (const tabela of tabelasParaSincronizar) {
         if (envioEstaPausado()) break;

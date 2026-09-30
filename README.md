@@ -510,7 +510,7 @@ A cada ciclo, para cada tabela ativa:
 2. Envia em lotes de até 100 registros / 2 MB para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistros` (cada item com a última versão conhecida; registro que não existe mais localmente vai como `{ deletar: true }`). Servidor antigo sem essa rota (404) → cai para `ReceberRegistro`, um por um
 3. O servidor aplica cada registro isoladamente e devolve um resultado por item: `{ ok }`, `{ conflito: true, versaoServidor }` ou `{ erro }`
 4. Ok e conflito saem de `SYNC_ALTERACOES_PENDENTES`; erro fica na fila para a próxima tentativa
-5. O envio pode ser pausado sem parar o pull (`sync-pausa.json`, botões na página de Configurações)
+5. Pausas (`sync-pausa.json`, sobrevivem a reinício): **Pausar sincronização** (barra superior) para envio e recebimento; **Pausar carga** (painel de envio em Configurações) segura só os pendentes da carga inicial/parcial — as alterações do dia a dia continuam subindo e o recebimento continua. Os pendentes da carga são gravados na fila com `TIMESTAMP_ALTERACAO = 1900-01-01` (`src/client/domain/filaCarga.js`); se o registro for alterado no Sirius durante a carga, o trigger grava a data real e ele vira alteração normal. **Parar** remove da fila só os pendentes da carga
 
 FKs marcadas `traduzirSrvId` são resolvidas para o `SRV_ID` do pai antes do envio; um pai ainda sem `SRV_ID` reenfileira a si mesmo automaticamente.
 

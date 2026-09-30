@@ -57,4 +57,13 @@ describe('enfileirarTodosRegistros — lotes por faixa de PK', () => {
     expect(merges).toHaveLength(1);
     expect(merges[0][1]).toMatch(/ID_PEDIDO AS VARCHAR\(100\)\) \|\| '\|' \|\| CAST\(PARCELA/);
   });
+
+  test('pendentes da carga levam a data fixa da carga (pra pausar só ela)', async () => {
+    simularTabela(10);
+    await enfileirarTodosRegistros({}, noop, null, ['VENDEDORES']);
+
+    const merge = execute.mock.calls.find(([, sql]) => sql.includes('MERGE'))[1];
+    expect(merge).toMatch(/TIMESTAMP '1900-01-01 00:00:00'/);
+    expect(merge).not.toMatch(/CURRENT_TIMESTAMP/);
+  });
 });

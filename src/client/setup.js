@@ -1,5 +1,6 @@
 const { query, execute, tabelaExiste } = require('./infrastructure/firebird/db');
 const TABELAS = require('./domain/tabelas');
+const { SQL_DATA_CARGA } = require('./domain/filaCarga');
 
 async function generatorExiste(db, nome) {
   const rows = await query(
@@ -14,12 +15,13 @@ async function generatorExiste(db, nome) {
 const LOTE_ENFILEIRAR = 5000;
 
 // MERGE (não INSERT) pra não falhar se o trigger enfileirar a mesma PK durante a carga.
+// Data da carga (filaCarga.js): permite pausar só a carga sem segurar as alterações do dia a dia.
 function _sqlMergePendentes(nomeTabela, pkExpressao, where = '') {
   return `MERGE INTO SYNC_ALTERACOES_PENDENTES s
           USING (SELECT ${pkExpressao} AS PK_VAL FROM ${nomeTabela} ${where}) src
           ON s.NOME_TABELA = '${nomeTabela}' AND s.PK_VALOR = src.PK_VAL
           WHEN NOT MATCHED THEN INSERT (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
-          VALUES ('${nomeTabela}', src.PK_VAL, CURRENT_TIMESTAMP)`;
+          VALUES ('${nomeTabela}', src.PK_VAL, ${SQL_DATA_CARGA})`;
 }
 
 /**
@@ -337,7 +339,7 @@ async function enfileirarRegistrosParcial(db, limite, log, tabelasFiltro = null)
 
       await execute(db,
         `INSERT INTO SYNC_ALTERACOES_PENDENTES (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
-         SELECT '${tabela.nome}', ${pkExpressao}, CURRENT_TIMESTAMP
+         SELECT '${tabela.nome}', ${pkExpressao}, ${SQL_DATA_CARGA}
          FROM (SELECT FIRST ${limite} * FROM ${tabela.nome} ORDER BY ${pkPrincipal} DESC) AS T`
       );
 
@@ -418,7 +420,7 @@ async function enfileirarRegistrosParcial(db, limite, log, tabelasFiltro = null)
              ) src ON s.NOME_TABELA = '${fk.tabela}' AND s.PK_VALOR = src.PK_VAL
              WHEN NOT MATCHED THEN
                INSERT (NOME_TABELA, PK_VALOR, TIMESTAMP_ALTERACAO)
-               VALUES ('${fk.tabela}', src.PK_VAL, CURRENT_TIMESTAMP)`,
+               VALUES ('${fk.tabela}', src.PK_VAL, ${SQL_DATA_CARGA})`,
             idsParaEnfileirar
           );
 
