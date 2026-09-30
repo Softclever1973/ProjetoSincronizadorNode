@@ -521,8 +521,6 @@ async function handleSave(req, res, forceUpdate) {
 
     res.json({ ok: true, srvId: srvId ?? null });
   } catch (e) {
-    if (e.isForbidden) return res.status(403).json({ erro: e.message });
-    if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `${req.method} ${tabela}`);
   }
 }
@@ -584,8 +582,6 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaT
 
     res.json({ ok: true });
   } catch (e) {
-    if (e.isForbidden) return res.status(403).json({ erro: e.message });
-    if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `DELETE ${tabela}`);
   }
 });

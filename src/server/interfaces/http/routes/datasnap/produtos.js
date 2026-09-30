@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('#server/interfaces/http/middleware/auth.js');
 const { withTenantConnection, query, isMissingTableError } = require('#server/infrastructure/db.js');
 const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /**
  * GET /datasnap/rest/TSMProdutos/ProdutosParaAtualizar
@@ -63,9 +64,7 @@ router.get('/ProdutosParaAtualizar', auth, async (req, res) => {
     if (isMissingTableError(e)) {
       return res.json([]);
     }
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 
@@ -99,9 +98,7 @@ router.get('/getCountProdutosParaSincronizar', auth, async (req, res) => {
     if (isMissingTableError(e)) {
       return res.json({ total: 0 });
     }
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 
@@ -138,9 +135,7 @@ router.get('/getProdutosSincronizadosByFilial', auth, async (req, res) => {
     if (isMissingTableError(e)) {
       return res.json([]);
     }
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar buscar os produtos. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 

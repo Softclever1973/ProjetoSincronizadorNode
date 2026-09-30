@@ -5,7 +5,7 @@ const { NOME_VALIDO } = require('#server/domain/validacao.js');
 // Última barreira antes de DDL: nome de tabela/coluna/PK entra cru no SQL.
 function exigirIdentificadores(nomes) {
   const invalido = nomes.find(n => typeof n !== 'string' || !NOME_VALIDO.test(n));
-  if (invalido !== undefined) throw new Error(`identificador inválido: '${invalido}'`);
+  if (invalido !== undefined) throw Object.assign(new Error(`identificador inválido: '${invalido}'`), { isValidation: true });
 }
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial

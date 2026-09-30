@@ -10,6 +10,7 @@ const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoe
 const sessoes = require('#server/infrastructure/cache/sessoesCache.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.
@@ -26,7 +27,7 @@ router.get('/empresas', async (req, res) => {
     `);
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -75,7 +76,7 @@ router.get('/permissoes', async (req, res) => {
     }
     res.json({ modulos, planos, roles });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -97,7 +98,7 @@ router.put('/permissoes/plano', async (req, res) => {
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -121,7 +122,7 @@ router.put('/permissoes/role', async (req, res) => {
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -142,7 +143,7 @@ router.get('/empresas/:schema/permissoes', async (req, res) => {
     );
     res.json({ overrides: rows });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -167,7 +168,7 @@ router.put('/empresas/:schema/permissoes', async (req, res) => {
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -189,7 +190,7 @@ router.delete('/empresas/:schema/permissoes/:role/:modulo', async (req, res) => 
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -263,7 +264,7 @@ router.post('/empresas', async (req, res) => {
     res.status(201).json({ ok: true, schema: empresa.schema, idUsuario: novoUsuario.id });
   } catch (e) {
     await client.query('ROLLBACK');
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -287,7 +288,7 @@ router.patch('/empresas/:schema/ativo', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -309,7 +310,7 @@ router.put('/empresas/:schema/plano', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -395,7 +396,7 @@ router.post('/empresas/:schema/reset', async (req, res) => {
 
     res.json({ ok: true, tabelasRemovidas: tabelasDados, comandosFirebird });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -420,7 +421,7 @@ router.get('/empresas/:schema/filiais', async (req, res) => {
 
     res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -559,7 +560,7 @@ router.get('/empresas/:schema/dados-empresa', async (req, res) => {
     const dados = Object.fromEntries(CAMPOS_EMPRESA.map(c => [c, registro?.[c] ?? null]));
     res.json({ existe: !!registro, idEmpresa: registro?.ID_EMPRESA ?? null, ...dados });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -596,7 +597,7 @@ router.put('/empresas/:schema/dados-empresa', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -631,7 +632,7 @@ router.get('/empresas/:schema/dados-filiais', async (req, res) => {
 
     res.json(lista);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -678,7 +679,7 @@ router.put('/empresas/:schema/dados-filiais/:idLoja', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -703,7 +704,7 @@ router.get('/usuarios', async (req, res) => {
     `);
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -756,7 +757,7 @@ router.post('/usuarios', async (req, res) => {
     res.status(201).json({ ok: true, id: novoUsuario.id });
   } catch (e) {
     await client.query('ROLLBACK');
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -785,7 +786,7 @@ router.get('/sessoes', async (req, res) => {
       voce:         s.id === req.userId,
     })));
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -799,7 +800,7 @@ router.post('/usuarios/:id/desconectar', async (req, res) => {
     if (!await sessoes.revogarSessoes(id)) return res.status(404).json({ erro: 'Usuário não encontrado' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -824,7 +825,7 @@ router.patch('/usuarios/:id/senha', async (req, res) => {
     if (!rowCount) return res.status(404).json({ erro: 'Usuário não encontrado' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

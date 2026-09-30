@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('#server/interfaces/http/middleware/auth.js');
 const { withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
 const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /**
  * POST /datasnap/rest/TSMMovimetacaoCaixas/updateMovimentacaoCaixa
@@ -66,9 +67,7 @@ router.post('/updateMovimentacaoCaixa', auth, async (req, res) => {
       res.json({ message: 'Movimentação registrada com sucesso', movCaixa });
     });
   } catch (e) {
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar gravar a movimentação. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 

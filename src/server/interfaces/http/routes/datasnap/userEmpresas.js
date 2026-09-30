@@ -3,6 +3,7 @@ const router   = express.Router();
 const { pool } = require('#server/infrastructure/db.js');
 const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
 const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // Só leitura: criar empresa é exclusivo do superadmin (POST /superadmin/empresas).
 
@@ -21,7 +22,7 @@ router.get('/', authJwt, async (req, res) => {
     })));
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

@@ -149,7 +149,9 @@ function encerrarComErro(err) {
     const id = `SRV-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     console.error(`[${id}] ${req.method} ${req.path} →`, err.stack || err.message);
     if (!res.headersSent) {
-      res.status(err.status || 500).json({ erro: err.message || 'Erro interno do servidor', id });
+      // 4xx (JSON malformado, corpo grande demais) diz respeito à requisição; 5xx fica só no log.
+      const status = err.status || 500;
+      res.status(status).json({ erro: status < 500 && err.message ? err.message : 'Erro interno do servidor.', id });
     }
   });
 

@@ -7,6 +7,7 @@ const { requireRole } = require('#server/interfaces/http/middleware/checkRole.js
 const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
 const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 const ROLES_VALIDOS = ['dono', 'gerente', 'vendedor'];
 const PODE_CRIAR    = { dono: ['gerente', 'vendedor'], gerente: ['vendedor'] };
@@ -59,7 +60,7 @@ router.get('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 
     }
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -194,7 +195,7 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios',
 
     res.status(201).json({ ok: true, id, vinculo: 'novo', id_vendedor: idVendedorFinal });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -229,7 +230,7 @@ router.patch('/:schema/usuarios/:id/ativo', authJwt, checkSchema, requireModulo(
     registrarAuditLog(req, schema, 'USUARIOS', 'UPDATE', String(id), { ativo }, { role: targetRole });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -307,7 +308,7 @@ router.patch('/:schema/usuarios/:id/perfil', authJwt, checkSchema, requireModulo
   } catch (e) {
     if (e.constraint === 'usuarios_email_key' || e.code === '23505')
       return res.status(409).json({ erro: 'Este e-mail já está cadastrado.' });
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -351,7 +352,7 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireModulo('
     registrarAuditLog(req, schema, 'USUARIOS', 'UPDATE', String(id), { role, id_loja: id_loja ?? null }, alvo.rows[0]);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

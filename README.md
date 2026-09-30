@@ -360,6 +360,8 @@ GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modul
 
 Rotas usadas pela interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <jwt>`; o schema faz parte do path e só é aceito se vinculado à conta do usuário (`checkSchema`).
 
+**Erros** (todas as rotas, via `interfaces/http/erroServidor.js`): erro inesperado responde `500 { erro: "Erro interno do servidor.", id: "SRV-…" }` — o detalhe (SQL, schema, host) fica **só no log do servidor**, procure pelo `id`. Erro de dado do Postgres vira mensagem traduzida (`23505` → 409 "Já existe um registro com esse valor.", `23503` → 409, `22P02`/`23502`/`22001`… → 400). Mensagens nossas (`isValidation` → 400, `isForbidden` → 403) passam como estão. Nas rotas do sync a chave é `message`, e o erro de um registro no push (`ReceberRegistro(s)`) continua detalhado quando é dado inválido do próprio registro.
+
 ### CRUD genérico de tabelas
 
 | Método | Rota | Gate | Descrição |

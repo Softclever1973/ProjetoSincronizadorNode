@@ -10,6 +10,7 @@ const { gerarFluxoCaixa } = require('#server/application/financeiro/fluxoCaixa.j
 const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('#server/domain/financeiro.js');
 const { lojaObrigatoria } = require('#server/domain/escopoLoja.js');
 const { resolveIdLoja } = require('#server/interfaces/http/routes/api/helpers.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 const guardRead  = [authJwt, checkSchema, requireModulo('financeiro', 'r')];
 const guardWrite = [authJwt, checkSchema, requireModulo('financeiro', 'w')];
@@ -239,7 +240,7 @@ router.get('/:schema/financeiro/contas-receber', ...guardRead, async (req, res) 
     }
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -306,7 +307,7 @@ router.post('/:schema/financeiro/contas-receber', ...guardWrite, async (req, res
     registrarAuditLog(req, s, 'A_RECEBER', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -414,7 +415,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (req
 
     res.json(r);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -433,7 +434,7 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (re
     registrarAuditLog(req, s, 'A_RECEBER', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -447,7 +448,7 @@ router.get('/:schema/financeiro/filiais', ...guardRead, async (req, res) => {
     );
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -539,7 +540,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guardRead, async (req, res) =>
     }
     res.json({ registros: rows.rows, total: total.rows[0].total, page, pageSize });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -606,7 +607,7 @@ router.post('/:schema/financeiro/contas-pagar', ...guardWrite, async (req, res) 
     registrarAuditLog(req, s, 'A_PAGAR', 'INSERT', String(r.id), req.body, null);
     res.status(201).json(r);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -679,7 +680,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req, 
     registrarAuditLog(req, s, 'A_PAGAR', 'UPDATE', String(id), req.body, atual);
     res.json(r);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -698,7 +699,7 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req,
     registrarAuditLog(req, s, 'A_PAGAR', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -714,7 +715,7 @@ router.get('/:schema/financeiro/fluxo-caixa', ...guardRead, async (req, res) => 
     const rows = await gerarFluxoCaixa(s, mes, filtroLoja);
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -735,7 +736,7 @@ router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (
     const resultado = await gerarContasReceberDoPedido(s, id_pedido);
     res.status(201).json(resultado);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -755,7 +756,7 @@ router.delete('/:schema/financeiro/parcelas-pedido/:id_pedido/:parcela', authJwt
     );
     res.json({ deletados: rowCount });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

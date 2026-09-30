@@ -9,6 +9,7 @@ const authJwt        = require('#server/interfaces/http/middleware/authJwt.js');
 const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
 const tentativasLogin = require('#server/infrastructure/cache/tentativasLogin.js');
 const { enviarEmail } = require('#server/infrastructure/email/emailApiClient.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 const JWT_EXPIRES_IN = '24h';
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
@@ -92,7 +93,7 @@ router.post('/login', async (req, res) => {
 
     res.json({ id: usuario.id, email: usuario.email, token, ...claims, nome, isSuperAdmin });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -176,7 +177,7 @@ router.post('/redefinir-senha', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -200,7 +201,7 @@ router.post('/refresh', authJwt, async (req, res) => {
 
     res.json({ id: usuario.id, email: usuario.email, token, ...claims, nome, isSuperAdmin });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -227,7 +228,7 @@ router.get('/me', authJwt, async (req, res) => {
       isSuperAdmin: u?.is_super_admin === true,
     });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

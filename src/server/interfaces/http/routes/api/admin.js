@@ -19,6 +19,7 @@ const { PLANOS, PLANO_PADRAO } = require('#server/domain/planos.js');
 const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
 const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { buildNomeLojaExpr } = require('./helpers');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'r'), async (req, res) => {
@@ -30,7 +31,7 @@ router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('co
     res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.PARAMETRO])));
   } catch (e) {
     if (isMissingTableError(e)) return res.json({});
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -61,7 +62,7 @@ router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('co
       { chave, valor: valor || null }, dadosAntes);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -75,7 +76,7 @@ router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
     res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.PARAMETRO])));
   } catch (e) {
     if (isMissingTableError(e)) return res.json({});
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -129,7 +130,7 @@ router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
     const modulos = await obterPermissoesEfetivas(plano, role, schema);
     res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, modulos });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

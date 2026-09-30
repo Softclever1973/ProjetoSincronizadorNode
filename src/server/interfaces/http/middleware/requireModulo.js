@@ -2,6 +2,7 @@ const { pool } = require('#server/infrastructure/db.js');
 const { obterNivelEfetivo } = require('#server/infrastructure/cache/permissoesCache.js');
 const { podeLer, podeEscrever } = require('#server/domain/permissoes.js');
 const { TABELA_MODULO } = require('#server/domain/tabelaModulo.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // Lê o plano fresco de sync_tenants a cada requisição (mesmo princípio de
 // requirePlanFeature.js: não confiar no claim do JWT, pra não dar 403 indevido logo
@@ -34,7 +35,7 @@ function requireModulo(modulo, nivelExigido) {
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
-      res.status(500).json({ erro: e.message });
+      erroServidor(res, e);
     }
   };
 }
@@ -54,7 +55,7 @@ function requireModuloDaTabela(nivelExigido) {
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
-      res.status(500).json({ erro: e.message });
+      erroServidor(res, e);
     }
   };
 }

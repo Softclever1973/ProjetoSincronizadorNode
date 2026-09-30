@@ -9,6 +9,7 @@ const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario, colunasTabela } = r
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
 const { NOME_VALIDO } = require('#server/domain/validacao.js');
+const { erroServidor, erroSeguro, erroValidacao, ehErroDeDado } = require('#server/interfaces/http/erroServidor.js');
 const {
   alocarSrvId,
   processarDelecao,
@@ -196,9 +197,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     // Tabela ainda não existe no servidor — retorna vazio para não bloquear o pull.
     // Será criada automaticamente no primeiro push via criarTabelaSeNecessario.
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, `RegistrosParaAtualizar ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -238,9 +237,7 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
     res.json(rows);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar listar os registros para deletar. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, `RegistrosParaDeletar ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -333,7 +330,7 @@ router.get('/StatusTabelas', auth, async (req, res) => {
 
     res.json(resultado);
   } catch (e) {
-    res.status(400).json({ message: e.message });
+    erroServidor(res, e, `StatusTabelas ${req.schemaName}`, 'message');
   }
 });
 
@@ -374,7 +371,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
     res.json(rows.map(normalizarBlobs));
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({ message: e.message });
+    erroServidor(res, e, `RegistrosPaginados ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -412,7 +409,7 @@ async function aplicarRegistroRecebido(db, { schemaName, idLoja, nomeTabela, pk,
   const avisos = [];
   const pks = Array.isArray(pk) ? pk : [pk];
   const colunaInvalida = identificadorInvalido(Object.keys(registro));
-  if (colunaInvalida !== undefined) throw new Error(`nome de coluna inválido: '${colunaInvalida}'`);
+  if (colunaInvalida !== undefined) throw erroValidacao(`nome de coluna inválido: '${colunaInvalida}'`);
 
   // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
   let srvId = null;
@@ -536,7 +533,7 @@ async function aplicarRegistroRecebido(db, { schemaName, idLoja, nomeTabela, pk,
         else if (!Number.isFinite(Number(v))) naoNumericos.push(`${c}="${v}"`);
       });
       if (naoNumericos.length > 0) {
-        throw new Error(`coluna(s) ${naoNumericos.join(', ')}: texto em coluna numérica no servidor (no Firebird a coluna é texto)`);
+        throw erroValidacao(`coluna(s) ${naoNumericos.join(', ')}: texto em coluna numérica no servidor (no Firebird a coluna é texto)`);
       }
       if (vazios.length > 0) {
         const aviso = `coluna(s) ${vazios.join(', ')}: texto vazio ('') em coluna numérica no servidor — gravado como NULL`;
@@ -571,7 +568,10 @@ async function aplicarRegistroRecebido(db, { schemaName, idLoja, nomeTabela, pk,
 // Mensagem de erro de um registro; tabela sumida limpa o cache pra o próximo push recriá-la.
 function mensagemErroRegistro(e, schemaName, nomeTabela, registro) {
   if (isMissingTableError(e) && nomeTabela && schemaName) colunasCache.invalidate(schemaName, nomeTabela);
-  return `Erro ao aplicar registro: ${e.message}${detalheErroPg(e, registro)}`;
+  // Erro do próprio registro (dado inválido/validação nossa) vai detalhado pro client; o resto só com ID (detalhe no log).
+  if (e?.isValidation || ehErroDeDado(e)) return `Erro ao aplicar registro: ${e.message}${detalheErroPg(e, registro)}`;
+  const { mensagem, id } = erroSeguro(e, `ReceberRegistro ${schemaName}.${nomeTabela}`);
+  return `Erro ao aplicar registro: ${mensagem} (${id})`;
 }
 
 // Nome de coluna/PK vira SQL (DDL, WHERE, ON CONFLICT): só identificador simples.
@@ -643,7 +643,7 @@ router.post('/ReceberRegistros', auth, async (req, res) => {
       res.json({ resultados });
     });
   } catch (e) {
-    res.status(400).json({ message: `Erro ao aplicar lote: ${e.message}` });
+    erroServidor(res, e, `ReceberRegistros ${req.schemaName}.${ctx.nomeTabela}`, 'message');
   }
 });
 
@@ -717,7 +717,7 @@ router.post('/GarantirTabela', auth, async (req, res) => {
     });
     res.json({ ok: true, ...resultado });
   } catch (e) {
-    res.status(500).json({ message: `Erro ao garantir tabela: ${e.message}` });
+    erroServidor(res, e, `GarantirTabela ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -746,7 +746,7 @@ router.post('/AtualizarRegime', auth, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -766,7 +766,7 @@ router.post('/AtualizarPlano', auth, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -779,7 +779,7 @@ router.get('/StatusReset', auth, async (req, res) => {
     );
     res.json(rows[0] ?? {});
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -811,7 +811,7 @@ router.get('/BuscarParametros', auth, async (req, res) => {
     });
     res.json({ parametros });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -859,7 +859,7 @@ router.post('/AtualizarParametros', auth, async (req, res) => {
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
