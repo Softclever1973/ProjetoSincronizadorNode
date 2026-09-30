@@ -7,6 +7,7 @@ const { planoValido } = require('#server/domain/planos.js');
 const { colunasCache, getColunasServidor, getPkServidor } = require('#server/infrastructure/cache/tenantCache.js');
 const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario, colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const TABELAS = require('#client/domain/tabelas.js');
 const {
   alocarSrvId,
   processarDelecao,
@@ -72,6 +73,15 @@ function validarNomeTabela(nomeTabela) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nomeTabela)) return false;
   if (TABELAS_INTERNAS.has(nomeTabela)) return false;
   return true;
+}
+
+// Pai do filtroFilialViaFK vem do tabelas.js (servidor decide, client.exe antigo não precisa mudar); PEDIDOS se desconhecida.
+const PAI_FILTRO_VIA_FK = new Map(TABELAS.filter(t => t.filtroFilialViaTabela).map(t => [t.nome, t.filtroFilialViaTabela]));
+
+// Filtro de loja de tabela filha: a FK aponta pra PK de mesmo nome no pai, que tem ID_LOJA.
+function sqlFiltroViaFK(nomeTabela, colunaFK, idxParam) {
+  const pai = PAI_FILTRO_VIA_FK.get(nomeTabela) || 'PEDIDOS';
+  return `${colunaFK} IN (SELECT ${colunaFK} FROM ${pai} WHERE ID_LOJA = $${idxParam})`;
 }
 
 /**
@@ -145,12 +155,11 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
         whereExtra += ` AND ${filtroFilialEfetivo} = $${params.length}`;
       }
 
-      // Tabelas filhas sem ID_LOJA próprio: filtra via FK para PEDIDOS
-      // filtroFilialViaFK é a coluna FK local (ex: ID_PEDIDO), sempre apontando para PEDIDOS.ID_PEDIDO
+      // Tabelas filhas sem ID_LOJA próprio: filtra pela loja do pai (PEDIDOS, NOTAS_FISCAIS...)
       if (filtroFilialViaFK && idLoja) {
         colunas = await garantirColunaFiltro(db, nomeTabela, req.schemaName, filtroFilialViaFK, colunas);
         params.push(idLoja);
-        whereExtra += ` AND ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
+        whereExtra += ` AND ${sqlFiltroViaFK(nomeTabela, filtroFilialViaFK, params.length)}`;
       }
 
       // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.
@@ -297,7 +306,7 @@ router.get('/StatusTabelas', auth, async (req, res) => {
             const colunas = await getColunasServidor(db, tabela, req.schemaName);
             await garantirColunaFiltro(db, tabela, req.schemaName, filtroFilialViaFK, colunas);
             params.push(idLoja);
-            whereFilial = ` WHERE ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
+            whereFilial = ` WHERE ${sqlFiltroViaFK(tabela, filtroFilialViaFK, params.length)}`;
           }
 
           const rows = await query(db,

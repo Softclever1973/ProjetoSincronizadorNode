@@ -290,3 +290,41 @@ describe('GET /RegistrosParaAtualizar — autocura quando a coluna do filtroFili
     expect(depois).toHaveLength(1); // autocurada
   });
 });
+
+describe('filtroFilialViaFK — tabela filha filtra pela loja do pai certo (NOTAS_FISCAIS, não PEDIDOS)', () => {
+  // Antes o servidor fixava PEDIDOS como pai: itens de nota vinham de outra loja ou davam erro.
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.notas_fiscais_itens CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.notas_fiscais CASCADE`);
+    await pool.query(`CREATE TABLE ${TEST_SCHEMA}.notas_fiscais (id_nota_fiscal NUMERIC PRIMARY KEY, id_loja NUMERIC, id_ultima_atualizacao_matriz NUMERIC)`);
+    await pool.query(`CREATE TABLE ${TEST_SCHEMA}.notas_fiscais_itens (id_nota_fiscal_item NUMERIC PRIMARY KEY, id_nota_fiscal NUMERIC, id_ultima_atualizacao_matriz NUMERIC)`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.notas_fiscais VALUES (10, 1, 1), (20, 2, 2)`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.notas_fiscais_itens VALUES (101, 10, 3), (102, 10, 4), (201, 20, 5)`);
+  });
+
+  const pullItens = idLoja => request(app)
+    .get('/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar')
+    .query({ token: TEST_TOKEN, nomeTabela: 'NOTAS_FISCAIS_ITENS', idUltimaAtualizacaoMatriz: 0, idLoja, filtroFilialViaFK: 'ID_NOTA_FISCAL' });
+
+  test('pull da loja 1 recebe só os itens das notas da loja 1', async () => {
+    const r = await pullItens(1);
+    expect(r.status).toBe(200);
+    expect(r.body.map(i => Number(i.ID_NOTA_FISCAL_ITEM)).sort()).toEqual([101, 102]);
+  });
+
+  test('pull da loja 2 recebe só os itens das notas da loja 2', async () => {
+    const r = await pullItens(2);
+    expect(r.status).toBe(200);
+    expect(r.body.map(i => Number(i.ID_NOTA_FISCAL_ITEM))).toEqual([201]);
+  });
+
+  test('StatusTabelas conta só os itens da loja', async () => {
+    const r = await request(app)
+      .get('/datasnap/rest/TSMSincronizacao/StatusTabelas')
+      .query({ token: TEST_TOKEN, idLoja: 1, filtros: JSON.stringify([{ nome: 'NOTAS_FISCAIS_ITENS', filtroFilialViaFK: 'ID_NOTA_FISCAL' }]) });
+    expect(r.status).toBe(200);
+    const s = r.body.find(t => t.tabela === 'NOTAS_FISCAIS_ITENS');
+    expect(Number(s.total)).toBe(2);
+    expect(Number(s.maxId)).toBe(4);
+  });
+});

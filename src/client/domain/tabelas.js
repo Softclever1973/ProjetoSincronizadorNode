@@ -43,6 +43,7 @@
  * @property {boolean}          temDelete
  * @property {string|null}      filtroFilial
  * @property {string|null}      filtroFilialViaFK
+ * @property {string|null}      filtroFilialViaTabela — tabela pai do filtroFilialViaFK (derivada de fks)
  * @property {string|null}      endpoint
  * @property {string|null}      generator
  * @property {string|null}      colunaData
@@ -95,7 +96,13 @@ function tabela({
   colunasAbsolutas = [],
   normalizarSinal = null,
 }) {
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
+  // Tabela pai do filtroFilialViaFK, tirada da própria FK — falha na carga se não houver FK correspondente.
+  let filtroFilialViaTabela = null;
+  if (filtroFilialViaFK) {
+    filtroFilialViaTabela = fks.find(f => f.coluna === filtroFilialViaFK)?.tabela ?? null;
+    if (!filtroFilialViaTabela) throw new Error(`tabelas.js: ${nome}.filtroFilialViaFK='${filtroFilialViaFK}' sem FK correspondente em fks`);
+  }
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
