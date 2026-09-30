@@ -10,14 +10,23 @@ const authJwt             = require('#server/interfaces/http/middleware/authJwt.
 const { requireModuloDaTabela } = require('#server/interfaces/http/middleware/requireModulo.js');
 const { checkSchema }     = require('#server/interfaces/http/middleware/checkSchema.js');
 const { withTenantConnection, query, execute, isMissingTableError, isMissingColumnError } = require('#server/infrastructure/db.js');
-const { NOME_VALIDO, TABELAS_FILTRO_LOJA, validarRegistro } = require('#server/domain/validacao.js');
+const { NOME_VALIDO, validarRegistro } = require('#server/domain/validacao.js');
+const { escopoDaTabela, lojaObrigatoria, sqlEscopo } = require('#server/domain/escopoLoja.js');
+
+const ERRO_SEM_LOJA = 'usuário sem loja vinculada nesta empresa';
+const erroOutraLoja = () => Object.assign(new Error('registro de outra loja'), { isForbidden: true });
+
+// Escopo de loja da requisição: null = sem restrição (dono ou tabela compartilhada).
+function escopoRequisicao(req, schema, tabela) {
+  const escopo = escopoDaTabela(tabela);
+  const loja = escopo ? lojaObrigatoria(req, schema) : null;
+  return { escopo, loja, semLoja: Number.isNaN(loja), restrito: loja !== null && !Number.isNaN(loja) };
+}
 const { colunasTipadasDeRegistro } = require('#server/domain/schema.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
-const {
-  resolveIdLoja, pedidoEstaCancelado,
-} = require('./helpers');
+const { pedidoEstaCancelado } = require('./helpers');
 const { getCurrentTime } = require('#server/infrastructure/timeService.js');
 const HOOKS = require('./hooks');
 
@@ -55,13 +64,17 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, requireModulo
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   const { pk, value } = req.query;
   if (!pk || !NOME_VALIDO.test(pk)) return res.status(400).json({ erro: 'pk inválido' });
+  const { escopo, loja, semLoja, restrito } = escopoRequisicao(req, schema, tabela);
+  if (semLoja) return res.status(403).json({ erro: ERRO_SEM_LOJA });
   try {
-    const rows = await withTenantConnection(schema, db =>
-      query(db, `SELECT * FROM ${tabela} WHERE ${pk} = $1 LIMIT 1`, [value])
+    // Registro de outra loja responde como inexistente (null) pro gerente/vendedor.
+    const rows = await withTenantConnection(schema, db => restrito
+      ? query(db, `SELECT * FROM ${tabela} WHERE ${pk} = $1 AND ${sqlEscopo(escopo, 2)} LIMIT 1`, [value, loja])
+      : query(db, `SELECT * FROM ${tabela} WHERE ${pk} = $1 LIMIT 1`, [value])
     );
     res.json(rows[0] || null);
   } catch (e) {
-    if (isMissingTableError(e)) return res.json(null);
+    if (isMissingTableError(e) || (restrito && isMissingColumnError(e))) return res.json(null);
     erroServidor(res, e, `GET ${tabela}/by-pk`);
   }
 });
@@ -71,9 +84,12 @@ router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, requi
   const { schema, tabela, col } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   if (!NOME_VALIDO.test(col))    return res.status(400).json({ erro: 'nome de coluna inválido' });
+  const { escopo, loja, semLoja, restrito } = escopoRequisicao(req, schema, tabela);
+  if (semLoja) return res.status(403).json({ erro: ERRO_SEM_LOJA });
   try {
-    const rows = await withTenantConnection(schema, db =>
-      query(db, `SELECT DISTINCT ${col} FROM ${tabela} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT 200`, [])
+    const rows = await withTenantConnection(schema, db => restrito
+      ? query(db, `SELECT DISTINCT ${col} FROM ${tabela} WHERE ${col} IS NOT NULL AND ${sqlEscopo(escopo, 1)} ORDER BY ${col} LIMIT 200`, [loja])
+      : query(db, `SELECT DISTINCT ${col} FROM ${tabela} WHERE ${col} IS NOT NULL ORDER BY ${col} LIMIT 200`, [])
     );
     res.json(rows.map(r => r[col.toUpperCase()]));
   } catch (e) {
@@ -99,12 +115,12 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabe
     : (req.query.statusVal?.trim() || '');
   const sortCol = req.query.sortCol?.trim() || '';
   const sortDir = (req.query.sortDir?.trim() || 'ASC').toUpperCase();
-  // Tabelas transacionais: não-donos são forçados à sua loja; dono pode passar ?filtroLoja=N
+  // Tabelas de loja: não-donos são forçados à sua loja; dono pode passar ?filtroLoja=N
   // Tabelas globais: qualquer role pode usar ?filtroLoja=N como filtro opcional
-  const usaFiltroLoja = TABELAS_FILTRO_LOJA.has(tabela.toUpperCase());
-  const idLojaFiltro  = usaFiltroLoja
-    ? resolveIdLoja(req, schema, { donoPodemFiltrar: true })
-    : (req.query.filtroLoja ? parseInt(req.query.filtroLoja, 10) : null);
+  const { escopo, loja: lojaUsuario, semLoja } = escopoRequisicao(req, schema, tabela);
+  if (semLoja) return res.status(403).json({ erro: ERRO_SEM_LOJA });
+  const filtroLojaQuery = req.query.filtroLoja ? parseInt(req.query.filtroLoja, 10) : null;
+  const idLojaFiltro = lojaUsuario ?? (Number.isInteger(filtroLojaQuery) ? filtroLojaQuery : null);
 
   // Filtros extras por coluna: ?filtros={"GRUPO":"BEBIDAS"}
   let filtrosExtras = {};
@@ -155,17 +171,21 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabe
         conditions.push(`TRIM(${statusCol}::TEXT) = $${params.length}`);
       }
 
-      // Filtro de loja: aplica somente se a tabela tiver coluna ID_LOJA
+      // Filtro de loja. Tabela filha filtra pela loja do pai; coluna de loja ausente só é
+      // ignorada pro dono (filtro opcional) — gerente/vendedor não veem nada sem ela.
       if (idLojaFiltro !== null) {
-        const temIdLoja = await query(db, `
+        const colunaLoja = escopo?.coluna ?? (escopo ? null : 'ID_LOJA');
+        const temColunaLoja = !colunaLoja || (await query(db, `
           SELECT 1 FROM information_schema.columns
           WHERE table_schema = $1 AND LOWER(table_name) = LOWER($2)
-            AND UPPER(column_name) = 'ID_LOJA'
+            AND UPPER(column_name) = $3
           LIMIT 1
-        `, [schema, tabela]);
-        if (temIdLoja.length) {
+        `, [schema, tabela, colunaLoja])).length > 0;
+        if (temColunaLoja) {
           params.push(idLojaFiltro);
-          conditions.push(`ID_LOJA = $${params.length}`);
+          conditions.push(escopo ? sqlEscopo(escopo, params.length) : `ID_LOJA = $${params.length}`);
+        } else if (lojaUsuario !== null) {
+          return { total: 0, registros: [] };
         }
       }
 
@@ -268,20 +288,16 @@ async function handleSave(req, res, forceUpdate) {
 
   const hooks = HOOKS[tabela.toUpperCase()];
 
-  // Verificação e injeção de loja para gerente/vendedor — só em tabelas transacionais
-  if (TABELAS_FILTRO_LOJA.has(tabela.toUpperCase())) {
-    const userRole   = req.userRoles?.[schema];
-    const idLojaJwt  = req.userLojas?.[schema] ?? null;
-    /* SEC-03: donos ficam de fora de propósito — JWT de dono não carrega idLoja (acesso
-     * global multi-PDV). Não-donos são protegidos porque idLojaJwt vem do JWT assinado,
-     * nunca do corpo da requisição. */
-    if (userRole !== 'dono' && idLojaJwt !== null) {
-      const idLojaRegistro = registro.ID_LOJA ?? registro.id_loja ?? null;
-      if (idLojaRegistro !== null && Number(idLojaRegistro) !== idLojaJwt)
-        return res.status(403).json({ erro: 'não é permitido salvar registros de outra loja' });
-      // Garante que ID_LOJA esteja sempre preenchido com o valor do JWT
-      registro.ID_LOJA = idLojaJwt;
-    }
+  // Loja de gerente/vendedor vem do JWT assinado, nunca do corpo; dono não tem restrição.
+  const escopoLoja = escopoRequisicao(req, schema, tabela);
+  if (escopoLoja.semLoja) return res.status(403).json({ erro: ERRO_SEM_LOJA });
+  if (escopoLoja.restrito && escopoLoja.escopo.coluna) {
+    const col = escopoLoja.escopo.coluna;
+    const idLojaRegistro = registro[col] ?? registro[col.toLowerCase()] ?? null;
+    if (idLojaRegistro !== null && Number(idLojaRegistro) !== escopoLoja.loja)
+      return res.status(403).json({ erro: 'não é permitido salvar registros de outra loja' });
+    delete registro[col.toLowerCase()];
+    registro[col] = escopoLoja.loja;
   }
 
   // Detecta UPDATE antecipadamente: se todas as PKs estão presentes no payload,
@@ -353,6 +369,24 @@ async function handleSave(req, res, forceUpdate) {
         const allPKsNull = pkVals.every(v => v == null);
         const existing   = allPKsNull ? [] : await query(db, `SELECT 1 FROM ${tabela} WHERE ${pkWhere} LIMIT 1`, pkVals);
         update = existing.length > 0;
+      }
+
+      // Gerente/vendedor: o registro existente e (em tabela filha) o pai informado precisam ser da loja dele.
+      if (escopoLoja.restrito) {
+        const { escopo, loja } = escopoLoja;
+        if (update) {
+          const dentro = await query(db,
+            `SELECT 1 FROM ${tabela} WHERE ${pkWhere} AND ${sqlEscopo(escopo, pkVals.length + 1)} LIMIT 1`, [...pkVals, loja]);
+          if (!dentro.length) throw erroOutraLoja();
+        }
+        if (escopo.pai) {
+          const fkVal = registro[Object.keys(registro).find(k => k.toUpperCase() === escopo.fk)];
+          if (fkVal != null || !update) {
+            const pai = await query(db,
+              `SELECT 1 FROM ${escopo.pai} WHERE ${escopo.fk} = $1 AND ID_LOJA = $2 LIMIT 1`, [fkVal ?? null, loja]);
+            if (!pai.length) throw erroOutraLoja();
+          }
+        }
       }
 
       // Captura estado anterior para o audit log de UPDATE
@@ -507,13 +541,23 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaT
 
   const pks = Array.isArray(pk) ? pk : [pk];
   if (pks.some(p => !NOME_VALIDO.test(p))) return res.status(400).json({ erro: 'pk inválido' });
+  const { escopo, loja, semLoja, restrito } = escopoRequisicao(req, schema, tabela);
+  if (semLoja) return res.status(403).json({ erro: ERRO_SEM_LOJA });
 
   try {
     // Captura estado anterior e apaga na mesma conexão de tenant
     const dadosAntes = await withTenantConnection(schema, async db => {
+      const valores  = Array.isArray(pkValores) ? pkValores : [pkValores];
       const whereStr = pks.map((p, i) => `${p.toUpperCase()} = $${i + 1}`).join(' AND ');
-      const before   = await query(db, `SELECT * FROM ${tabela} WHERE ${whereStr} LIMIT 1`, pkValores);
+      const before   = await query(db, `SELECT * FROM ${tabela} WHERE ${whereStr} LIMIT 1`, valores);
       const snap     = before[0] ?? null;
+
+      // Gerente/vendedor só exclui registro da própria loja.
+      if (restrito && snap) {
+        const dentro = await query(db,
+          `SELECT 1 FROM ${tabela} WHERE ${whereStr} AND ${sqlEscopo(escopo, valores.length + 1)} LIMIT 1`, [...valores, loja]);
+        if (!dentro.length) throw erroOutraLoja();
+      }
 
       // Pedido cancelado trava exclusão do próprio pedido e de seus itens/parcelas —
       // mesma regra de "não pode ser editado de jeito nenhum" aplicada no handleSave.
@@ -540,6 +584,7 @@ router.delete('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaT
 
     res.json({ ok: true });
   } catch (e) {
+    if (e.isForbidden) return res.status(403).json({ erro: e.message });
     if (e.isValidation) return res.status(400).json({ erro: e.message });
     erroServidor(res, e, `DELETE ${tabela}`);
   }

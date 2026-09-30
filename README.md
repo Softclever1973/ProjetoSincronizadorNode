@@ -311,6 +311,8 @@ Existe uma camada de autenticação JWT separada do token de sync (`?token=`), u
 
 Três roles por vínculo usuário↔empresa: `dono`, `gerente` (escopo de loja) e `vendedor` (escopo de loja, mais restrito).
 
+**Escopo de loja** (`domain/escopoLoja.js`): gerente e vendedor só leem, criam, editam e excluem registros da loja do vínculo — a loja vem do JWT assinado, nunca da requisição. Vale para as "tabelas de loja", as mesmas que a sincronização separa por filial no `tabelas.js` (`PEDIDOS`, `A_RECEBER`, `A_PAGAR`, `NOTAS_FISCAIS` pela coluna `ID_LOJA`; `PEDIDOS_ITENS`, `PEDIDOS_PARCELAS_PAGAMENTOS`, `NOTAS_FISCAIS_ITENS` pela loja do registro pai) mais `CLIENTES`. Cadastros compartilhados (produtos, auxiliares, vendedores…) não são restringidos, mesmo tendo `ID_LOJA`. O dono vê todas as lojas e pode filtrar com `?filtroLoja=N`. Gerente/vendedor sem loja no vínculo não vê nada dessas tabelas. Cobertura em `tests/escopoLoja.integracao.test.js`.
+
 ### Sistema de permissões por módulo
 
 Cada área do sistema é um **módulo** (`produtos`, `clientes`, `pedidos`, `fornecedores`, `usuarios`, `financeiro`, `faturamento`, `auditoria`, `configuracoes`) ou uma **função** pontual sem tela própria (hoje: `exportacao`, o botão de baixar CSV/Excel). Cada módulo/função tem um nível estilo Unix — `--` (bloqueado), `r-` (só leitura) ou `rw` (leitura + escrita) — definido **por plano** (`permissoes_plano`) e **por role** (`permissoes_role`). A **permissão efetiva** de um usuário é a interseção (o menor dos dois níveis): um plano Lite nunca libera Financeiro, mesmo para o dono; uma role vendedor nunca edita Configurações, mesmo num plano Diamante.
@@ -346,7 +348,7 @@ POST /auth/redefinir-senha    { "token": "...", "novaSenha": "..." }
 POST /auth/refresh            (Bearer) → reemite o JWT com role/loja/vendedor atuais
 POST /auth/logout             (Bearer) → revoga o token (blacklist em memória, por processo)
 GET  /auth/me                 (Bearer) → { id, schemas }
-GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modulos efetivos
+GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modulos efetivos (só leitura — empresa nova só pelo superadmin)
 ```
 
 ---
@@ -369,7 +371,7 @@ Rotas usadas pela interface **SiriusWebFrontend**. Requerem `Authorization: Bear
 
 O módulo é resolvido a partir da tabela (`domain/tabelaModulo.js`: `PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`, `MOVIMENTACOES`→`produtos_movimentacao`, `NOTAS_FISCAIS`/`NOTAS_FISCAIS_ITENS`→`notas_fiscais`); tabelas fora desse mapa não são gateadas por módulo, só por `checkSchema` — e, pelo isolamento de `search_path`, só alcançam tabelas da própria empresa.
 
-Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja`, `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
+Todas essas rotas aplicam o [escopo de loja](#roles) nas tabelas de loja (listagem, `by-pk`, `distinct`, gravação e exclusão). Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja` (só vale pro dono nas tabelas de loja), `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
 
 O upsert incrementa `ID_ULTIMA_ATUALIZACAO_MATRIZ` via `seq_atualizacao_matriz` quando a coluna existe, propagando a alteração às filiais no próximo pull.
 

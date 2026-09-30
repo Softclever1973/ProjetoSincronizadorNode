@@ -8,9 +8,29 @@ const { registrarAuditLog } = require('#server/infrastructure/repositories/audit
 const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 const { gerarFluxoCaixa } = require('#server/application/financeiro/fluxoCaixa.js');
 const { capitalizarStatus, exprProximoDiaUtil, dataFutura } = require('#server/domain/financeiro.js');
+const { lojaObrigatoria } = require('#server/domain/escopoLoja.js');
+const { resolveIdLoja } = require('#server/interfaces/http/routes/api/helpers.js');
 
 const guardRead  = [authJwt, checkSchema, requireModulo('financeiro', 'r')];
 const guardWrite = [authJwt, checkSchema, requireModulo('financeiro', 'w')];
+
+const ERRO_OUTRA_LOJA = 'registro de outra loja';
+// Gerente/vendedor só mexem em conta da loja do vínculo (JWT); dono em qualquer uma.
+function foraDaLoja(req, s, idLojaRegistro) {
+  const loja = lojaObrigatoria(req, s);
+  return loja !== null && (Number.isNaN(loja) || Number(idLojaRegistro) !== loja);
+}
+// Loja gravada numa conta nova: a do JWT pro não-dono; o dono escolhe no modal.
+function lojaParaGravar(req, s) {
+  const loja = lojaObrigatoria(req, s);
+  if (loja === null) return req.body.id_loja ? parseInt(req.body.id_loja, 10) : null;
+  return loja;
+}
+async function pedidoForaDaLoja(req, s, idPedido) {
+  if (lojaObrigatoria(req, s) === null) return false;
+  const { rows: [p] } = await pool.query(`SELECT id_loja FROM ${s}.pedidos WHERE id_pedido = $1`, [idPedido]);
+  return !p || foraDaLoja(req, s, p.id_loja);
+}
 
 // Resolve vendedor/condição de pagamento por nome (dropdown de busca), igual ao padrão já usado pra cliente/fornecedor.
 async function resolverIdVendedor(s, nome) {
@@ -128,7 +148,7 @@ router.get('/:schema/financeiro/contas-receber', ...guardRead, async (req, res) 
   const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
   const pageSize = Math.min(100, parseInt(req.query.pageSize || '50'));
-  const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
+  const filtroLoja = resolveIdLoja(req, s, { donoPodemFiltrar: true });
   const orderCol = CR_SORT_MAP[sortCol] ?? 'ar.vencimento';
   const orderDir = sortDir === 'DESC' ? 'DESC' : 'ASC';
 
@@ -231,7 +251,8 @@ router.post('/:schema/financeiro/contas-receber', ...guardWrite, async (req, res
           status, forma_pagamento, parcela, total_parcelas, observacao, vendedor, condicao_pagamento,
           valor_desconto, valor_juros, valor_multa, valor_recebido } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
-  const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
+  const id_loja = lojaParaGravar(req, s);
+  if (Number.isNaN(id_loja)) return res.status(403).json({ erro: 'usuário sem loja vinculada nesta empresa' });
 
   if (!descricao || !valor || !data_vencimento)
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
@@ -304,6 +325,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (req
       `SELECT * FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (foraDaLoja(req, s, atual.id_loja)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     const atualCanceladoCR = String(atual.status ?? '').toLowerCase().startsWith('cancelad');
     const novoCanceladoCR  = String(status ?? '').toLowerCase().startsWith('cancelad');
     if (atualCanceladoCR && status && !novoCanceladoCR) {
@@ -343,7 +365,7 @@ router.patch('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (req
          valor_desconto, valor_juros, valor_multa, valor_recebido`,
       [descricao || null, id_cliente, valor || null, data_vencimento || null,
        data_recebimento ?? null, status ? capitalizarStatus(status) : null, parseInt(forma_pagamento) || null,
-       parcela || null, parseInt(total_parcelas) || null, observacao ?? null, id_loja ?? null,
+       parcela || null, parseInt(total_parcelas) || null, observacao ?? null, lojaObrigatoria(req, s) === null ? (id_loja ?? null) : null,
        id_vendedor, id_condicao_pagamento,
        parseFloat(valor_desconto) || null, parseFloat(valor_juros) || null, parseFloat(valor_multa) || null, parseFloat(valor_recebido) || null,
        id]
@@ -406,6 +428,7 @@ router.delete('/:schema/financeiro/contas-receber/:id', ...guardWrite, async (re
       `SELECT * FROM ${s}.a_receber WHERE srv_id = $1`, [id]
     );
     if (!antes) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (foraDaLoja(req, s, antes.id_loja)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     await pool.query(`DELETE FROM ${s}.a_receber WHERE srv_id = $1`, [id]);
     registrarAuditLog(req, s, 'A_RECEBER', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
@@ -435,7 +458,7 @@ router.get('/:schema/financeiro/contas-pagar', ...guardRead, async (req, res) =>
   const { status, data_inicio, data_fim, q, sortCol, sortDir } = req.query;
   const page     = Math.max(1, parseInt(req.query.page     || '1'));
   const pageSize = Math.min(100, parseInt(req.query.pageSize || '50'));
-  const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
+  const filtroLoja = resolveIdLoja(req, s, { donoPodemFiltrar: true });
   const orderCol = CP_SORT_MAP[sortCol] ?? 'ap.vencimento';
   const orderDir = sortDir === 'DESC' ? 'DESC' : 'ASC';
 
@@ -528,7 +551,8 @@ router.post('/:schema/financeiro/contas-pagar', ...guardWrite, async (req, res) 
           status, forma_pagamento, parcela, total_parcelas, condicao_pagamento, observacao,
           desconto, valor_juros, multa } = req.body;
   // Gerente/vendedor: loja vem do JWT. Dono: aceita do body (selecionado no modal).
-  const id_loja = req.userLojas?.[s] ?? (req.body.id_loja ? parseInt(req.body.id_loja, 10) : null);
+  const id_loja = lojaParaGravar(req, s);
+  if (Number.isNaN(id_loja)) return res.status(403).json({ erro: 'usuário sem loja vinculada nesta empresa' });
 
   if (!descricao || !valor || !data_vencimento)
     return res.status(400).json({ erro: 'descricao, valor e data_vencimento são obrigatórios' });
@@ -605,6 +629,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req, 
       `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
     );
     if (!atual) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (foraDaLoja(req, s, atual.id_loja)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     const atualCancelado = String(atual.status ?? '').toLowerCase().startsWith('cancelad');
     const novoCancelado  = String(status ?? '').toLowerCase().startsWith('cancelad');
     if (atualCancelado && status && !novoCancelado) {
@@ -646,7 +671,7 @@ router.patch('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req, 
       [descricao || null, fornecedor || null, id_fornecedor, valor || null, parseFloat(valor_pago) || null,
        data_vencimento || null, data_pagamento ?? null, status ? capitalizarStatus(status) : null,
        parseInt(forma_pagamento) || null, parseInt(parcela) || null, parseInt(total_parcelas) || null,
-       id_condicao_pagamento, observacao ?? null, id_loja ?? null,
+       id_condicao_pagamento, observacao ?? null, lojaObrigatoria(req, s) === null ? (id_loja ?? null) : null,
        parseFloat(desconto) || null, parseFloat(valor_juros) || null, parseFloat(multa) || null, id]
     );
     if (rowCount === 0) return res.status(404).json({ erro: 'Registro não encontrado' });
@@ -668,6 +693,7 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req,
       `SELECT * FROM ${s}.a_pagar WHERE srv_id = $1`, [id]
     );
     if (!antes) return res.status(404).json({ erro: 'Registro não encontrado' });
+    if (foraDaLoja(req, s, antes.id_loja)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     await pool.query(`DELETE FROM ${s}.a_pagar WHERE srv_id = $1`, [id]);
     registrarAuditLog(req, s, 'A_PAGAR', 'DELETE', String(id), null, antes);
     res.json({ ok: true });
@@ -682,7 +708,7 @@ router.delete('/:schema/financeiro/contas-pagar/:id', ...guardWrite, async (req,
 router.get('/:schema/financeiro/fluxo-caixa', ...guardRead, async (req, res) => {
   const s = req.params.schema;
   const mes = req.query.mes || new Date().toISOString().slice(0, 7); // YYYY-MM
-  const filtroLoja = req.query.filtroLoja !== undefined ? parseInt(req.query.filtroLoja) : null;
+  const filtroLoja = resolveIdLoja(req, s, { donoPodemFiltrar: true });
 
   try {
     const rows = await gerarFluxoCaixa(s, mes, filtroLoja);
@@ -705,6 +731,7 @@ router.post('/:schema/financeiro/parcelas-pedido', authJwt, checkSchema, async (
   if (!id_pedido)
     return res.status(400).json({ erro: 'id_pedido é obrigatório' });
   try {
+    if (await pedidoForaDaLoja(req, s, id_pedido)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     const resultado = await gerarContasReceberDoPedido(s, id_pedido);
     res.status(201).json(resultado);
   } catch (e) {
@@ -719,6 +746,7 @@ router.delete('/:schema/financeiro/parcelas-pedido/:id_pedido/:parcela', authJwt
   const s   = req.params.schema;
   const obs = `pedido:${req.params.id_pedido}:${req.params.parcela}`;
   try {
+    if (await pedidoForaDaLoja(req, s, req.params.id_pedido)) return res.status(403).json({ erro: ERRO_OUTRA_LOJA });
     const { rowCount } = await pool.query(
       `DELETE FROM ${s}.a_receber
        WHERE observacao = $1

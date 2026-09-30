@@ -109,12 +109,18 @@ describe('injeção de SQL por nome de coluna/PK vindo do cliente', () => {
 });
 
 describe('schema reservado nunca vira empresa', () => {
-  test.each(['public', 'information_schema', 'pg_catalog'])('POST /user/empresas com schema=%s é recusado', async schema => {
+  test.each(['public', 'empresa_nova_ataque'])('usuário comum não cria empresa (POST /user/empresas, schema=%s)', async schema => {
+    // Criar empresa é só do superadmin: a rota não existe mais.
     const r = await request(app).post('/user/empresas').set('Authorization', AUTH_VENDEDOR)
       .send({ schema, token: `TOKEN_ATAQUE_${schema}`, nome: 'ataque' });
-    expect(r.status).toBe(400);
+    expect(r.status).toBe(404);
     const { rows } = await pool.query('SELECT 1 FROM public.sync_tenants WHERE token = $1', [`TOKEN_ATAQUE_${schema}`]);
     expect(rows).toHaveLength(0);
+  });
+
+  test.each(['public', 'information_schema', 'pg_catalog'])('initializeTenantSchema recusa schema=%s', async schema => {
+    const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
+    await expect(initializeTenantSchema(schema)).rejects.toThrow(/reservado/);
   });
 
   test('JWT com vínculo a public não passa no checkSchema', async () => {

@@ -19,7 +19,8 @@ app.use('/api', crudRouter);
 
 function tokenPara(role) {
   return jwt.sign(
-    { id: 999999, nome: 'Teste', schemas: [TEST_SCHEMA], roles: { [TEST_SCHEMA]: role }, lojas: {}, vendedores: {} },
+    // Gerente/vendedor sempre têm loja no vínculo (sem ela não veem nada — escopoLoja.js).
+    { id: 999999, nome: 'Teste', schemas: [TEST_SCHEMA], roles: { [TEST_SCHEMA]: role }, lojas: { [TEST_SCHEMA]: 1 }, vendedores: {} },
     process.env.JWT_SECRET
   );
 }
@@ -244,7 +245,7 @@ describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.j
   });
 
   test('vendedor consegue editar um pedido que ele mesmo criou', async () => {
-    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5002, 1, 'P')`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status, id_loja) VALUES (5002, 1, 'P', 1)`);
 
     const res = await request(app)
       .put(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS`)
@@ -255,7 +256,7 @@ describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.j
   });
 
   test('vendedor consegue excluir uma parcela de pagamento (PEDIDOS_PARCELAS_PAGAMENTOS, PK composta)', async () => {
-    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5003, 1, 'P')`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status, id_loja) VALUES (5003, 1, 'P', 1)`);
     await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos_parcelas_pagamentos (id_pedido, parcela, valor) VALUES (5003, 1, 100)`);
 
     const res = await request(app)

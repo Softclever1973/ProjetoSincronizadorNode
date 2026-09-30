@@ -13,11 +13,6 @@ function schemaTenantValido(nome) {
     && !SCHEMAS_RESERVADOS.has(nome) && !nome.startsWith('pg_');
 }
 
-/** Tabelas transacionais que exigem filtro obrigatório de ID_LOJA para gerente/vendedor. */
-const TABELAS_FILTRO_LOJA = new Set([
-  'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES',
-]);
-
 /** Colunas de controle de sincronização que nunca devem ser exibidas ao usuário. */
 const COLS_OCULTAS = new Set([
   'ID_ULTIMA_ATUALIZACAO_MATRIZ', 'ID_ULTIMA_ATUALIZACAO_WEB',
@@ -182,7 +177,6 @@ function validarRegistro(tabela, registro, { isUpdate = false } = {}) {
 module.exports = {
   NOME_VALIDO,
   schemaTenantValido,
-  TABELAS_FILTRO_LOJA,
   COLS_OCULTAS,
   COLS_DATA_PEDIDO,
   CHAVES_PERMITIDAS,
