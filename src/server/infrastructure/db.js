@@ -1,5 +1,6 @@
 const { Pool } = require('pg');
 const { databaseUrl } = require('../../config');
+const { schemaTenantValido } = require('../domain/validacao');
 
 const pool = new Pool({ connectionString: databaseUrl });
 
@@ -16,7 +17,7 @@ async function withConnection(fn) {
 }
 
 function _validarSchema(schemaName) {
-  if (!/^[a-z_][a-z0-9_]*$/.test(schemaName))
+  if (!schemaTenantValido(schemaName))
     throw new Error(`Nome de schema inválido: '${schemaName}'`);
 }
 
@@ -28,12 +29,15 @@ function _validarSchema(schemaName) {
 async function withTenantConnection(schemaName, fn) {
   _validarSchema(schemaName);
   const client = await pool.connect();
+  let erroReset;
   try {
-    await client.query(`SET search_path TO ${schemaName}, public`);
+    // Só o schema do tenant: com ", public" um nome de tabela vindo do cliente alcançava public.usuarios/sync_tenants.
+    await client.query(`SET search_path TO ${schemaName}`);
     return await fn(client);
   } finally {
-    await client.query('SET search_path TO public');
-    client.release();
+    try { await client.query('SET search_path TO public'); } catch (e) { erroReset = e; }
+    // Conexão que não resetou é descartada (release com erro), nunca volta pro pool com o search_path do tenant.
+    client.release(erroReset);
   }
 }
 

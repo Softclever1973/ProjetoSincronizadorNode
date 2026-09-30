@@ -297,7 +297,9 @@ O servidor suporta múltiplas empresas simultaneamente. Cada empresa tem um **sc
 node scripts/create-empresa.js --schema=empresa_jb --token=NOVO_TOKEN_AQUI --nome="JB Atacado"
 ```
 
-**Regras para `--schema`:** apenas letras minúsculas, números e `_`; deve começar com letra ou `_`.
+**Regras para `--schema`:** apenas letras minúsculas, números e `_`; deve começar com letra ou `_`; `public`, `information_schema` e `pg_*` são reservados (recusados).
+
+**Isolamento entre empresas:** toda query de empresa roda com `search_path` apontando **só** para o schema dela (`withTenantConnection`) — nunca inclui `public`. Assim um nome de tabela vindo do cliente (sync ou CRUD web) só alcança tabelas da própria empresa; tabelas globais (`usuarios`, `sync_tenants`, permissões, `audit_log`) são sempre acessadas com o prefixo `public.` explícito no código. Nomes de tabela, coluna e PK vindos do cliente só são aceitos se forem identificadores simples (`[A-Za-z_][A-Za-z0-9_]*`); qualquer outro é recusado com 400. Cobertura em `tests/seguranca.tenant.integracao.test.js`.
 
 ---
 
@@ -357,15 +359,15 @@ Rotas usadas pela interface **SiriusWebFrontend**. Requerem `Authorization: Bear
 
 | Método | Rota | Gate | Descrição |
 |---|---|---|---|
-| GET | `/api/:schema/tabelas/:tabela/colunas` | schema | Introspecção de colunas (nome, tipo, is_generated) |
-| GET | `/api/:schema/tabelas/:tabela/next-pk` | schema | Próximo valor de PK disponível (`?pk=COLUNA`) |
-| GET | `/api/:schema/tabelas/:tabela/by-pk` | schema | Registro único por PK (`?pk=COL&value=VAL`) |
-| GET | `/api/:schema/tabelas/:tabela/distinct/:col` | schema | Valores distintos de uma coluna (máx. 200) |
+| GET | `/api/:schema/tabelas/:tabela/colunas` | módulo `r` | Introspecção de colunas (nome, tipo, is_generated) |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | módulo `r` | Próximo valor de PK disponível (`?pk=COLUNA`) |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | módulo `r` | Registro único por PK (`?pk=COL&value=VAL`) |
+| GET | `/api/:schema/tabelas/:tabela/distinct/:col` | módulo `r` | Valores distintos de uma coluna (máx. 200) |
 | GET | `/api/:schema/tabelas/:tabela` | módulo `r` | Listagem paginada com busca e filtros |
 | POST/PUT | `/api/:schema/tabelas/:tabela` | módulo `w` | Upsert — body: `{ pk, registro }` (pk pode ser array) |
 | DELETE | `/api/:schema/tabelas/:tabela` | módulo `w` | Deleção por PK — body: `{ pk, pkValores }` |
 
-O módulo é resolvido a partir da tabela (`PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`); tabelas fora desse mapa não são gateadas por módulo, só por `checkSchema`.
+O módulo é resolvido a partir da tabela (`domain/tabelaModulo.js`: `PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`, `MOVIMENTACOES`→`produtos_movimentacao`, `NOTAS_FISCAIS`/`NOTAS_FISCAIS_ITENS`→`notas_fiscais`); tabelas fora desse mapa não são gateadas por módulo, só por `checkSchema` — e, pelo isolamento de `search_path`, só alcançam tabelas da própria empresa.
 
 Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja`, `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
 
@@ -470,7 +472,7 @@ Após iniciar o cliente, acesse `http://localhost:3001` (login por sessão-cooki
 | Página | Descrição |
 |---|---|
 | `/` — Conflitos | Registros alterados nos dois lados desde a última sync. Ações: **Manter local**, **Manter servidor**, **Mesclar campos** |
-| `/status` | Total no servidor vs. local, cursor sincronizado, pendentes de envio, por tabela |
+| `/status` | Cursor sincronizado × máximo do servidor e pendentes de envio, por tabela (abre na hora); os totais servidor/local (`COUNT(*)`) carregam depois via `/status/totais`, com cache de 1 min |
 | `/auditoria` | Comparação registro a registro servidor × filial; **Aplicar Matriz em Tudo** ou **Resolver um por um** |
 | `/configuracoes` | Ativa/desativa tabelas do sync sem reiniciar; carga inicial/parcial em lote |
 | `/parametros` | Parâmetros globais sincronizados bidirecionalmente entre PDVs |
@@ -502,10 +504,11 @@ A cada ciclo, para cada tabela ativa:
 
 ### Push (Filial → Servidor)
 
-1. Lê todos os registros de `SYNC_ALTERACOES_PENDENTES` para a tabela
-2. Para cada pendente: se não existe mais localmente, envia `{ deletar: true }`; senão envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida
-3. O servidor compara versões: sem conflito → aplica e retorna `{ ok: true, idAtualizacaoMatriz }`; com conflito → `{ conflito: true, versaoServidor }`
-4. Registros enviados com sucesso saem de `SYNC_ALTERACOES_PENDENTES`
+1. Lê os registros de `SYNC_ALTERACOES_PENDENTES` da tabela (até 2000 por ciclo)
+2. Envia em lotes de até 100 registros / 2 MB para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistros` (cada item com a última versão conhecida; registro que não existe mais localmente vai como `{ deletar: true }`). Servidor antigo sem essa rota (404) → cai para `ReceberRegistro`, um por um
+3. O servidor aplica cada registro isoladamente e devolve um resultado por item: `{ ok }`, `{ conflito: true, versaoServidor }` ou `{ erro }`
+4. Ok e conflito saem de `SYNC_ALTERACOES_PENDENTES`; erro fica na fila para a próxima tentativa
+5. O envio pode ser pausado sem parar o pull (`sync-pausa.json`, botões na página de Configurações)
 
 FKs marcadas `traduzirSrvId` são resolvidas para o `SRV_ID` do pai antes do envio; um pai ainda sem `SRV_ID` reenfileira a si mesmo automaticamente.
 
@@ -521,32 +524,32 @@ Um conflito ocorre quando um registro foi alterado **tanto na filial quanto no s
 
 ### Passo 1 — `src/client/domain/tabelas.js`
 
-Respeitando a **ordem de FK** (tabelas pai antes das filhas):
+Pela factory `tabela({...})`, **depois** de toda tabela que ela referencia (ordem de FK):
 
 ```js
-{
+tabela({
   nome: 'NOME_DA_TABELA',
-  pk: 'ID_NOME_DA_TABELA',     // string simples ou array para PK composta: ['COL1', 'COL2']
-  temDelete: true,
-  filtroFilial: null,          // nome da coluna pra restringir por loja, ou null
-  endpoint: null,               // só se a tabela usa uma rota não-padrão
+  pk: 'ID_NOME_DA_TABELA',      // string simples ou array para PK composta: ['COL1', 'COL2']
   grupo: 'Cadastros',
+  filtroFilial: null,           // coluna que restringe por loja (ex.: 'ID_LOJA'), ou null
+  filtroFilialViaFK: null,      // tabela filha sem ID_LOJA: coluna FK pro pai (declarado antes, com filtroFilial) + entrada em `fks`
   generator: null,              // generator Firebird; null se a filial não cria registros
+  srvId: false,                 // true = PK global do servidor (SRV_ID), escrita de volta no Firebird
   colunaData: null,             // coluna de data de negócio p/ retenção de 2 anos; null = sem expiração
-}
+})
 ```
 
 **Grupos existentes:** `Auxiliares`, `Cadastros`, `Produtos`, `Clientes`, `Fornecedores`, `Transportadores`, `Vendedores`, `Kits`.
 
-### Passo 2 — `src/server/interfaces/http/routes/datasnap/sincronizacao.js`
+Rode `npx jest tabelas.invariantes` para conferir ordem de FK e o pai do `filtroFilialViaFK`.
 
-Adicione o nome ao `Set` `TABELAS_PERMITIDAS`.
+### Passo 2 — Servidor: nada a cadastrar
 
-### Passo 3 — Garantir a coluna no PostgreSQL
+O servidor aceita qualquer nome de tabela válido e a cria **no schema da empresa**: o client chama `GarantirTabela` ao iniciar, com os tipos reais das colunas do Firebird (cria a tabela, ou só as colunas que faltam), e o primeiro push também cria o que faltar, inferindo tipos pelos valores. `ID_ULTIMA_ATUALIZACAO_MATRIZ` e os triggers de sequência/deleção são criados junto.
 
-A tabela precisa de `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER` com trigger incrementando via `nextval('schema.seq_atualizacao_matriz')`. Se a tabela **não existe** ainda, ela é criada automaticamente no primeiro push da filial, com tipos inferidos do primeiro registro.
+Se a tabela tem `colunaData` e filhas, inclua-a em `GRUPOS_LIMPEZA` (`src/limpeza.js`), filhas antes do pai.
 
-### Passo 4 — Reiniciar servidor e cliente
+### Passo 3 — Reiniciar servidor e cliente
 
 O `setup.js` cria o trigger `SYNC_NOME_DA_TABELA` no Firebird automaticamente.
 

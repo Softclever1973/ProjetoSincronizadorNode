@@ -4,6 +4,7 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
 const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('#server/domain/planos.js');
+const { schemaTenantValido } = require('#server/domain/validacao.js');
 const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('#server/domain/modulos.js');
 const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoesCache.js');
 const sessoes = require('#server/infrastructure/cache/sessoesCache.js');
@@ -204,8 +205,8 @@ router.post('/empresas', async (req, res) => {
   if (!dono?.nome || !dono?.email || !dono?.senha)
     return res.status(400).json({ erro: 'dono.nome, email e senha são obrigatórios' });
 
-  if (!/^[a-z_][a-z0-9_]*$/.test(empresa.schema))
-    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore' });
+  if (!schemaTenantValido(empresa.schema))
+    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore (public/pg_* são reservados)' });
 
   if (dono.senha.length < 6)
     return res.status(400).json({ erro: 'Senha do dono deve ter no mínimo 6 caracteres' });

@@ -36,6 +36,7 @@ node scripts/create-empresa.js \
 **Regras para `--schema`:**
 - Apenas letras minúsculas, números e `_`
 - Deve começar com letra ou `_`
+- Não pode ser `public`, `information_schema` nem começar com `pg_` (schemas do sistema — `public` guarda usuários e tokens de todas as empresas). O script, a tela do superadmin e a API recusam.
 - Exemplos válidos: `empresa_kr`, `filial_sp01`, `rede_jb`
 
 **O que esse script faz:**

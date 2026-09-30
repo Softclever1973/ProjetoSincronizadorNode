@@ -44,6 +44,7 @@ const Firebird   = require('node-firebird');
 const readline   = require('readline');
 const fs         = require('fs');
 const path       = require('path');
+const { schemaTenantValido } = require('../src/server/domain/validacao');
 
 // Tabelas de infraestrutura criadas pelo create-empresa — mantidas, apenas limpas
 const TABELAS_INFRA = new Set([
@@ -81,8 +82,9 @@ if (!schema) {
   process.exit(1);
 }
 
-if (!/^[a-z_][a-z0-9_]*$/.test(schema)) {
-  console.error(`Schema inválido: "${schema}". Use apenas letras minúsculas, números e underscore.`);
+// Reset apaga tabelas: nunca em public (usuários/tokens de todas as empresas) nem em schema do sistema.
+if (!schemaTenantValido(schema)) {
+  console.error(`Schema inválido: "${schema}". Use apenas letras minúsculas, números e underscore (public, information_schema e pg_* são reservados).`);
   process.exit(1);
 }
 

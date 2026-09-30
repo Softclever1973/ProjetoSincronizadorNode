@@ -4,6 +4,7 @@ const { pool } = require('#server/infrastructure/db.js');
 const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
 const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
+const { schemaTenantValido } = require('#server/domain/validacao.js');
 
 // O vínculo do dono com um VENDEDORES "DONO" acontece em routes/auth.js (login/refresh),
 // não aqui — a tabela VENDEDORES do schema recém-criado só existe depois do primeiro
@@ -33,8 +34,8 @@ router.post('/', authJwt, async (req, res) => {
   if (!schema || !token)
     return res.status(400).json({ erro: 'schema e token são obrigatórios' });
 
-  if (!/^[a-z_][a-z0-9_]*$/.test(schema))
-    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore' });
+  if (!schemaTenantValido(schema))
+    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore (public/pg_* são reservados)' });
 
   const client = await pool.connect();
   try {

@@ -22,7 +22,7 @@ const { getCurrentTime } = require('#server/infrastructure/timeService.js');
 const HOOKS = require('./hooks');
 
 /* ── GET /api/:schema/tabelas/:tabela/colunas ── */
-router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   try {
@@ -34,7 +34,7 @@ router.get('/:schema/tabelas/:tabela/colunas', authJwt, checkSchema, async (req,
 });
 
 /* ── GET /api/:schema/tabelas/:tabela/next-pk ── */
-router.get('/:schema/tabelas/:tabela/next-pk', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela/next-pk', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela } = req.params;
   const { pk } = req.query;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
@@ -50,7 +50,7 @@ router.get('/:schema/tabelas/:tabela/next-pk', authJwt, checkSchema, async (req,
 });
 
 /* ── GET /api/:schema/tabelas/:tabela/by-pk — busca registro único por PK ── */
-router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   const { pk, value } = req.query;
@@ -67,7 +67,7 @@ router.get('/:schema/tabelas/:tabela/by-pk', authJwt, checkSchema, async (req, r
 });
 
 /* ── GET /api/:schema/tabelas/:tabela/distinct/:col ── */
-router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, async (req, res) => {
+router.get('/:schema/tabelas/:tabela/distinct/:col', authJwt, checkSchema, requireModuloDaTabela('r'), async (req, res) => {
   const { schema, tabela, col } = req.params;
   if (!NOME_VALIDO.test(tabela)) return res.status(400).json({ erro: 'nome de tabela inválido' });
   if (!NOME_VALIDO.test(col))    return res.status(400).json({ erro: 'nome de coluna inválido' });

@@ -8,6 +8,7 @@ const { colunasCache, getColunasServidor, getPkServidor } = require('#server/inf
 const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario, colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
+const { NOME_VALIDO } = require('#server/domain/validacao.js');
 const {
   alocarSrvId,
   processarDelecao,
@@ -410,6 +411,8 @@ function detalheErroPg(e, registro) {
 async function aplicarRegistroRecebido(db, { schemaName, idLoja, nomeTabela, pk, temSrvId }, { registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false }) {
   const avisos = [];
   const pks = Array.isArray(pk) ? pk : [pk];
+  const colunaInvalida = identificadorInvalido(Object.keys(registro));
+  if (colunaInvalida !== undefined) throw new Error(`nome de coluna inválido: '${colunaInvalida}'`);
 
   // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
   let srvId = null;
@@ -571,6 +574,11 @@ function mensagemErroRegistro(e, schemaName, nomeTabela, registro) {
   return `Erro ao aplicar registro: ${e.message}${detalheErroPg(e, registro)}`;
 }
 
+// Nome de coluna/PK vira SQL (DDL, WHERE, ON CONFLICT): só identificador simples.
+function identificadorInvalido(nomes) {
+  return nomes.find(n => typeof n !== 'string' || !NOME_VALIDO.test(n));
+}
+
 // Validação comum às duas rotas de recebimento; devolve o contexto ou { erro }.
 function contextoRecebimento(req) {
   const idLoja = parseInt(req.query.idLoja, 10);
@@ -579,6 +587,8 @@ function contextoRecebimento(req) {
   if (!tabela || !pk) return { erro: 'tabela e pk são obrigatórios' };
   const nomeTabela = String(tabela).toUpperCase().trim();
   if (!validarNomeTabela(nomeTabela)) return { erro: `Tabela '${nomeTabela}' não permitida` };
+  const pkInvalida = identificadorInvalido(Array.isArray(pk) ? pk : [pk]);
+  if (pkInvalida !== undefined) return { erro: `pk inválida: '${pkInvalida}'` };
   const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
   return { schemaName: req.schemaName, idLoja, nomeTabela, pk, temSrvId, nomeFilial };
 }
@@ -685,6 +695,8 @@ router.post('/GarantirTabela', auth, async (req, res) => {
   }
 
   const pksArr = (Array.isArray(pks) ? pks : [pks]).map(p => String(p).toUpperCase().trim());
+  const pkInvalida = identificadorInvalido(pksArr);
+  if (pkInvalida !== undefined) return res.status(400).json({ message: `pk inválida: '${pkInvalida}'` });
   const colunasTipadas = colunas
     .map(c => ({ nome: String(c?.nome || '').toUpperCase().trim(), tipoPg: TIPO_PG_POR_TAG[c?.tipo] || 'TEXT' }))
     .filter(c => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c.nome));

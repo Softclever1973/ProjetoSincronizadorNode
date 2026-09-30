@@ -1,5 +1,12 @@
 const { query, execute } = require('#server/infrastructure/db.js');
 const { chaveNegocioTabela } = require('#server/domain/schema.js');
+const { NOME_VALIDO } = require('#server/domain/validacao.js');
+
+// Última barreira antes de DDL: nome de tabela/coluna/PK entra cru no SQL.
+function exigirIdentificadores(nomes) {
+  const invalido = nomes.find(n => typeof n !== 'string' || !NOME_VALIDO.test(n));
+  if (invalido !== undefined) throw new Error(`identificador inválido: '${invalido}'`);
+}
 
 // Colunas que o servidor gerencia internamente — não devem ser sobrescritas pela filial
 // nem viram coluna numa tabela criada automaticamente (ver criarTabelaSeNecessario).
@@ -49,6 +56,7 @@ async function colunasTabela(db, schema, tabela) {
  */
 async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipadas, pks, useSrvId = false) {
   const pkSet = new Set(Array.isArray(pks) ? pks : [pks]);
+  exigirIdentificadores([nomeTabela, ...pkSet, ...colunasTipadas.map(c => c.nome)]);
   const colunasTipadasFiltradas = colunasTipadas.filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome));
   const colunas = colunasTipadasFiltradas
     .map(({ nome, tipoPg }) => `${nome} ${tipoPg}${pkSet.has(nome) && !useSrvId ? ' NOT NULL' : ''}`);
@@ -90,4 +98,4 @@ async function criarTabelaSeNecessario(db, nomeTabela, schemaName, colunasTipada
   console.log(`[${schemaName}] Tabela '${nomeTabela}' criada automaticamente via carga inicial.`);
 }
 
-module.exports = { colunasTabela, criarTabelaSeNecessario, COLUNAS_IGNORADAS_SERVIDOR };
+module.exports = { colunasTabela, criarTabelaSeNecessario, exigirIdentificadores, COLUNAS_IGNORADAS_SERVIDOR };

@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const { schemaTenantValido } = require('../domain/validacao');
 
 // Seed do sistema de permissões por módulo (plano × módulo, role × módulo) — reproduz
 // exatamente o comportamento anterior (requireRole/requireRoleOuVendedorEm/
@@ -380,6 +381,7 @@ async function initializeDatabase() {
 }
 
 async function initializeTenantSchema(schemaName) {
+  if (!schemaTenantValido(schemaName)) throw new Error(`Nome de schema inválido ou reservado: '${schemaName}'`);
   const client = await pool.connect();
   try {
     for (const ddl of ddlTenant(schemaName)) {

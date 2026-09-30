@@ -62,7 +62,7 @@ node scripts/create-empresa.js --schema=empresa_jb --token=TOKEN_NOVO [--nome="J
 
 | Parâmetro | Obrigatório | Descrição |
 |-----------|:-----------:|-----------|
-| `--schema=NAME` | Sim | Nome do schema PostgreSQL. Apenas letras minúsculas, números e underscore. Ex: `empresa_jb` |
+| `--schema=NAME` | Sim | Nome do schema PostgreSQL. Apenas letras minúsculas, números e underscore; `public`, `information_schema` e `pg_*` são reservados. Ex: `empresa_jb` |
 | `--token=STRING` | Sim | Token de sincronização. Deve ser único no sistema. |
 | `--nome=TEXT` | Não | Nome de exibição da empresa. Padrão: mesmo que `--schema` |
 
@@ -269,6 +269,8 @@ Retorna status de sync de todas as tabelas do tenant: total de registros e ID m�
 ```bash
 curl "http://localhost:8080/datasnap/rest/TSMSincronizacao/StatusTabelas?token=xyz"
 ```
+
+Parâmetros opcionais: `idLoja` + `filtros` (JSON `[{ nome, filtroFilial, filtroFilialViaFK }]`) restringem à loja; `contar=0` pula o `COUNT(*)` (volta `total: null`, só `maxId`) — é assim que a página Status do client abre rápido em banco grande, buscando os totais depois.
 
 Resposta:
 ```json

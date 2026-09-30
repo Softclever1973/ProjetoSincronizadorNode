@@ -230,10 +230,9 @@ describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.j
   const AUTH_VENDEDOR = `Bearer ${tokenPara('vendedor')}`;
 
   // Níveis do seed fixados por override da empresa de teste — a matriz global é editável pela tela.
-  beforeAll(() => fixarOverrides(TEST_SCHEMA, 'vendedor', {
-    pedidos: 'rw', pedidos_inserir: 'rw', pedidos_editar: 'rw', produtos: 'r-', clientes: 'r-',
-  }));
-  afterAll(() => limparOverrides(TEST_SCHEMA));
+  const NIVEIS = { pedidos: 'rw', pedidos_inserir: 'rw', pedidos_editar: 'rw', produtos: 'r-', clientes: 'r-' };
+  beforeAll(() => fixarOverrides(TEST_SCHEMA, 'vendedor', NIVEIS));
+  afterAll(() => limparOverrides(TEST_SCHEMA, 'vendedor', Object.keys(NIVEIS)));
 
   test('vendedor consegue criar um pedido', async () => {
     const res = await request(app)

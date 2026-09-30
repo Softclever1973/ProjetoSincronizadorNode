@@ -25,8 +25,12 @@ async function fixarOverrides(schema, role, niveis) {
   await recarregarPermissoes();
 }
 
-async function limparOverrides(schema) {
-  await pool.query('DELETE FROM public.permissoes_empresa WHERE schema_name = $1', [schema]);
+// Só os módulos que o arquivo fixou: arquivos em paralelo usam o mesmo schema de teste.
+async function limparOverrides(schema, role, modulos) {
+  await pool.query(
+    'DELETE FROM public.permissoes_empresa WHERE schema_name = $1 AND role = $2 AND modulo = ANY($3)',
+    [schema, role, modulos]
+  );
   await recarregarPermissoes();
 }
 
