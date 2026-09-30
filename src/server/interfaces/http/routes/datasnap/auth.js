@@ -7,6 +7,7 @@ const { pool }              = require('#server/infrastructure/db.js');
 const { vincularVendedorDono } = require('#server/application/onboarding/vincularVendedorDono.js');
 const authJwt        = require('#server/interfaces/http/middleware/authJwt.js');
 const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
+const tentativasLogin = require('#server/infrastructure/cache/tentativasLogin.js');
 const { enviarEmail } = require('#server/infrastructure/email/emailApiClient.js');
 
 const JWT_EXPIRES_IN = '24h';
@@ -67,14 +68,24 @@ router.post('/login', async (req, res) => {
   if (!email || !senha)
     return res.status(400).json({ erro: 'email e senha obrigatórios' });
 
+  // Bloqueado não chega a conferir a senha: nem acerto passa durante a trava.
+  const espera = tentativasLogin.segundosBloqueado(email, req.ip);
+  if (espera) {
+    res.set('Retry-After', String(espera));
+    return res.status(429).json({ erro: `Muitas tentativas de login. Tente novamente em ${Math.ceil(espera / 60)} minuto(s).` });
+  }
+
   try {
     const result = await pool.query(
       'SELECT id, email, nome, senha_hash, is_super_admin FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
       [email]
     );
     const usuario = result.rows[0];
-    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash)))
+    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash))) {
+      tentativasLogin.registrarFalha(email, req.ip);
       return res.status(401).json({ erro: 'credenciais inválidas' });
+    }
+    tentativasLogin.registrarSucesso(email);
 
     const claims = await montarClaims(usuario.id);
     const { token, nome, isSuperAdmin } = assinarToken(usuario, claims);

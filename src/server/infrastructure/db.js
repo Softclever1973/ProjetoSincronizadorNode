@@ -4,6 +4,9 @@ const { schemaTenantValido } = require('../domain/validacao');
 
 const pool = new Pool({ connectionString: databaseUrl });
 
+// Erro em conexão ociosa (Postgres reiniciou, rede caiu): sem este listener o processo inteiro cai.
+pool.on('error', e => console.error(`[pg] conexão ociosa descartada: ${e.message}`));
+
 /**
  * Executa uma função com um client do pool. Libera o client ao final.
  */

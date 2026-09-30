@@ -69,6 +69,9 @@ function encerrarComErro(err) {
 
   const app = express();
 
+  // Atrás de proxy (nginx, IIS…) o IP real vem no X-Forwarded-For; sem isso o limite de login trata todos como um IP só.
+  if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
+
   app.use((req, res, next) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');

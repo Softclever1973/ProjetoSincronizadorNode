@@ -273,6 +273,7 @@ npm run client:dev
 | `PORT` | Não | `8080` | Porta HTTP do servidor |
 | `JWT_SECRET` | Sim | — | Segredo para assinar JWTs |
 | `ADMIN_TOKEN` | Não | — | Token para `/admin/reload-empresas` e `/admin/reload-permissoes` |
+| `TRUST_PROXY` | Não | — | Atrás de proxy reverso: nº de proxies na frente (ex.: `1`), para o servidor ver o IP real do cliente (usado no limite de login) |
 
 ### Cliente (`src/client/.env`, apenas em desenvolvimento)
 
@@ -350,6 +351,8 @@ POST /auth/logout             (Bearer) → revoga o token (blacklist em memória
 GET  /auth/me                 (Bearer) → { id, schemas }
 GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modulos efetivos (só leitura — empresa nova só pelo superadmin)
 ```
+
+**Limite de tentativas no login** (`infrastructure/cache/tentativasLogin.js`, em memória): 5 senhas erradas no mesmo e-mail ou 30 falhas do mesmo IP em 15 min → `429` com `Retry-After` até a janela acabar (nem a senha certa passa). Login certo zera a contagem do e-mail. Atrás de proxy, configure `TRUST_PROXY`.
 
 ---
 
