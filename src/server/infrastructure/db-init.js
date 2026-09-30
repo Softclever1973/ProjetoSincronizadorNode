@@ -154,6 +154,9 @@ const DDL_CONTROLE = [
   )`,
   _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
   _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
+  // Limpeza (2026-09-30): nomes antigos que saíram de domain/modulos.js (viraram pedidos_editar e imprimir).
+  `DELETE FROM public.permissoes_plano WHERE modulo IN ('pedidos_alterar', 'pedidos_imprimir', 'produtos_imprimir', 'clientes_imprimir')`,
+  `DELETE FROM public.permissoes_role  WHERE modulo IN ('pedidos_alterar', 'pedidos_imprimir', 'produtos_imprimir', 'clientes_imprimir')`,
   // Migração (2026-09-28): override por empresa (cliente) — 3ª camada além de plano×role.
   // Diferente de permissoes_plano/permissoes_role, aqui a AUSÊNCIA de linha significa
   // "sem override, usa o efetivo de plano×role normalmente" (não fail-closed) — por isso
