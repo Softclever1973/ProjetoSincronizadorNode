@@ -30,6 +30,14 @@ const ID_LOJA  = 1;
 const PRODUTO_SALDO_BAIXO = { ID_PRODUTO: 2, SRV_ID: 2, CODIGO: 'PROD002', DESCRICAO: 'Produto Saldo Baixo E2E', UNIDADE: 'UN', PRECO_VENDA: 5, SALDO_ATUAL: 2 };
 const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 1, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
 
+// [id, nº, série, cliente, emissão, entrada/saída, E/S, status, status SEFAZ, valor, loja] — usadas por e2e/notas-fiscais.spec.js.
+const NOTAS_FISCAIS_E2E = [
+  [1, 101, '1', 'NF Alfa E2E',       '2026-09-10 10:00', '2026-09-10 10:00', 'S', 'Pendente',  'Autorizada', 100,  ID_LOJA],
+  [2, 102, '1', 'NF Beta E2E',       '2026-09-20 18:30', '2026-09-25 09:00', 'E', 'Entregue',  'Digitacao',  250,  ID_LOJA],
+  [3, 103, '2', 'NF Gama E2E',       '2026-10-01 08:00', '2026-10-01 08:00', 'S', 'Cancelada', 'Cancelada',  999,  ID_LOJA],
+  [4, 104, '1', 'NF Outra Loja E2E', '2026-09-20 12:00', '2026-09-25 12:00', 'E', 'Pendente',  'Autorizada', 300,  2],
+];
+
 const DDL_TABELAS_NEGOCIO = [
   `CREATE TABLE IF NOT EXISTS PEDIDOS (
     ID_PEDIDO INTEGER PRIMARY KEY,
@@ -126,6 +134,25 @@ const DDL_TABELAS_NEGOCIO = [
     ID_FORMA_DE_PAGAMENTO INTEGER PRIMARY KEY,
     DESCRICAO_FORMA_DE_PAGAMENTO TEXT
   )`,
+  // Só as colunas que a listagem e os filtros de notas-fiscais.html usam.
+  `CREATE TABLE IF NOT EXISTS NOTAS_FISCAIS (
+    SRV_ID INTEGER PRIMARY KEY,
+    ID_NOTA_FISCAL INTEGER,
+    N_NOTA_FISCAL INTEGER,
+    SERIE TEXT,
+    CL_RAZAO_SOCIAL TEXT,
+    CL_CNPJ TEXT,
+    DATA_EMISSAO TIMESTAMP,
+    DATA_ENTRADA_SAIDA TIMESTAMP,
+    ENTRADA_SAIDA VARCHAR(1),
+    STATUS TEXT,
+    STATUS_NFE TEXT,
+    VALOR_TOTAL_DA_NOTA NUMERIC(15,2),
+    ID_LOJA INTEGER,
+    DATA_FOI_CADASTRADO TIMESTAMP,
+    DATA_ULTIMA_ATUALIZACAO TIMESTAMP,
+    ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER
+  )`,
   `CREATE TABLE IF NOT EXISTS MOVIMENTACOES (
     ID_MOVIMENTACAO INTEGER PRIMARY KEY,
     ID_PRODUTO INTEGER,
@@ -176,6 +203,15 @@ async function seed() {
       VALUES (1, 1, 'Cliente Teste E2E', 'Cliente E2E', 'Fulano de Tal', 'S', '12345678909', $1)
       ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA
     `, [ID_LOJA]);
+
+    // Notas com emissão ≠ entrada/saída (os dois filtros de data não se confundem); a 4ª é de outra loja e o gerente não pode ver.
+    await execute(db, 'TRUNCATE TABLE NOTAS_FISCAIS');
+    for (const nf of NOTAS_FISCAIS_E2E) {
+      await execute(db, `
+        INSERT INTO NOTAS_FISCAIS (SRV_ID, ID_NOTA_FISCAL, N_NOTA_FISCAL, SERIE, CL_RAZAO_SOCIAL, DATA_EMISSAO, DATA_ENTRADA_SAIDA, ENTRADA_SAIDA, STATUS, STATUS_NFE, VALOR_TOTAL_DA_NOTA, ID_LOJA)
+        VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, nf);
+    }
 
     await upsertProduto(db, PRODUTO_PADRAO);
     await upsertProduto(db, PRODUTO_SALDO_BAIXO);
@@ -228,6 +264,12 @@ async function seed() {
     VALUES ($1, $2, 'gerente', $3)
     ON CONFLICT (id_usuario, schema_name) DO UPDATE SET role = 'gerente', id_loja = $3
   `, [idUsuario, SCHEMA, ID_LOJA]);
+
+  // Notas Fiscais liberado só nesta empresa de teste (override por empresa vale acima do plano).
+  await pool.query(`
+    INSERT INTO public.permissoes_empresa (schema_name, role, modulo, nivel) VALUES ($1, 'gerente', 'notas_fiscais', 'rw')
+    ON CONFLICT (schema_name, role, modulo) DO UPDATE SET nivel = EXCLUDED.nivel
+  `, [SCHEMA]);
 
   console.log(`Seed e2e OK — schema=${SCHEMA} email=${EMAIL} senha=${SENHA}`);
 }
