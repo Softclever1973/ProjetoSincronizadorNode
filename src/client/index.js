@@ -208,7 +208,7 @@ async function main() {
   const { estaPausado, envioEstaPausado, cargaEstaPausada } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
-    verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
+    verificarAtualizacao, verificarOpcoesBeta, ehBeta, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
   } = require('./application/updater');
   const { notificarToast } = require('./infrastructure/notificar');
@@ -232,6 +232,8 @@ async function main() {
     baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
     versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null, atualizacaoStatus: null,
     resetPendente: null,
+    // PC de teste interno (versão beta instalada): nunca atualiza sozinho; a faixa do topo oferece { beta, estavel }.
+    ehBeta: ehBeta(VERSAO_ATUAL), opcoesBeta: null,
   };
 
   function log(msg) {
@@ -265,6 +267,20 @@ async function main() {
     if (!isPackaged) return;
     if (Date.now() - ultimaVerificacaoAtualizacao < INTERVALO_ATUALIZACAO_MS) return;
     ultimaVerificacaoAtualizacao = Date.now();
+    if (contextoSync.ehBeta) {
+      try {
+        const opcoes = await verificarOpcoesBeta(VERSAO_ATUAL);
+        const chave = o => `${o?.beta?.versao}|${o?.estavel?.versao}`;
+        if (chave(opcoes) !== chave(contextoSync.opcoesBeta)) {
+          log(`[Atualização] Versão de teste v${VERSAO_ATUAL} — beta mais nova: ${opcoes.beta ? 'v' + opcoes.beta.versao : 'nenhuma'}; estável: ${opcoes.estavel ? 'v' + opcoes.estavel.versao : 'nenhuma'}`);
+          atualizacaoEmitter.emit('beta-opcoes', opcoes);
+        }
+        contextoSync.opcoesBeta = opcoes;
+      } catch (e) {
+        log(`[Atualização] falha ao verificar versões (beta): ${e.message}`);
+      }
+      return;
+    }
     try {
       const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
       if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
@@ -282,7 +298,7 @@ async function main() {
   // (nunca no meio de um pull/push), ver `cicloComAutoAtualizacao` mais abaixo.
   const tentativasFalhasPorVersao = {};
   async function aplicarAtualizacaoSeNecessario() {
-    if (!isPackaged || !AUTO_ATUALIZAR) return;
+    if (!isPackaged || !AUTO_ATUALIZAR || contextoSync.ehBeta) return; // beta: só pela faixa, nunca sozinho
     const info = contextoSync.atualizacaoDisponivel;
     if (!info?.urlDownload) return;
     if (!contextoSync.idLoja) return; // ainda sem loja conhecida — sem isso não dá pra calcular o jitter
@@ -311,8 +327,9 @@ async function main() {
 
     // Usada tanto pelo fluxo automático quanto pelo botão manual "Atualizar agora" — ambos
     // ganham o mesmo respawn supervisionado + rollback (ver updater.js).
-    contextoSync._aplicarAtualizacao = async () => {
-      const info = contextoSync.atualizacaoDisponivel;
+    // alvo ('beta' | 'estavel') só no PC de teste — escolhido na faixa de versão de teste.
+    contextoSync._aplicarAtualizacao = async (alvo) => {
+      const info = contextoSync.ehBeta ? contextoSync.opcoesBeta?.[alvo] : contextoSync.atualizacaoDisponivel;
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
       await aplicarAtualizacaoComRespawn({
         urlDownload: info.urlDownload,

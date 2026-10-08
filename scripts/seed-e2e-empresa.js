@@ -35,6 +35,7 @@ const NOTAS_FISCAIS_E2E = [
   [1, 101, '1', 'NF Alfa E2E',       '2026-09-10 10:00', '2026-09-10 10:00', 'S', 'Pendente',  'Autorizada', 100,  ID_LOJA],
   [2, 102, '1', 'NF Beta E2E',       '2026-09-20 18:30', '2026-09-25 09:00', 'E', 'Entregue',  'Digitacao',  250,  ID_LOJA],
   [3, 103, '2', 'NF Gama E2E',       '2026-10-01 08:00', '2026-10-01 08:00', 'S', 'Cancelada', 'Cancelada',  999,  ID_LOJA],
+  [5, 105, '1', 'NF Delta E2E',      '2026-09-15 09:00', '2026-09-15 09:00', 'S', 'Pendente',  null,         50,   ID_LOJA],
   [4, 104, '1', 'NF Outra Loja E2E', '2026-09-20 12:00', '2026-09-25 12:00', 'E', 'Pendente',  'Autorizada', 300,  2],
 ];
 

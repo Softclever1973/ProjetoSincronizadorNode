@@ -109,6 +109,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_name }}
+          # Tag com sufixo (v1.6.0-beta.1) = beta de teste interno: sai como Pre-release e não vira "Latest",
+          # então o /releases/latest que as lojas consultam continua apontando para a estável.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ !contains(github.ref_name, '-') }}
           files: |
             dist/server.exe
             dist/client.exe

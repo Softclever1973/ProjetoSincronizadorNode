@@ -6,7 +6,8 @@ const { spawn } = require('child_process');
 const EventEmitter = require('events');
 
 const REPO = 'Softclever1973/ProjetoSincronizadorNode';
-const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`;
+const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`; // ignora pre-releases: lojas nunca recebem beta
+const API_LISTA_URL = `https://api.github.com/repos/${REPO}/releases?per_page=30`;
 const USER_AGENT = 'ProjetoSincronizadorNode-client';
 const TIMEOUT_MS = 15_000; // timeout de INATIVIDADE (sem dados recebidos) — não corta um download grande em andamento
 const JANELA_LIVENESS_MS = 10_000; // quanto tempo o processo antigo espera o novo se manter de pé antes de confiar nele
@@ -65,15 +66,73 @@ function baixarArquivo(url, destino) {
   });
 }
 
-/** Compara "1.2.3" com "1.10.0" corretamente (não como string). */
+/**
+ * Compara versões semver: "1.2.3" × "1.10.0" numericamente, e beta antes da final
+ * ("1.6.0-beta.2" < "1.6.0-beta.10" < "1.6.0" < "1.6.1").
+ */
+function _separarVersao(v) {
+  const s = String(v).replace(/^v/i, '');
+  const i = s.indexOf('-');
+  return i < 0 ? [s, ''] : [s.slice(0, i), s.slice(i + 1)];
+}
+
 function compararVersoes(a, b) {
-  const pa = String(a).split('.').map(Number);
-  const pb = String(b).split('.').map(Number);
+  const [baseA, preA] = _separarVersao(a);
+  const [baseB, preB] = _separarVersao(b);
+  const pa = baseA.split('.').map(Number);
+  const pb = baseB.split('.').map(Number);
   for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
     const na = pa[i] || 0, nb = pb[i] || 0;
     if (na !== nb) return na > nb ? 1 : -1;
   }
+  if (!preA || !preB) return preA ? -1 : preB ? 1 : 0; // a final vem depois de qualquer beta da mesma versão
+  const ia = preA.split('.'), ib = preB.split('.');
+  for (let i = 0; i < Math.max(ia.length, ib.length); i++) {
+    if (ia[i] === undefined) return -1;
+    if (ib[i] === undefined) return 1;
+    const numA = /^\d+$/.test(ia[i]), numB = /^\d+$/.test(ib[i]);
+    if (numA && numB && Number(ia[i]) !== Number(ib[i])) return Number(ia[i]) > Number(ib[i]) ? 1 : -1;
+    if (numA !== numB) return numA ? -1 : 1;
+    if (!numA && ia[i] !== ib[i]) return ia[i] > ib[i] ? 1 : -1;
+  }
   return 0;
+}
+
+// Versão de teste interno: tag com sufixo (v1.6.0-beta.1). No GitHub sai como "Pre-release" (ver build.yml).
+const ehBeta = versao => /-/.test(String(versao));
+
+function _infoRelease(release) {
+  const asset = (release.assets || []).find(a => a.name === 'client.exe');
+  return {
+    versao: String(release.tag_name || '').replace(/^v/i, ''),
+    notas: release.body || '',
+    urlRelease: release.html_url,
+    urlDownload: asset ? asset.browser_download_url : null,
+  };
+}
+
+/**
+ * Opções da faixa de beta: a beta mais nova que a instalada (se houver) e a estável mais nova
+ * (mesmo que seja anterior à beta — aí `voltaVersao` = true e a tela avisa). Só releases com client.exe.
+ */
+function escolherOpcoesBeta(releases, versaoAtual) {
+  const validas = (releases || [])
+    .filter(r => !r.draft && r.tag_name)
+    .map(r => ({ ...(_infoRelease(r)), prerelease: Boolean(r.prerelease) }))
+    .filter(r => r.urlDownload);
+  const maisNova = lista => lista.reduce((m, r) => (!m || compararVersoes(r.versao, m.versao) > 0 ? r : m), null);
+  const beta = maisNova(validas.filter(r => r.prerelease && compararVersoes(r.versao, versaoAtual) > 0));
+  const estavel = maisNova(validas.filter(r => !r.prerelease && !ehBeta(r.versao)));
+  const semFlag = ({ prerelease, ...resto }) => resto;
+  return {
+    beta: beta ? semFlag(beta) : null,
+    estavel: estavel ? { ...semFlag(estavel), voltaVersao: compararVersoes(estavel.versao, versaoAtual) < 0 } : null,
+  };
+}
+
+/** Para quem está numa beta: consulta as releases (inclui pre-releases) e devolve { beta, estavel }. */
+async function verificarOpcoesBeta(versaoAtual) {
+  return escolherOpcoesBeta(await getJson(API_LISTA_URL), versaoAtual);
 }
 
 /**
@@ -82,16 +141,9 @@ function compararVersoes(a, b) {
  */
 async function verificarAtualizacao(versaoAtual) {
   const release = await getJson(API_URL);
-  const versaoRemota = String(release.tag_name || '').replace(/^v/i, '');
-  if (!versaoRemota || compararVersoes(versaoRemota, versaoAtual) <= 0) return null;
-
-  const asset = (release.assets || []).find(a => a.name === 'client.exe');
-  return {
-    versao: versaoRemota,
-    notas: release.body || '',
-    urlRelease: release.html_url,
-    urlDownload: asset ? asset.browser_download_url : null,
-  };
+  const info = _infoRelease(release);
+  if (!info.versao || compararVersoes(info.versao, versaoAtual) <= 0) return null;
+  return info;
 }
 
 function sleep(ms) {
@@ -330,6 +382,9 @@ function limparExeAntigo(exePath) {
 
 module.exports = {
   verificarAtualizacao,
+  verificarOpcoesBeta,
+  escolherOpcoesBeta,
+  ehBeta,
   aplicarAtualizacaoComRespawn,
   limparExeAntigo,
   compararVersoes,

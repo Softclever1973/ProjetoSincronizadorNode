@@ -33,9 +33,14 @@ function criarEventosRouter() {
       res.write(`event: novo-reset-pendente\ndata: ${JSON.stringify(info)}\n\n`);
     };
 
+    const onBetaOpcoes = (opcoes) => {
+      res.write(`event: beta-opcoes\ndata: ${JSON.stringify(opcoes)}\n\n`);
+    };
+
     errosEmitter.on('novo-erro', onErro);
     conflitosEmitter.on('novo-conflito', onConflito);
     atualizacaoEmitter.on('status', onAtualizacaoStatus);
+    atualizacaoEmitter.on('beta-opcoes', onBetaOpcoes);
     resetEmitter.on('novo-reset-pendente', onResetPendente);
 
     req.on('close', () => {
@@ -43,6 +48,7 @@ function criarEventosRouter() {
       errosEmitter.off('novo-erro', onErro);
       conflitosEmitter.off('novo-conflito', onConflito);
       atualizacaoEmitter.off('status', onAtualizacaoStatus);
+      atualizacaoEmitter.off('beta-opcoes', onBetaOpcoes);
       resetEmitter.off('novo-reset-pendente', onResetPendente);
     });
   });

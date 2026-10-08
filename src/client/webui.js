@@ -58,6 +58,8 @@ function iniciarWebUI(porta = PORTA_PADRAO, contexto = {}) {
     res.locals.abasPermitidas       = ABAS_POR_ROLE[sess.role] || new Set();
     res.locals.atualizacaoDisponivel = contexto.atualizacaoDisponivel || null;
     res.locals.atualizacaoStatus = contexto.atualizacaoStatus || null;
+    res.locals.versaoBeta = contexto.ehBeta ? contexto.versaoAtual : null;
+    res.locals.opcoesBeta = contexto.opcoesBeta || null;
     res.locals.resetPendente = contexto.resetPendente || null;
     res.locals.syncPausa = estadoPausa();
     next();

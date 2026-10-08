@@ -96,6 +96,8 @@
 <script>
   window.__atualizacaoDisponivelInicial = <%- JSON.stringify(typeof atualizacaoDisponivel !== 'undefined' ? atualizacaoDisponivel : null) %>;
   window.__atualizacaoStatusInicial = <%- JSON.stringify(typeof atualizacaoStatus !== 'undefined' ? atualizacaoStatus : null) %>;
+  window.__versaoBeta = <%- JSON.stringify(typeof versaoBeta !== 'undefined' ? versaoBeta : null) %>;
+  window.__opcoesBeta = <%- JSON.stringify(typeof opcoesBeta !== 'undefined' ? opcoesBeta : null) %>;
 </script>
 
 <!-- Preenchido no load e mantido em tempo real via SSE 'novo-reset-pendente' — ver
