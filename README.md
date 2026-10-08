@@ -605,6 +605,8 @@ No `.exe` empacotado, o cliente:
 
 Push de uma tag `v*` dispara `.github/workflows/build.yml`, que builda os dois executáveis, roda um smoke test em cada um e publica um GitHub Release com os `.zip`.
 
+**Tag estável só da `main`.** O primeiro job do workflow (`verificar-origem`) falha — sem build nem release — se uma tag **sem sufixo** apontar para um commit que não está na `main`, porque ela viraria "Latest" e atualizaria todas as lojas. Fluxo: betas na `dev`; para lançar, juntar na `main` e criar a tag lá.
+
 **Versões beta (teste interno).** Tag com sufixo — `v1.6.0-beta.1`, `v1.6.0-beta.2`… — sai como **Pre-release** e não vira "Latest". As lojas consultam `/releases/latest`, que ignora pre-releases, então **nunca recebem beta**. Para testar, baixe o `client.exe` da beta no GitHub e instale à mão no PC de teste. Um client em versão beta **não atualiza sozinho**: a faixa roxa no topo da web UI (`localhost:3001`) oferece "Atualizar para a beta mais recente" e "Ir para a versão estável" (ou "Voltar…", com aviso, se a estável publicada for anterior à beta). Indo para a estável, o PC sai do modo de teste e volta a se atualizar sozinho como as lojas. A comparação de versões é semver: `1.6.0-beta.2 < 1.6.0-beta.10 < 1.6.0`.
 
 ---

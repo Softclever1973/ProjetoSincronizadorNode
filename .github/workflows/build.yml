@@ -6,7 +6,33 @@ on:
       - "v*"
 
 jobs:
+  # Tag estável (sem sufixo) vira "Latest" e atualiza todas as lojas: só sai se o commit já estiver na main.
+  # Beta (v1.6.0-beta.1) pode sair de qualquer branch (ex.: dev) — vira Pre-release e as lojas não pegam.
+  verificar-origem:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar repositório (com histórico, para comparar com a main)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Tag estável só a partir da main
+        run: |
+          TAG="${{ github.ref_name }}"
+          if [[ "$TAG" == *-* ]]; then
+            echo "Beta ($TAG): pode sair de qualquer branch."
+            exit 0
+          fi
+          git fetch origin main --quiet
+          if git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "Tag estável $TAG aponta para um commit da main — ok."
+          else
+            echo "::error::A tag estável $TAG aponta para um commit que não está na main. Junte o código na main e crie a tag lá, ou use uma tag beta (ex.: $TAG-beta.1)."
+            exit 1
+          fi
+
   build:
+    needs: verificar-origem
     runs-on: windows-latest
     steps:
       - name: Clonar repositório
