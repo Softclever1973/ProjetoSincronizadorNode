@@ -29,6 +29,13 @@ const ID_LOJA  = 1;
 // (venda_saldo_negativo = 'N' é o default de parametros, ver src/db-init.js).
 const PRODUTO_SALDO_BAIXO = { ID_PRODUTO: 2, SRV_ID: 2, CODIGO: 'PROD002', DESCRICAO: 'Produto Saldo Baixo E2E', UNIDADE: 'UN', PRECO_VENDA: 5, SALDO_ATUAL: 2 };
 const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 1, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
+const PRODUTO_LISTA       = { ID_PRODUTO: 3, SRV_ID: 3, CODIGO: 'PROD003', DESCRICAO: 'Produto Lista E2E',      UNIDADE: 'UN', PRECO_VENDA: 100, SALDO_ATUAL: 1000 };
+
+// [id, descrição, ajuste, P/V, A/R, comissão] — lista 10 é a do cliente 2; usadas por e2e/pedidos.spec.js.
+const LISTAS_PRECOS_E2E = [
+  [10, 'FABRICANTE E2E', -10, 'P', 'R', 5],
+  [11, 'REP E2E',          5, 'V', 'A', 3],
+];
 
 // [id, nº, série, cliente, emissão, entrada/saída, E/S, status, status SEFAZ, valor, loja] — usadas por e2e/notas-fiscais.spec.js.
 const NOTAS_FISCAIS_E2E = [
@@ -154,6 +161,24 @@ const DDL_TABELAS_NEGOCIO = [
     DATA_ULTIMA_ATUALIZACAO TIMESTAMP,
     ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER
   )`,
+  `CREATE TABLE IF NOT EXISTS LISTA_PRECOS (
+    ID_LISTA INTEGER PRIMARY KEY,
+    DESCRICAO TEXT,
+    PERCENTUAL_ACRESCIMO_REDUCAO NUMERIC(5,2),
+    PERCENTUAL_OU_VALOR VARCHAR(4),
+    ACRESCIMO_OU_REDUCAO VARCHAR(1),
+    PERCENTUAL_DE_COMISSAO NUMERIC(5,2)
+  )`,
+  `CREATE TABLE IF NOT EXISTS PRODUTOS_X_LISTA (
+    ID_PRODUTO_X_LISTA INTEGER PRIMARY KEY,
+    ID_LISTA INTEGER,
+    ID_PRODUTO INTEGER,
+    PRECO NUMERIC(15,2)
+  )`,
+  // Colunas da lista de preços em tabelas que já existiam em rodadas anteriores do seed.
+  `ALTER TABLE CLIENTES ADD COLUMN IF NOT EXISTS TABELA_PRECO INTEGER`,
+  `ALTER TABLE PEDIDOS_ITENS ADD COLUMN IF NOT EXISTS ID_LISTA INTEGER`,
+  `ALTER TABLE PEDIDOS_ITENS ADD COLUMN IF NOT EXISTS PERCENTUAL_DE_COMISSAO NUMERIC(5,2)`,
   `CREATE TABLE IF NOT EXISTS MOVIMENTACOES (
     ID_MOVIMENTACAO INTEGER PRIMARY KEY,
     ID_PRODUTO INTEGER,
@@ -204,6 +229,21 @@ async function seed() {
       VALUES (1, 1, 'Cliente Teste E2E', 'Cliente E2E', 'Fulano de Tal', 'S', '12345678909', $1)
       ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA
     `, [ID_LOJA]);
+    await execute(db, `
+      INSERT INTO CLIENTES (SRV_ID, ID_CLIENTE, RAZAO_SOCIAL, FANTASIA, CONSUMIDOR_FINAL, CPF, ID_LOJA, TABELA_PRECO)
+      VALUES (2, 2, 'Cliente Lista E2E', 'Cliente Lista', 'S', '98765432100', $1, 10)
+      ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA, TABELA_PRECO = EXCLUDED.TABELA_PRECO
+    `, [ID_LOJA]);
+
+    // Produto 3 nas duas listas; produto 1 em nenhuma (continua no preço de venda).
+    await execute(db, 'TRUNCATE TABLE LISTA_PRECOS, PRODUTOS_X_LISTA');
+    for (const l of LISTAS_PRECOS_E2E) {
+      await execute(db, `
+        INSERT INTO LISTA_PRECOS (ID_LISTA, DESCRICAO, PERCENTUAL_ACRESCIMO_REDUCAO, PERCENTUAL_OU_VALOR, ACRESCIMO_OU_REDUCAO, PERCENTUAL_DE_COMISSAO)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, l);
+      await execute(db, 'INSERT INTO PRODUTOS_X_LISTA (ID_PRODUTO_X_LISTA, ID_LISTA, ID_PRODUTO, PRECO) VALUES ($1, $1, $2, 0)', [l[0], PRODUTO_LISTA.ID_PRODUTO]);
+    }
 
     // Notas com emissão ≠ entrada/saída (os dois filtros de data não se confundem); a 4ª é de outra loja e o gerente não pode ver.
     await execute(db, 'TRUNCATE TABLE NOTAS_FISCAIS');
@@ -216,6 +256,7 @@ async function seed() {
 
     await upsertProduto(db, PRODUTO_PADRAO);
     await upsertProduto(db, PRODUTO_SALDO_BAIXO);
+    await upsertProduto(db, PRODUTO_LISTA);
 
     await execute(db, `
       INSERT INTO FORMAS_DE_PAGAMENTOS (ID_FORMA_DE_PAGAMENTO, DESCRICAO_FORMA_DE_PAGAMENTO)
@@ -242,6 +283,11 @@ async function seed() {
     // Garante que venda_saldo_negativo comece em 'N' (bloqueia saldo negativo) — pode ter
     // sido deixado em 'S' por uma rodada anterior do teste de bloqueio de saldo.
     await execute(db, `UPDATE parametros SET parametro = 'N' WHERE chave = 'venda_saldo_negativo'`);
+    // Parâmetro 117 = S (empresa usa lista de preços).
+    await execute(db, `
+      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('usa_lista_precos', 117, 'S')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
+    `);
   });
 
   // 6) Usuário de login (role gerente, loja 1 — sem select de loja no wizard, sem exigir vendedor)

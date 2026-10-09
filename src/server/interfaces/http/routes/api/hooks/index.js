@@ -17,4 +17,5 @@ module.exports = {
   MOVIMENTACOES: require('./movimentacoes.hooks'),
   PEDIDOS_ITENS: require('./pedidosItens.hooks'),
   PEDIDOS_PARCELAS_PAGAMENTOS: require('./pedidosParcelasPagamentos.hooks'),
+  PRODUTOS_X_LISTA: require('./produtosXLista.hooks'),
 };

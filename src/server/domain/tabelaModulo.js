@@ -11,6 +11,8 @@ const TABELA_MODULO = Object.freeze({
   MOVIMENTACOES: 'produtos_movimentacao',
   NOTAS_FISCAIS: 'notas_fiscais',
   NOTAS_FISCAIS_ITENS: 'notas_fiscais',
+  LISTA_PRECOS: 'lista_precos',
+  PRODUTOS_X_LISTA: 'lista_precos',
 });
 
 module.exports = { TABELA_MODULO };

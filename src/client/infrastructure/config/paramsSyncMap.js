@@ -12,6 +12,7 @@ const paramsSyncMap = [
   { fbId: 45051, chave: 'modalidade_frete',            global: false },
   { fbId: 91,    chave: 'forma_preenchimento_pedido',  global: true  },
   { fbId: 40000, chave: 'serie_nfe',                   global: true  },
+  { fbId: 117,   chave: 'usa_lista_precos',            global: false },
 ];
 
 module.exports = { paramsSyncMap };

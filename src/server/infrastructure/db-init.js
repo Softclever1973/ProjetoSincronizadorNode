@@ -12,7 +12,7 @@ const { schemaTenantValido } = require('../domain/validacao');
 // pedidos_inserir/editar/realizar/cancelar e produtos_movimentacao: novas permissões
 // granulares (ver domain/modulos.js) — 'rw' em todo plano, mesmo padrão de 'imprimir'
 // acima (não variam por plano; a granularidade real é só por role, em SEED_PERMISSOES_ROLE).
-const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' };
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' };
 // Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
 // mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
 // exportacao migrou de planos.json (`features: ['exportacao']`) pra cá — mesmos dois planos.
@@ -35,10 +35,11 @@ const SEED_PERMISSOES_PLANO = {
 // vendedor só tinha 'produtos:r-', mas conseguia registrar movimentação de estoque sem
 // nenhum gate — agora explicitamente bloqueado ('--') pra ele, liberado ('rw') pra
 // gerente/dono, mesmo nível que 'produtos' já tem pra esses dois papéis.
+// lista_precos: vendedor só lê (o Pedido aplica a lista); vincular produtos é de gerente/dono.
 const SEED_PERMISSOES_ROLE = {
-  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--' },
-  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
-  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--', lista_precos:'r-' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' },
 };
 
 /** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */
@@ -323,6 +324,10 @@ function ddlTenant(schema) {
  ON CONFLICT (chave) DO NOTHING`,
     `INSERT INTO ${schema}.parametros (chave, id_parametro, nome_da_tabela, descricao, parametro)
  VALUES ('serie_nfe', 40000, 'NF-E', 'Série do documento fiscal', '6')
+ ON CONFLICT (chave) DO NOTHING`,
+    // 117 = S: empresa usa lista de preços (padrão N até o client enviar o valor do Firebird).
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('usa_lista_precos', 117, 'N')
  ON CONFLICT (chave) DO NOTHING`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (

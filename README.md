@@ -445,8 +445,10 @@ Módulo `faturamento` (leitura):
 | Método | Rota | Descrição |
 |---|---|---|
 | GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `parametros` (era `sync_config`, módulo `configuracoes`) |
-| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`) |
+| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`, `usa_lista_precos` = parâmetro 117) |
 | GET | `/api/:schema/filiais` | Filiais registradas em `sync_filiais` |
+| GET | `/api/:schema/listas-precos` | Listas de preço (`LISTA_PRECOS`) + `QTD_PRODUTOS` (módulo `lista_precos`) |
+| GET | `/api/:schema/listas-precos/:id/produtos` | Produtos da lista (JOIN com `PRODUTOS`), `q`/`page`/`pageSize`. Vincular/remover = CRUD em `PRODUTOS_X_LISTA` (hook calcula `PRECO` e barra duplicado) |
 | GET | `/api/:schema/plano` | Plano atual + `modulos` (permissão efetiva de cada módulo para o usuário) |
 
 ---

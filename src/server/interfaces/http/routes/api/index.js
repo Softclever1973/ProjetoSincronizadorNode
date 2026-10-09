@@ -15,6 +15,7 @@
  *   dashboard.js  — /dashboard e todos os sub-endpoints de gráficos
  *   audit.js      — /audit-log
  *   admin.js      — /admin/sync-config (GET + PUT) + /filiais
+ *   listaPrecos.js — /listas-precos e /listas-precos/:id/produtos
  */
 
 const express   = require('express');
@@ -26,5 +27,6 @@ router.use('/', require('./comandas'));
 router.use('/', require('./dashboard'));
 router.use('/', require('./audit'));
 router.use('/', require('./admin'));
+router.use('/', require('./listaPrecos'));
 
 module.exports = router;
