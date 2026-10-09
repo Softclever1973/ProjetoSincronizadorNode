@@ -76,14 +76,15 @@
         <% for (const t of tabelas) { %>
           <% const existe = existentes.includes(t.nome); %>
           <% const ativo = existe && config[t.nome] === true; %>
+          <% const param = porParametro[t.nome]; %>
           <tr<% if (!existe) { %> class="linha-bloqueada"<% } %>>
             <td style="padding:8px 12px;font-size:13px;font-family:monospace"><%= t.nome %></td>
             <td style="padding:8px 12px;font-size:12px;color:#888"><%= Array.isArray(t.pk) ? t.pk.join(', ') : t.pk %></td>
             <td style="padding:8px 12px;text-align:center">
-              <label class="toggle-switch">
+              <label class="toggle-switch"<% if (param) { %> title="Definido pelo parâmetro <%= param.id %> do Sirius"<% } %>>
                 <input type="checkbox"
                   <%= ativo ? 'checked' : '' %>
-                  <%= !existe ? 'disabled' : '' %>
+                  <%= !existe || param ? 'disabled' : '' %>
                   onchange="toggleTabela('<%= t.nome %>', this.checked)">
                 <span class="slider"></span>
               </label>
@@ -91,6 +92,9 @@
             <td style="padding:8px 12px;font-size:12px" id="status-<%= t.nome %>">
               <% if (!existe) { %>
                 <span class="status-bloqueado">Não encontrada</span>
+              <% } else if (param) { %>
+                <span class="<%= ativo ? 'status-ativo' : 'status-inativo' %>"><%= ativo ? 'Ativa' : 'Inativa' %></span>
+                <div style="font-size:11px;color:#888;margin-top:2px;white-space:nowrap">Parâmetro <%= param.id %> = <%= param.atual || '(vazio)' %></div>
               <% } else if (ativo) { %>
                 <span class="status-ativo">Ativa</span>
               <% } else { %>

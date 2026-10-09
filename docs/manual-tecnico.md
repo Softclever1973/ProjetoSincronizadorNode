@@ -549,7 +549,7 @@ Ficam no diretório de trabalho (`cwd`, ao lado de `package.json` ou do `client.
 
 ## 11. Como Habilitar/Desabilitar uma Tabela em Runtime
 
-Acesse `http://localhost:3001/configuracoes`. O toggle persiste em `tabelas-config.json`. A função `tabelaAtiva(nome)` em `src/client/tabelasConfig.js` re-lê o arquivo a cada ciclo — sem necessidade de reiniciar.
+Acesse `http://localhost:3001/configuracoes`. O toggle persiste em `tabelas-config.json`. A função `tabelaAtiva(nome)` em `src/client/infrastructure/config/tabelasConfig.js` re-lê o arquivo a cada ciclo — sem necessidade de reiniciar. Exceção: tabelas com `parametroAtivo` (hoje `LISTA_PRECOS` e `PRODUTOS_X_LISTA`) seguem o parâmetro do Sirius (117 = `S` sincroniza; outro valor, não) e o toggle fica travado, mostrando o valor atual do parâmetro.
 
 ---
 

@@ -1,6 +1,6 @@
 const express = require('express');
 const TABELAS = require('#client/domain/tabelas.js');
-const { lerConfig, salvarConfig, defaultAtivo, tabelaAtiva } = require('#client/infrastructure/config/tabelasConfig.js');
+const { lerConfig, salvarConfig, defaultAtivo, tabelaAtiva, atualizarParametrosTabelas, controlePorParametro } = require('#client/infrastructure/config/tabelasConfig.js');
 const { estaPausado, cargaEstaPausada, interromperEnvioAtual } = require('#client/application/syncEngine/controle.js');
 const { SQL_EH_CARGA } = require('#client/domain/filaCarga.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
@@ -62,6 +62,7 @@ function criarConfiguracoesRouter(contexto) {
     let db;
     try {
       db = await getConnection();
+      await atualizarParametrosTabelas(db);
       const rows = await dbQuery(db, `
         SELECT TRIM(r.RDB$RELATION_NAME) AS NOME
         FROM RDB$RELATIONS r
@@ -80,11 +81,14 @@ function criarConfiguracoesRouter(contexto) {
   router.get('/configuracoes', async (_req, res) => {
     const salvo = lerConfig();
     const existentes = await getTabelasExistentesFirebird();
-    // Mescla: valor salvo no JSON tem prioridade; senão usa defaultAtivo de tabelas.js
+    // Parâmetro do Firebird decide quando houver; senão valor salvo no JSON; senão defaultAtivo de tabelas.js
     const config = {};
+    const porParametro = {};
     for (const t of TABELAS) {
-      config[t.nome] = Object.prototype.hasOwnProperty.call(salvo, t.nome)
-        ? salvo[t.nome]
+      const p = controlePorParametro(t.nome);
+      if (p) porParametro[t.nome] = p;
+      config[t.nome] = p ? p.ativa
+        : Object.prototype.hasOwnProperty.call(salvo, t.nome) ? salvo[t.nome]
         : (defaultAtivo.get(t.nome) ?? false);
     }
     const grupos = {};
@@ -94,7 +98,7 @@ function criarConfiguracoesRouter(contexto) {
       grupos[g].push(t);
     }
     res.render('configuracoes', {
-      grupos, config,
+      grupos, config, porParametro,
       existentes: [...existentes],
       totalAtivas: TABELAS.filter(t => config[t.nome] === true && existentes.has(t.nome)).length,
       totalTabelas: TABELAS.length,
@@ -108,6 +112,10 @@ function criarConfiguracoesRouter(contexto) {
     }
     if (!TABELAS.find(t => t.nome === tabela)) {
       return res.status(400).json({ ok: false, message: 'Tabela não encontrada na lista de sincronização' });
+    }
+    const p = controlePorParametro(tabela);
+    if (p) {
+      return res.status(400).json({ ok: false, message: `Sincronização definida pelo parâmetro ${p.id} (${p.valor} = sincroniza). Altere o parâmetro no Sirius.` });
     }
     if (ativo) {
       const existentes = await getTabelasExistentesFirebird();
@@ -307,13 +315,15 @@ function criarConfiguracoesRouter(contexto) {
       return res.status(400).json({ ok: false, message: 'ativo (boolean) obrigatório' });
     }
     const config = {};
+    // Tabelas controladas por parâmetro ficam fora: o toggle não decide por elas.
+    const livres = TABELAS.filter(t => !t.parametroAtivo);
     if (ativo) {
       const existentes = await getTabelasExistentesFirebird();
-      for (const t of TABELAS) {
+      for (const t of livres) {
         config[t.nome] = existentes.has(t.nome) ? true : false;
       }
     } else {
-      for (const t of TABELAS) config[t.nome] = false;
+      for (const t of livres) config[t.nome] = false;
     }
     salvarConfig(config);
     res.json({ ok: true, ativo });

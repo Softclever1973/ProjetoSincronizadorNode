@@ -204,7 +204,7 @@ async function main() {
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
-  const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
+  const { tabelaAtiva, atualizarParametrosTabelas } = require('./infrastructure/config/tabelasConfig');
   const { estaPausado, envioEstaPausado, cargaEstaPausada } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
@@ -411,6 +411,7 @@ async function main() {
         }
       }
 
+      await atualizarParametrosTabelas(db); // ex.: 117 = S libera LISTA_PRECOS/PRODUTOS_X_LISTA
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
       for (const tabelaAusente of tabelasAusentes) {
         log(`[${tabelaAusente.nome}] tabela ausente no Firebird — pulando sync`);

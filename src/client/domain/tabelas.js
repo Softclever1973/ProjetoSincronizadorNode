@@ -19,6 +19,8 @@
  *   colunaData       — coluna de data de negócio para a política de retenção de 2 anos;
  *                      null = cadastro/referência sem expiração por data
  *   defaultAtivo     — se a tabela começa ativa no painel de configurações (padrão: false)
+ *   parametroAtivo   — { id, valor }: o parâmetro decide o sync (PARAMETROS(id) = valor → ativa,
+ *                      senão inativa) e o toggle fica travado; null = decide o toggle
  *
  * Ordem importa: tabelas referenciadas por FK devem vir antes das dependentes.
  */
@@ -48,6 +50,7 @@
  * @property {string|null}      generator
  * @property {string|null}      colunaData
  * @property {boolean}          defaultAtivo
+ * @property {{ id: number, valor: string }|null} parametroAtivo
  * @property {boolean}          srvId            — servidor atribui e rastreia um SRV_ID global para esta tabela
  * @property {FKRef[]}          fks              — FKs para outras tabelas sincronizadas (topological sort)
  * @property {string[]}         colunasAbsolutas — colunas cujo valor absoluto deve ser enviado ao servidor (push)
@@ -91,6 +94,7 @@ function tabela({
   generator = null,
   colunaData = null,
   defaultAtivo = false,
+  parametroAtivo = null,
   srvId = false,
   fks = [],
   colunasAbsolutas = [],
@@ -102,7 +106,7 @@ function tabela({
     filtroFilialViaTabela = fks.find(f => f.coluna === filtroFilialViaFK)?.tabela ?? null;
     if (!filtroFilialViaTabela) throw new Error(`tabelas.js: ${nome}.filtroFilialViaFK='${filtroFilialViaFK}' sem FK correspondente em fks`);
   }
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, parametroAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
@@ -134,7 +138,8 @@ const TABELAS = [
   tabela({ nome: 'CODIGOS_REGIMES_TRIBUTARIOS', pk: 'ID_CODIGO_REGIME_TRIBUTARIO', grupo: GRUPOS.CADASTROS }),
   tabela({ nome: 'CONTAS', pk: 'REDUZIDO', grupo: GRUPOS.CADASTROS }),
   tabela({ nome: 'DEPARTAMENTOS', pk: 'SIGLA_DEPARTAMENTO', grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS }),
+  // Lista de preços: parâmetro 117 = S indica que o cliente usa o recurso.
+  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS, parametroAtivo: { id: 117, valor: 'S' } }),
   tabela({ nome: 'TIPOS_PRODUTOS', pk: 'ID_TIPO_PRODUTO', grupo: GRUPOS.CADASTROS }),
 
   // ── Produtos ────────────────────────────────────────────────────────────────
@@ -148,7 +153,7 @@ const TABELAS = [
     srvId: true,
   }),
   tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
-  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
+  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA', srvId: true, parametroAtivo: { id: 117, valor: 'S' }, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
   tabela({
     nome: 'MOVIMENTACOES',
     pk: 'ID_MOVIMENTACAO',

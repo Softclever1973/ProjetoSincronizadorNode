@@ -275,6 +275,7 @@ Interface Express + EJS acessível em tempo real durante a execução do cliente
 - Página `/configuracoes` lista todas as tabelas agrupadas por `grupo`
 - Toggle on/off persiste em `tabelas-config.json` (cwd)
 - `tabelaAtiva()` relê o arquivo a cada ciclo de 30s — sem necessidade de reiniciar
+- Tabelas com `parametroAtivo` em `tabelas.js` são decididas por um parâmetro do Sirius, não pelo toggle (travado na tela): `LISTA_PRECOS` e `PRODUTOS_X_LISTA` só sincronizam com o parâmetro 117 = `S`
 
 ---
 
