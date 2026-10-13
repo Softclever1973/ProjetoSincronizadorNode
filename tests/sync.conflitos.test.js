@@ -355,6 +355,37 @@ describe('sincronizarTabela — PK pré-gerado (registro criado via web, sem ID 
   });
 });
 
+describe('sincronizarTabela — generator da filial', () => {
+  const { mockQueryPorSql } = require('./helpers/mockQuery');
+  const registro = { ID_LISTA: 50, DESCRICAO: 'Do Site', ID_ULTIMA_ATUALIZACAO_MATRIZ: 700 };
+  const configTabela = { nome: 'LISTA_PRECOS_TESTE', pk: 'ID_LISTA', generator: 'NOVA_LISTA_TESTE' };
+  const respostasBase = existe => [
+    ['RDB$GENERATORS', existe ? [{ OK: 1 }] : []],
+    ['GEN_ID(', [{ ATUAL: 10 }]],
+    ['MAX(ID_LISTA)', [{ MAXIMO: 50 }]],
+    ['RDB$NULL_FLAG', []],
+    ['RDB$COMPUTED', []],
+    ['RDB$RELATION_FIELDS rf', [{ COLUNA: 'ID_LISTA' }, { COLUNA: 'DESCRICAO' }]],
+  ];
+  const setGenerator = () => execute.mock.calls.filter(([, sql]) => /SET GENERATOR/.test(sql));
+
+  test('generator existente é avançado até o ID recebido do servidor', async () => {
+    mockQueryPorSql(query, respostasBase(true));
+    await rodarCiclo(registro, configTabela);
+    expect(setGenerator().map(([, sql]) => sql)).toContain('SET GENERATOR NOVA_LISTA_TESTE TO 50');
+    expect(salvarCursor).toHaveBeenCalledWith({}, 'LISTA_PRECOS_TESTE', 700, 0);
+  });
+
+  test('generator que não existe no Firebird é ignorado: registro aplicado, cursor avança, nada criado', async () => {
+    mockQueryPorSql(query, respostasBase(false));
+    await rodarCiclo(registro, configTabela);
+    expect(setGenerator()).toHaveLength(0);
+    expect(query.mock.calls.some(([, sql]) => sql.includes('GEN_ID('))).toBe(false);
+    expect(execute).toHaveBeenCalledWith({}, expect.stringContaining('UPDATE OR INSERT INTO LISTA_PRECOS_TESTE'), expect.arrayContaining([50, 'Do Site']));
+    expect(salvarCursor).toHaveBeenCalledWith({}, 'LISTA_PRECOS_TESTE', 700, 0);
+  });
+});
+
 describe('sincronizarTabela — loop de deleções', () => {
   const configComDelete = { nome: 'PRODUTOS', pk: 'ID_PRODUTO', temDelete: true };
 

@@ -139,7 +139,8 @@ const TABELAS = [
   tabela({ nome: 'CONTAS', pk: 'REDUZIDO', grupo: GRUPOS.CADASTROS }),
   tabela({ nome: 'DEPARTAMENTOS', pk: 'SIGLA_DEPARTAMENTO', grupo: GRUPOS.CADASTROS }),
   // Lista de preços: parâmetro 117 = S indica que o cliente usa o recurso.
-  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS, parametroAtivo: { id: 117, valor: 'S' } }),
+  // Generator usado pelo sincronizador Delphi antigo (classRequisicoes.pas); listas também nascem no site.
+  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS, generator: 'NOVA_LISTA_PRECOS', parametroAtivo: { id: 117, valor: 'S' } }),
   tabela({ nome: 'TIPOS_PRODUTOS', pk: 'ID_TIPO_PRODUTO', grupo: GRUPOS.CADASTROS }),
 
   // ── Produtos ────────────────────────────────────────────────────────────────

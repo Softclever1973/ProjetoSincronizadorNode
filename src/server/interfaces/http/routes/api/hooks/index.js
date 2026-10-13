@@ -8,6 +8,7 @@
  *   denormalizar(db, schema, registro, allowed, req)
  *   validarTransicao(db, { registro, update, dadosAntes })
  *   validarUnicidade(db, { registro, pkVals })
+ *   depoisDeGravar(db, { registro, update, dadosAntes, schema })
  *   aposSalvar(schema, { registro, dadosAntes })
  */
 module.exports = {
@@ -18,4 +19,5 @@ module.exports = {
   PEDIDOS_ITENS: require('./pedidosItens.hooks'),
   PEDIDOS_PARCELAS_PAGAMENTOS: require('./pedidosParcelasPagamentos.hooks'),
   PRODUTOS_X_LISTA: require('./produtosXLista.hooks'),
+  LISTA_PRECOS: require('./listaPrecos.hooks'),
 };

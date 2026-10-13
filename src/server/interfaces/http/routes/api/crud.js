@@ -509,6 +509,8 @@ async function handleSave(req, res, forceUpdate) {
           pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
         );
       }
+      // LISTA_PRECOS: percentual mudou → recalcula o PRECO dos produtos da lista na mesma conexão.
+      await hooks?.depoisDeGravar?.(db, { registro, update, dadosAntes, schema });
       return { isUpdate: update, dadosAntes, srvId: insertedSrvId ?? null };
     });
 

@@ -233,6 +233,19 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
   await execute(db, `DELETE FROM ${nomeTabela} WHERE ${where}`, valores);
 }
 
+// Generator que não existe no banco da filial é ignorado (avisa uma vez), sem criar nada no Firebird.
+const _generatorExiste = new Map();
+async function generatorExiste(db, nomeGenerator) {
+  if (!_generatorExiste.has(nomeGenerator)) {
+    const rows = await query(db,
+      'SELECT 1 AS OK FROM RDB$GENERATORS WHERE TRIM(RDB$GENERATOR_NAME) = ?', [nomeGenerator]).catch(() => null);
+    if (rows === null) return true; // falha na consulta: mantém o comportamento antigo
+    _generatorExiste.set(nomeGenerator, rows.length > 0);
+    if (!rows.length) console.warn(`[sync] generator '${nomeGenerator}' não existe no Firebird — ignorado`);
+  }
+  return _generatorExiste.get(nomeGenerator);
+}
+
 /**
  * Avança o generator Firebird para pelo menos `novoValor`, se necessário.
  * Evita que o próximo INSERT do Delphi reutilize um ID já ocupado após uma
@@ -240,6 +253,7 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
  */
 async function sincronizarGenerator(db, nomeGenerator, novoValor) {
   if (!nomeGenerator || !Number.isFinite(novoValor)) return;
+  if (!(await generatorExiste(db, nomeGenerator))) return;
   const rows = await query(db, `SELECT GEN_ID(${nomeGenerator}, 0) AS ATUAL FROM RDB$DATABASE`);
   const atual = rows[0]?.ATUAL ?? 0;
   if (atual < novoValor) {
@@ -623,6 +637,7 @@ function _resetCachesParaTeste() {
   for (const key of Object.keys(cacheColunasExistentes)) delete cacheColunasExistentes[key];
   for (const key of Object.keys(cacheColunasNaoNulas)) delete cacheColunasNaoNulas[key];
   for (const key of Object.keys(cacheTamanhosPorTabela)) delete cacheTamanhosPorTabela[key];
+  _generatorExiste.clear();
 }
 
 module.exports = { sincronizarTabela, _resetCachesParaTeste };
