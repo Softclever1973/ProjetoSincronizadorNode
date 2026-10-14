@@ -258,8 +258,17 @@ router.get('/:schema/tabelas/:tabela', authJwt, checkSchema, requireModuloDaTabe
       // DESC padrão do PostgreSQL = NULLS FIRST (NULLs no topo), que distorce a ordenação
       // quando há colunas opcionais como HORA. Forçamos NULLS LAST para DESC.
       const nullsClause = sortDir === 'DESC' ? ' NULLS LAST' : '';
+      // Hook por tabela pode trocar a coluna por uma expressão (ex.: MOVIMENTACOES com DATA/HORA em formatos mistos).
+      const exprOrdenacao = HOOKS[tabela.toUpperCase()]?.expressaoOrdenacao;
+      const tiposOrdenacao = sortCol && exprOrdenacao
+        ? new Map((await colunasTabela(db, schema, tabela)).map(c => [c.COLUMN_NAME, c.DATA_TYPE]))
+        : null;
       const orderBy     = sortCol
-        ? sortCol.split(',').map(c => `${c.trim()} ${sortDir}${nullsClause}`).join(', ')
+        ? sortCol.split(',').map(c => {
+            const col = c.trim();
+            const expr = tiposOrdenacao ? exprOrdenacao(col.toUpperCase(), tiposOrdenacao.get(col.toUpperCase())) : null;
+            return `${expr ?? col} ${sortDir}${nullsClause}`;
+          }).join(', ')
         : '1';
       params.push(pageSize, offset);
       const registros = await query(db,

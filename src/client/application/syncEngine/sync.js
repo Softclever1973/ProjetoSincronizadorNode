@@ -66,6 +66,24 @@ async function getTamanhosColunas(db, nomeTabela) {
   return mapa;
 }
 
+// Colunas DATE (12), TIME (13) e TIMESTAMP (35): ISO com fuso vindo do servidor vira horário local no pull.
+const cacheColunasDataHora = {};
+async function getColunasDataHora(db, nomeTabela) {
+  if (cacheColunasDataHora[nomeTabela]) return cacheColunasDataHora[nomeTabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ? AND f.RDB$FIELD_TYPE IN (12, 13, 35)
+  `, [nomeTabela]);
+  const set = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheColunasDataHora[nomeTabela] = set;
+  return set;
+}
+
+// Formato do push: "1970-01-01T14:18:39.000Z" / "2026-10-14T03:00:00.000Z".
+const RE_ISO_COM_FUSO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
+
 /**
  * Retorna o conjunto de colunas computadas (COMPUTED BY) de uma tabela.
  * Essas colunas são read-only no Firebird e não podem ser incluídas no UPSERT.
@@ -151,11 +169,12 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
 async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.log) {
-  const [computadas, existentes, naoNulas, tamanhos] = await Promise.all([
+  const [computadas, existentes, naoNulas, tamanhos, dataHora] = await Promise.all([
     getColunasComputadas(db, nomeTabela),
     getColunasExistentes(db, nomeTabela),
     getColunasNaoNulas(db, nomeTabela),
     getTamanhosColunas(db, nomeTabela),
+    getColunasDataHora(db, nomeTabela),
   ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
@@ -181,6 +200,8 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     // conteúdo cabe.
     if (typeof v === 'string') v = v.trimEnd();
     if (v === undefined || v === '') return null;
+    // Texto ISO direto num TIME/DATE é lido sem o fuso (14:18Z virava 14:18 local, +3h); como Date o driver usa o horário local.
+    if (typeof v === 'string' && dataHora.has(c) && RE_ISO_COM_FUSO.test(v)) return new Date(v);
     const maxLen = tamanhos[c];
     if (typeof v === 'string' && maxLen != null && v.length > maxLen) {
       log(`[AVISO] ${nomeTabela}.${c}: valor truncado de ${v.length} → ${maxLen} char(s) (servidor enviou: "${v}")`);
@@ -637,6 +658,7 @@ function _resetCachesParaTeste() {
   for (const key of Object.keys(cacheColunasExistentes)) delete cacheColunasExistentes[key];
   for (const key of Object.keys(cacheColunasNaoNulas)) delete cacheColunasNaoNulas[key];
   for (const key of Object.keys(cacheTamanhosPorTabela)) delete cacheTamanhosPorTabela[key];
+  for (const key of Object.keys(cacheColunasDataHora)) delete cacheColunasDataHora[key];
   _generatorExiste.clear();
 }
 

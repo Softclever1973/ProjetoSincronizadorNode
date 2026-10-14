@@ -228,7 +228,8 @@ describe('sincronizarTabela — caminho normal (sem pendente, sem eco, sem dado 
       .mockResolvedValueOnce([])                                     // getColunasComputadas → nenhuma
       .mockResolvedValueOnce([{ COLUNA: 'ID_PRODUTO' }, { COLUNA: 'NOME' }]) // getColunasExistentes
       .mockResolvedValueOnce([])   // getColunasNaoNulas → nenhuma
-      .mockResolvedValueOnce([]);  // getTamanhosColunas → nenhuma
+      .mockResolvedValueOnce([])  // getTamanhosColunas → nenhuma
+      .mockResolvedValueOnce([]);   // getColunasDataHora
 
     await rodarCiclo(registro, { nome: 'PRODUTOS_TESTE_UPSERT' });
 
@@ -265,7 +266,8 @@ describe('sincronizarTabela — normalizarSinal (lado "pull" do par de inversão
         { COLUNA: 'ID_MOVIMENTACAO' }, { COLUNA: 'TIPO_MOVIMENTACAO' }, { COLUNA: 'QUANTIDADE' },
       ])
       .mockResolvedValueOnce([])   // getColunasNaoNulas → nenhuma
-      .mockResolvedValueOnce([]);  // getTamanhosColunas → nenhuma
+      .mockResolvedValueOnce([])  // getTamanhosColunas → nenhuma
+      .mockResolvedValueOnce([]);   // getColunasDataHora
 
     await rodarCiclo(registro, configTabela);
 
@@ -298,7 +300,8 @@ describe('sincronizarTabela — normalizarSinal (lado "pull" do par de inversão
         { COLUNA: 'ID_MOVIMENTACAO' }, { COLUNA: 'TIPO_MOVIMENTACAO' }, { COLUNA: 'QUANTIDADE' },
       ])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([]);
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);   // getColunasDataHora
 
     await rodarCiclo(registro, configTabela);
 
@@ -325,6 +328,7 @@ describe('sincronizarTabela — PK pré-gerado (registro criado via web, sem ID 
       .mockResolvedValueOnce([{ COLUNA: 'ID_PRODUTO' }, { COLUNA: 'NOME' }]) // getColunasExistentes (sem SRV_ID nesta filial)
       .mockResolvedValueOnce([])   // getColunasNaoNulas
       .mockResolvedValueOnce([])   // getTamanhosColunas
+      .mockResolvedValueOnce([])   // getColunasDataHora
       // Verificação final de generator (sync.js:521-529), roda 1x por tabela após o while
       // de atualizações terminar. Retornar [] (sem MAXIMO) evita que o código avance para
       // dentro de sincronizarGenerator, que faria uma 2ª query (GEN_ID) sem mock — cairia
@@ -383,6 +387,40 @@ describe('sincronizarTabela — generator da filial', () => {
     expect(query.mock.calls.some(([, sql]) => sql.includes('GEN_ID('))).toBe(false);
     expect(execute).toHaveBeenCalledWith({}, expect.stringContaining('UPDATE OR INSERT INTO LISTA_PRECOS_TESTE'), expect.arrayContaining([50, 'Do Site']));
     expect(salvarCursor).toHaveBeenCalledWith({}, 'LISTA_PRECOS_TESTE', 700, 0);
+  });
+});
+
+describe('sincronizarTabela — DATA/HORA no formato ISO do client', () => {
+  const { mockQueryPorSql } = require('./helpers/mockQuery');
+
+  test('ISO com fuso em coluna DATE/TIME vira Date (driver grava hora local); texto comum fica como veio', async () => {
+    const registro = { ID_MOV: 7, DATA: '2026-10-14T03:00:00.000Z', HORA: '1970-01-01T14:18:39.000Z', OBS: '2026-10-14T03:00:00.000Z', ID_ULTIMA_ATUALIZACAO_MATRIZ: 900 };
+    mockQueryPorSql(query, [
+      ['RDB$FIELD_TYPE IN (12, 13, 35)', [{ COLUNA: 'DATA' }, { COLUNA: 'HORA' }]],
+      ['RDB$NULL_FLAG', []],
+      ['RDB$COMPUTED', []],
+      ['RDB$RELATION_FIELDS rf', [{ COLUNA: 'ID_MOV' }, { COLUNA: 'DATA' }, { COLUNA: 'HORA' }, { COLUNA: 'OBS' }]],
+    ]);
+    await rodarCiclo(registro, { nome: 'MOV_DH_TESTE', pk: 'ID_MOV' });
+
+    const [, , valores] = execute.mock.calls.find(([, sql]) => sql.includes('UPDATE OR INSERT INTO MOV_DH_TESTE'));
+    const [, data, hora, obs] = valores;
+    expect(data).toBeInstanceOf(Date);
+    expect(hora).toBeInstanceOf(Date);
+    expect(hora.toISOString()).toBe('1970-01-01T14:18:39.000Z');
+    expect(obs).toBe('2026-10-14T03:00:00.000Z'); // coluna de texto: não converte
+  });
+
+  test('hora simples (formato antigo do site) segue como texto', async () => {
+    mockQueryPorSql(query, [
+      ['RDB$FIELD_TYPE IN (12, 13, 35)', [{ COLUNA: 'HORA' }]],
+      ['RDB$NULL_FLAG', []],
+      ['RDB$COMPUTED', []],
+      ['RDB$RELATION_FIELDS rf', [{ COLUNA: 'ID_MOV' }, { COLUNA: 'HORA' }]],
+    ]);
+    await rodarCiclo({ ID_MOV: 8, HORA: '11:18:39', ID_ULTIMA_ATUALIZACAO_MATRIZ: 901 }, { nome: 'MOV_DH_TESTE2', pk: 'ID_MOV' });
+    const [, , valores] = execute.mock.calls.find(([, sql]) => sql.includes('UPDATE OR INSERT INTO MOV_DH_TESTE2'));
+    expect(valores[1]).toBe('11:18:39');
   });
 });
 
@@ -453,7 +491,8 @@ describe('sincronizarTabela — versaoConhecida === null (erro ao consultar SYNC
       .mockResolvedValueOnce([])                        // getColunasComputadas
       .mockResolvedValueOnce([{ COLUNA: 'ID_PRODUTO' }, { COLUNA: 'NOME' }]) // getColunasExistentes
       .mockResolvedValueOnce([])                        // getColunasNaoNulas
-      .mockResolvedValueOnce([]);                       // getTamanhosColunas
+      .mockResolvedValueOnce([])                       // getTamanhosColunas
+      .mockResolvedValueOnce([]);   // getColunasDataHora
 
     await rodarCiclo(registro, configTabela);
 
@@ -486,7 +525,8 @@ describe('sincronizarTabela — tradução de FK no lado pull (SRV_ID do servido
       .mockResolvedValueOnce([])                              // getColunasComputadas
       .mockResolvedValueOnce([{ COLUNA: 'ID_MOVIMENTACAO' }, { COLUNA: 'ID_PRODUTO' }]) // getColunasExistentes
       .mockResolvedValueOnce([])                              // getColunasNaoNulas
-      .mockResolvedValueOnce([]);                             // getTamanhosColunas
+      .mockResolvedValueOnce([])                             // getTamanhosColunas
+      .mockResolvedValueOnce([]);   // getColunasDataHora
 
     await rodarCiclo(registro, configComFkPull);
 

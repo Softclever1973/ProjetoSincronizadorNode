@@ -10,6 +10,8 @@
  *   validarUnicidade(db, { registro, pkVals })
  *   depoisDeGravar(db, { registro, update, dadosAntes, schema })
  *   aposSalvar(schema, { registro, dadosAntes })
+ * E, fora do handleSave, na listagem (GET /tabelas/:tabela):
+ *   expressaoOrdenacao(coluna, tipoPg) → expressão SQL no lugar da coluna no ORDER BY, ou null
  */
 module.exports = {
   PEDIDOS: require('./pedidos.hooks'),
