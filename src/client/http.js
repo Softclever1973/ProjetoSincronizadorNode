@@ -217,7 +217,31 @@ function verificarStatusReset(baseURI) {
     .then(rows => rows[0] || {});
 }
 
+// Verificação de sincronização pedida no admin (ver application/verificacaoSync.js).
+const URL_VERIFICACAO = (baseURI, rota, idLoja) =>
+  `${baseURI}/datasnap/rest/TSMVerificacao/${rota}?token=${TOKEN}&idLoja=${idLoja}`;
+
+function buscarVerificacaoPendente(baseURI, idLoja) {
+  return get(URL_VERIFICACAO(baseURI, 'Pendente', idLoja)).then(rows => rows[0] || {});
+}
+
+function enviarVerificacaoTabela(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Tabela', idLoja), corpo, 120_000);
+}
+
+function enviarVerificacaoDetalhes(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Detalhes', idLoja), corpo, 60_000);
+}
+
+function concluirVerificacao(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Concluir', idLoja), corpo);
+}
+
 module.exports = {
+  buscarVerificacaoPendente,
+  enviarVerificacaoTabela,
+  enviarVerificacaoDetalhes,
+  concluirVerificacao,
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,

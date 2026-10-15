@@ -662,4 +662,4 @@ function _resetCachesParaTeste() {
   _generatorExiste.clear();
 }
 
-module.exports = { sincronizarTabela, _resetCachesParaTeste };
+module.exports = { sincronizarTabela, COLUNAS_SEMPRE_IGNORADAS, _resetCachesParaTeste };

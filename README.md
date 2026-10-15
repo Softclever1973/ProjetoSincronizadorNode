@@ -447,6 +447,7 @@ Módulo `faturamento` (leitura):
 | GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `parametros` (era `sync_config`, módulo `configuracoes`) |
 | GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`, `usa_lista_precos` = parâmetro 117) |
 | GET | `/api/:schema/filiais` | Filiais registradas em `sync_filiais` |
+| GET | `/superadmin/verificacoes/tabelas` · `POST`/`GET /superadmin/empresas/:schema/verificacoes` · `GET /superadmin/verificacoes/:id` | Verificação servidor × Firebird por loja (superadmin). O client atende via `/datasnap/rest/TSMVerificacao/{Pendente,Tabela,Detalhes,Concluir}` |
 | GET | `/api/:schema/listas-precos` | Listas de preço (`LISTA_PRECOS`) + `QTD_PRODUTOS` (módulo `lista_precos`) |
 | GET | `/api/:schema/listas-precos/:id/produtos` | Produtos da lista (JOIN com `PRODUTOS`), `q`/`page`/`pageSize`. Vincular/remover = CRUD em `PRODUTOS_X_LISTA` (hook calcula `PRECO` e barra duplicado). Criar/editar lista = CRUD em `LISTA_PRECOS` (hook valida, define A/R pelo sinal e recalcula o `PRECO` dos produtos quando o ajuste muda) |
 | GET | `/api/:schema/plano` | Plano atual + `modulos` (permissão efetiva de cada módulo para o usuário) |

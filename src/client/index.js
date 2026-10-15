@@ -201,6 +201,7 @@ async function main() {
   const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
   const { syncParametrosGlobais } = require('./application/syncParametrosGlobais');
   const { verificarResetServidor } = require('./application/resetLocal');
+  const { atenderVerificacao } = require('./application/verificacaoSync');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
@@ -408,6 +409,11 @@ async function main() {
           await verificarResetServidor(db, baseURI, contextoSync, log);
         } catch (e) {
           log(`[Reset] erro ao verificar status de reset: ${e.message}`);
+        }
+        try {
+          await atenderVerificacao(db, baseURI, idLoja, tabelasExistentes, log);
+        } catch (e) {
+          log(`[Verificação] erro ao consultar pedido de verificação: ${e.message}`);
         }
       }
 

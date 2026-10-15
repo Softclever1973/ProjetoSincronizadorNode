@@ -154,6 +154,21 @@ const DDL_CONTROLE = [
     nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
     PRIMARY KEY (role, modulo)
   )`,
+  // Verificação de sincronização (admin): pedido por loja, atendido pelo client no ciclo; resultado em JSON.
+  `CREATE TABLE IF NOT EXISTS public.verificacoes_sync (
+    id             SERIAL PRIMARY KEY,
+    schema_name    TEXT NOT NULL,
+    id_loja        INTEGER NOT NULL,
+    tabelas        TEXT[] NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'executando', 'concluida', 'erro', 'cancelada')),
+    solicitado_por INTEGER,
+    solicitado_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    iniciado_em    TIMESTAMPTZ,
+    concluido_em   TIMESTAMPTZ,
+    erro           TEXT,
+    resultado      JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_verificacoes_sync_schema ON public.verificacoes_sync(schema_name, id_loja, status)`,
   _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
   _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
   // Limpeza (2026-09-30): nomes antigos que saíram de domain/modulos.js (viraram pedidos_editar e imprimir).

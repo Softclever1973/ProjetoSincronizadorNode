@@ -61,6 +61,8 @@ function encerrarComErro(err) {
   const authRoutes               = require('./server/interfaces/http/routes/datasnap/auth');
   const userEmpresasRoutes       = require('./server/interfaces/http/routes/datasnap/userEmpresas');
   const adminEmpresasRoutes      = require('./server/interfaces/http/routes/datasnap/adminEmpresas');
+  const adminVerificacaoRoutes   = require('./server/interfaces/http/routes/datasnap/adminVerificacao');
+  const verificacaoRoutes        = require('./server/interfaces/http/routes/datasnap/verificacao');
   const tabelasRoutes            = require('./server/interfaces/http/routes/api');
   const usuariosRoutes           = require('./server/interfaces/http/routes/datasnap/usuarios');
   const financeiroRoutes         = require('./server/interfaces/http/routes/datasnap/financeiro');
@@ -91,9 +93,11 @@ function encerrarComErro(err) {
   app.use('/datasnap/rest/TSMPedidos',                   pedidosRoutes);
   app.use('/datasnap/rest/TSMMovimetacaoCaixas',         movimentacaoCaixasRoutes);
   app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
+  app.use('/datasnap/rest/TSMVerificacao',               verificacaoRoutes);
   app.use('/auth',          authRoutes);
   app.use('/user/empresas', userEmpresasRoutes);
   app.use('/superadmin',    authJwt, requireSuperAdmin, adminEmpresasRoutes);
+  app.use('/superadmin',    authJwt, requireSuperAdmin, adminVerificacaoRoutes);
   app.use('/api',           usuariosRoutes);
   app.use('/api',           financeiroRoutes);
   app.use('/api',           tabelasRoutes);
