@@ -179,6 +179,56 @@ test('nomes de tabela e coluna vindos do client não chegam ao SQL', async () =>
   await request(app).post(sync('Concluir')).send({ id }).expect(200);
 });
 
+test('correções: "manter servidor" dá versão nova ao registro; "manter loja" vai para a fila do client', async () => {
+  const [{ id }] = (await request(app).post(`/superadmin/empresas/${SCHEMA}/verificacoes`).set('Authorization', superadmin)
+    .send({ idLoja: LOJA, tabelas: ['MOVIMENTACOES'] })).body;
+  await request(app).get(sync('Pendente')).expect(200);
+  const corrigir = itens => request(app).post(`/superadmin/verificacoes/${id}/correcoes`).set('Authorization', superadmin).send({ itens });
+  // Ainda em execução: não corrige.
+  expect((await corrigir([{ tabela: 'MOVIMENTACOES', chave: '3', lado: 'servidor' }])).status).toBe(400);
+
+  const iguais = [fb(1, 'Entrada', 10, '11:42:06'), fb(2, 'Saída', -5, '11:42:06')];
+  await request(app).post(sync('Tabela')).send({
+    id, tabela: 'MOVIMENTACOES', colunas: COLUNAS,
+    hashes: [['1', hash(iguais[0])], ['2', hash(iguais[1])], ['3', hash(fb(3, 'Entrada', 7, '11:42:06'))], ['7', hash(fb(7, 'Entrada', 2, '10:00:00'))]],
+  }).expect(200);
+  await request(app).post(sync('Detalhes')).send({ id, tabela: 'MOVIMENTACOES', registros: { 3: canonico(fb(3, 'Entrada', 7, '11:42:06')), 7: canonico(fb(7, 'Entrada', 2, '10:00:00')) } }).expect(200);
+  await request(app).post(sync('Concluir')).send({ id }).expect(200);
+
+  const versao = async idMov => (await pool.query(`SELECT id_ultima_atualizacao_matriz v FROM ${SCHEMA}.movimentacoes WHERE id_movimentacao = $1`, [idMov])).rows[0].v;
+  // Linhas do teste têm versões fixas; em produção a sequência já está acima delas.
+  await pool.query(`SELECT setval('${SCHEMA}.seq_atualizacao_matriz', 100)`);
+  const antes3 = await versao(3);
+  const antes4 = await versao(4);
+  const r = await corrigir([
+    { tabela: 'MOVIMENTACOES', chave: '3', lado: 'servidor' },  // diferente → manter servidor
+    { tabela: 'MOVIMENTACOES', chave: '4', lado: 'loja' },      // só no servidor: loja não se aplica
+    { tabela: 'MOVIMENTACOES', chave: '4', lado: 'servidor' },  // só no servidor → enviar para a loja
+    { tabela: 'MOVIMENTACOES', chave: '1', lado: 'servidor' },  // igual: fora das divergências
+    { tabela: 'MOVIMENTACOES', chave: '7', lado: 'loja' },      // só no Firebird → enviar ao servidor
+  ]);
+  expect(r.status).toBe(200);
+  expect(r.body.resultados.map(x => `${x.chave}:${x.lado}:${x.status}`)).toEqual(['3:servidor:feita', '4:loja:erro', '4:servidor:feita', '1:servidor:erro', '7:loja:pendente']);
+  expect(Number(await versao(3))).toBeGreaterThan(Number(antes3));
+  expect(Number(await versao(4))).toBeGreaterThan(Number(antes4));
+  expect((await pool.query(`SELECT quantidade FROM ${SCHEMA}.movimentacoes WHERE id_movimentacao = 3`)).rows[0].quantidade).toBe('7'); // dado intacto
+
+  // Client pega a fila uma vez; outra loja não fecha a correção desta.
+  const fila = await request(app).get(sync('Correcoes'));
+  expect(fila.body.correcoes).toEqual([{ id: expect.any(Number), tabela: 'MOVIMENTACOES', chave: '7', tipoChave: 'PK' }]);
+  expect((await request(app).get(sync('Correcoes'))).body.correcoes).toEqual([]);
+  const idCorrecao = fila.body.correcoes[0].id;
+  await request(app).post(`/datasnap/rest/TSMVerificacao/Correcoes?token=${TOKEN}&idLoja=99`).send({ resultados: [{ id: idCorrecao, erro: null }] }).expect(200);
+  let det = await request(app).get(`/superadmin/verificacoes/${id}`).set('Authorization', superadmin);
+  expect(det.body.correcoes.find(c => c.chave === '7').status).toBe('executando');
+  // Em execução na loja: não aceita outro pedido para a mesma chave.
+  expect((await corrigir([{ tabela: 'MOVIMENTACOES', chave: '7', lado: 'loja' }])).body.resultados[0].status).toBe('erro');
+
+  await request(app).post(sync('Correcoes')).send({ resultados: [{ id: idCorrecao, erro: null }] }).expect(200);
+  det = await request(app).get(`/superadmin/verificacoes/${id}`).set('Authorization', superadmin);
+  expect(det.body.correcoes.map(c => `${c.chave}:${c.lado}:${c.status}`).sort()).toEqual(['3:servidor:feita', '4:servidor:feita', '7:loja:feita']);
+});
+
 test('client de outra loja não escreve no pedido desta', async () => {
   const [{ id }] = (await request(app).post(`/superadmin/empresas/${SCHEMA}/verificacoes`).set('Authorization', superadmin)
     .send({ idLoja: LOJA, tabelas: ['MOVIMENTACOES'] })).body;

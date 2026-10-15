@@ -237,7 +237,17 @@ function concluirVerificacao(baseURI, idLoja, corpo) {
   return post(URL_VERIFICACAO(baseURI, 'Concluir', idLoja), corpo);
 }
 
+function buscarCorrecoesVerificacao(baseURI, idLoja) {
+  return get(URL_VERIFICACAO(baseURI, 'Correcoes', idLoja)).then(rows => rows[0] || {});
+}
+
+function concluirCorrecoesVerificacao(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Correcoes', idLoja), corpo);
+}
+
 module.exports = {
+  buscarCorrecoesVerificacao,
+  concluirCorrecoesVerificacao,
   buscarVerificacaoPendente,
   enviarVerificacaoTabela,
   enviarVerificacaoDetalhes,

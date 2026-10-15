@@ -8,11 +8,13 @@ const http = require('#client/http.js');
 const TABELAS = require('#client/domain/tabelas.js');
 const { tabelaAtiva } = require('#client/infrastructure/config/tabelasConfig.js');
 const { COLUNAS_SEMPRE_IGNORADAS } = require('#client/application/syncEngine/sync.js');
+const { prepararPendente, processarResultado } = require('#client/application/syncEngine/push.js');
 const { tipoComparacao, valorCanonico, hashLinha, chaveRegistro, LIMITE_TEXTO_LONGO } = require('#client/domain/verificacao.js');
 
 const LOTE_LEITURA = 5000;
 const NAO_COMPARAR = new Set(['SRV_ID', 'ID_ULTIMA_ATUALIZACAO_MATRIZ']);
 let servidorSemRota = false; // servidor antigo (sem TSMVerificacao): não pergunta de novo neste processo
+let servidorSemCorrecoes = false; // servidor sem a rota de correções
 
 async function colunasFirebird(db, tabela) {
   const rows = await query(db, `
@@ -124,4 +126,53 @@ async function atenderVerificacao(db, baseURI, idLoja, tabelasExistentes, log) {
   await http.concluirVerificacao(baseURI, idLoja, { id: pedido.id, erro: erroGeral }).catch(e => log(`[Verificação] falha ao concluir: ${e.message}`));
 }
 
-module.exports = { atenderVerificacao, coletarTabela };
+// PK local (formato de SYNC_ALTERACOES_PENDENTES) a partir da chave usada na verificação.
+async function pkLocalDaChave(db, config, chave, tipoChave) {
+  if (chave.startsWith('local:')) return chave.slice('local:'.length);
+  if (tipoChave !== 'SRV_ID') return chave;
+  const pks = Array.isArray(config.pk) ? config.pk : [config.pk];
+  const rows = await query(db, `SELECT FIRST 2 ${pks.join(', ')} FROM ${config.nome} WHERE SRV_ID = ?`, [Number(chave)]);
+  if (rows.length !== 1) throw new Error(rows.length ? `Mais de um registro no Firebird com SRV_ID ${chave}` : 'Registro não existe mais no Firebird');
+  return chaveRegistro(rows[0], pks);
+}
+
+/** "Manter loja": lê o registro no Firebird e envia forçado (como "Manter versão local" dos conflitos). */
+async function reenviarDaLoja(db, baseURI, idLoja, correcao, { idPDV, nomeFilial }, log) {
+  const config = TABELAS.find(t => t.nome === correcao.tabela);
+  if (!config) throw new Error('Tabela desconhecida por esta versão do client');
+  const pkValor = await pkLocalDaChave(db, config, String(correcao.chave), correcao.tipoChave);
+  const item = await prepararPendente(db, config, { PK_VALOR: pkValor }, idLoja, log);
+  if (!item) throw new Error('Não foi possível montar o registro para envio (veja o log do client)');
+  if (item.deletar) throw new Error('Registro não existe mais no Firebird');
+  const resultado = await http.enviarRegistro(baseURI, idLoja, config.nome, config.pk, item.registroParaEnviar,
+    item.ultimaVersaoConhecida, true, idPDV, nomeFilial, false, config.srvId ?? false);
+  if (await processarResultado(db, config, item, resultado, log) !== 'enviado') throw new Error('O servidor não aceitou o registro');
+}
+
+/** Correções "manter loja" pedidas no admin para esta loja: reenvia cada registro e devolve o resultado. */
+async function atenderCorrecoes(db, baseURI, idLoja, { idPDV = null, nomeFilial = '' } = {}, log = console.log) {
+  if (servidorSemCorrecoes || !idLoja) return;
+  let correcoes;
+  try {
+    ({ correcoes = [] } = await http.buscarCorrecoesVerificacao(baseURI, idLoja));
+  } catch (e) {
+    if (/ 404/.test(e.message)) { servidorSemCorrecoes = true; return; }
+    throw e;
+  }
+  if (!correcoes.length) return;
+  log(`[Verificação] ${correcoes.length} correção(ões) para reenviar ao servidor`);
+  const resultados = [];
+  for (const c of correcoes) {
+    try {
+      await reenviarDaLoja(db, baseURI, idLoja, c, { idPDV, nomeFilial }, log);
+      log(`[Verificação] ${c.tabela} ${c.chave}: versão da loja enviada ao servidor`);
+      resultados.push({ id: c.id, erro: null });
+    } catch (e) {
+      log(`[Verificação] ${c.tabela} ${c.chave}: correção falhou — ${e.message}`);
+      resultados.push({ id: c.id, erro: e.message.slice(0, 300) });
+    }
+  }
+  await http.concluirCorrecoesVerificacao(baseURI, idLoja, { resultados });
+}
+
+module.exports = { atenderVerificacao, atenderCorrecoes, coletarTabela };

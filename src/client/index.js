@@ -201,7 +201,7 @@ async function main() {
   const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
   const { syncParametrosGlobais } = require('./application/syncParametrosGlobais');
   const { verificarResetServidor } = require('./application/resetLocal');
-  const { atenderVerificacao } = require('./application/verificacaoSync');
+  const { atenderVerificacao, atenderCorrecoes } = require('./application/verificacaoSync');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
@@ -414,6 +414,11 @@ async function main() {
           await atenderVerificacao(db, baseURI, idLoja, tabelasExistentes, log);
         } catch (e) {
           log(`[Verificação] erro ao consultar pedido de verificação: ${e.message}`);
+        }
+        try {
+          await atenderCorrecoes(db, baseURI, idLoja, { idPDV, nomeFilial }, log);
+        } catch (e) {
+          log(`[Verificação] erro ao aplicar correções: ${e.message}`);
         }
       }
 

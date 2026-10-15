@@ -4,6 +4,8 @@
  * POST /Tabela     → hashes do Firebird de uma tabela; responde as chaves cujo detalhe deve vir
  * POST /Detalhes   → valores canônicos do Firebird das chaves pedidas
  * POST /Concluir   → fecha o pedido
+ * GET  /Correcoes  → correções "manter loja" pedidas no admin (o client reenvia o registro do Firebird)
+ * POST /Correcoes  → { resultados: [{ id, erro }] } — fecha as correções entregues
  */
 const express = require('express');
 const router  = express.Router();
@@ -148,6 +150,33 @@ router.post('/Concluir', auth, async (req, res) => {
     const ok = await pedidoValido(req, res);
     if (!ok) return;
     await repo.concluir(ok.id, req.body?.erro ? String(req.body.erro).slice(0, 500) : null);
+    res.json({ ok: true });
+  } catch (e) {
+    erroServidor(res, e);
+  }
+});
+
+router.get('/Correcoes', auth, async (req, res) => {
+  const idLoja = idLojaDe(req);
+  if (!idLoja) return res.status(400).json({ erro: 'idLoja é obrigatório' });
+  try {
+    const correcoes = await repo.proximasCorrecoes(req.schemaName, idLoja);
+    res.json({ correcoes: correcoes.map(c => ({ id: c.id, tabela: c.tabela, chave: c.chave, tipoChave: c.tipo_chave })) });
+  } catch (e) {
+    erroServidor(res, e);
+  }
+});
+
+router.post('/Correcoes', auth, async (req, res) => {
+  const idLoja = idLojaDe(req);
+  if (!idLoja) return res.status(400).json({ erro: 'idLoja é obrigatório' });
+  const resultados = Array.isArray(req.body?.resultados) ? req.body.resultados : [];
+  try {
+    for (const r of resultados) {
+      const id = parseInt(r?.id, 10);
+      if (!Number.isInteger(id)) continue;
+      await repo.concluirCorrecao(id, req.schemaName, idLoja, r.erro ? String(r.erro).slice(0, 300) : null);
+    }
     res.json({ ok: true });
   } catch (e) {
     erroServidor(res, e);

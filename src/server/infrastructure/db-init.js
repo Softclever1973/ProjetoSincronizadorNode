@@ -169,6 +169,25 @@ const DDL_CONTROLE = [
     resultado      JSONB NOT NULL DEFAULT '{}'::jsonb
   )`,
   `CREATE INDEX IF NOT EXISTS idx_verificacoes_sync_schema ON public.verificacoes_sync(schema_name, id_loja, status)`,
+  // Correções pedidas no detalhe da verificação: 'servidor' é aplicada na hora; 'loja' fica na fila do client.
+  `CREATE TABLE IF NOT EXISTS public.verificacoes_correcoes (
+    id             SERIAL PRIMARY KEY,
+    verificacao_id INTEGER NOT NULL REFERENCES public.verificacoes_sync(id) ON DELETE CASCADE,
+    schema_name    TEXT NOT NULL,
+    id_loja        INTEGER NOT NULL,
+    tabela         TEXT NOT NULL,
+    chave          TEXT NOT NULL,
+    tipo_chave     TEXT NOT NULL CHECK (tipo_chave IN ('SRV_ID', 'PK')),
+    lado           TEXT NOT NULL CHECK (lado IN ('servidor', 'loja')),
+    status         TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'executando', 'feita', 'erro')),
+    erro           TEXT,
+    solicitado_por INTEGER,
+    solicitado_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    iniciado_em    TIMESTAMPTZ,
+    concluido_em   TIMESTAMPTZ,
+    UNIQUE (verificacao_id, tabela, chave)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_verificacoes_correcoes_loja ON public.verificacoes_correcoes(schema_name, id_loja, status)`,
   _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
   _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
   // Limpeza (2026-09-30): nomes antigos que saíram de domain/modulos.js (viraram pedidos_editar e imprimir).

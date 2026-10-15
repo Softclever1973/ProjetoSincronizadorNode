@@ -340,4 +340,4 @@ async function empurrarTabela(db, baseURI, idLoja, configTabela, log = console.l
 // Uso exclusivo dos testes: volta a tentar o envio em lote.
 function _resetLoteParaTeste() { loteIndisponivelAte = 0; }
 
-module.exports = { empurrarTabela, _resetLoteParaTeste };
+module.exports = { empurrarTabela, prepararPendente, processarResultado, _resetLoteParaTeste };

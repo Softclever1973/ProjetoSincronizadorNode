@@ -30,6 +30,18 @@ async function filtroDeLoja(db, config) {
   return cfg?.PARAMETRO && NOME_VALIDO.test(cfg.PARAMETRO) ? cfg.PARAMETRO : null;
 }
 
+// Condições do filtro de loja do pull; os valores entram em params.
+async function filtrosDaLoja(db, config, existentes, idLoja, params) {
+  const where = [];
+  const colLoja = await filtroDeLoja(db, config);
+  if (colLoja && existentes.has(colLoja)) { params.push(idLoja); where.push(`${colLoja} = $${params.length}`); }
+  if (config.filtroFilialViaFK && config.filtroFilialViaTabela) {
+    params.push(idLoja);
+    where.push(`${config.filtroFilialViaFK} IN (SELECT ${config.filtroFilialViaFK} FROM ${config.filtroFilialViaTabela} WHERE ID_LOJA = $${params.length})`);
+  }
+  return where;
+}
+
 /**
  * @param {{ tabela: string, colunas: { nome: string, categoria: string }[], idLoja: number, schema: string, chave?: 'SRV_ID'|'PK' }} opts
  *   chave: a mesma que o client usou — SRV_ID (único no servidor) ou a PK local do Firebird.
@@ -47,13 +59,7 @@ async function registrosServidor(db, { tabela, colunas, idLoja, schema, chave = 
   const selecionar = new Set([...pks, ...(porSrvId ? ['SRV_ID'] : []), ...usadas.map(c => c.nome)]);
   if (sinal && existentes.has(sinal.colunaRef)) selecionar.add(sinal.colunaRef);
   const params = [];
-  const where = ['ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL'];
-  const colLoja = await filtroDeLoja(db, config);
-  if (colLoja && existentes.has(colLoja)) { params.push(idLoja); where.push(`${colLoja} = $${params.length}`); }
-  if (config.filtroFilialViaFK && config.filtroFilialViaTabela) {
-    params.push(idLoja);
-    where.push(`${config.filtroFilialViaFK} IN (SELECT ${config.filtroFilialViaFK} FROM ${config.filtroFilialViaTabela} WHERE ID_LOJA = $${params.length})`);
-  }
+  const where = ['ID_ULTIMA_ATUALIZACAO_MATRIZ IS NOT NULL', ...await filtrosDaLoja(db, config, existentes, idLoja, params)];
   if (config.colunaData && existentes.has(config.colunaData)) {
     where.push(`(${config.colunaData} IS NULL OR ${config.colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`);
   }
@@ -93,4 +99,33 @@ async function registrosServidor(db, { tabela, colunas, idLoja, schema, chave = 
   return { registros, semChave, repetidas: [...repetidas] };
 }
 
-module.exports = { registrosServidor, colunasComparaveis };
+/**
+ * Correção "manter servidor": dá versão nova ao registro sem mudar os dados — o pull leva de novo
+ * para a loja (com as traduções de sempre). Só mexe se a chave achar 1 registro.
+ * @returns {Promise<number>} quantos registros a chave achou (1 = marcado)
+ */
+async function reenviarParaLoja(db, { tabela, chave, tipoChave, idLoja, schema }) {
+  const config = TABELAS.find(t => t.nome === tabela);
+  if (!config || !NOME_VALIDO.test(tabela)) throw Object.assign(new Error(`Tabela ${tabela} não sincroniza`), { isValidation: true });
+  const pks = Array.isArray(config.pk) ? config.pk : [config.pk];
+  const existentes = new Set((await colunasTabela(db, schema, tabela)).map(c => c.COLUMN_NAME));
+  const params = [];
+  const where = [];
+  if (tipoChave === 'SRV_ID') {
+    if (!/^\d+$/.test(chave) || !existentes.has('SRV_ID')) return 0;
+    params.push(Number(chave));
+    where.push('SRV_ID = $1');
+  } else {
+    const valores = chave.split('|');
+    if (valores.length !== pks.length) return 0;
+    pks.forEach((p, i) => { params.push(valores[i]); where.push(`${p} = $${params.length}`); });
+  }
+  where.push(...await filtrosDaLoja(db, config, existentes, idLoja, params));
+  const [{ N }] = await consultar(db, `SELECT COUNT(*)::int AS n FROM ${tabela} WHERE ${where.join(' AND ')}`, params);
+  if (N !== 1) return N;
+  if (!NOME_VALIDO.test(schema)) throw Object.assign(new Error('schema inválido'), { isValidation: true });
+  await db.query(`UPDATE ${tabela} SET ID_ULTIMA_ATUALIZACAO_MATRIZ = nextval('${schema}.seq_atualizacao_matriz') WHERE ${where.join(' AND ')}`, params);
+  return 1;
+}
+
+module.exports = { registrosServidor, colunasComparaveis, reenviarParaLoja };

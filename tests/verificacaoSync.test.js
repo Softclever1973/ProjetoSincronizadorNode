@@ -3,13 +3,16 @@ jest.mock('../src/client/infrastructure/firebird/db', () => ({ query: jest.fn(),
 jest.mock('../src/client/http', () => ({
   buscarVerificacaoPendente: jest.fn(), enviarVerificacaoTabela: jest.fn(),
   enviarVerificacaoDetalhes: jest.fn(), concluirVerificacao: jest.fn(),
+  buscarCorrecoesVerificacao: jest.fn(), concluirCorrecoesVerificacao: jest.fn(), enviarRegistro: jest.fn(),
 }));
 jest.mock('../src/client/infrastructure/config/tabelasConfig', () => ({ tabelaAtiva: jest.fn(() => true) }));
+jest.mock('../src/client/application/syncEngine/push', () => ({ prepararPendente: jest.fn(), processarResultado: jest.fn() }));
 
 const { query } = require('../src/client/infrastructure/firebird/db');
 const http = require('../src/client/http');
 const { tabelaAtiva } = require('../src/client/infrastructure/config/tabelasConfig');
-const { atenderVerificacao } = require('../src/client/application/verificacaoSync');
+const { prepararPendente, processarResultado } = require('../src/client/application/syncEngine/push');
+const { atenderVerificacao, atenderCorrecoes } = require('../src/client/application/verificacaoSync');
 const { mockQueryPorSql } = require('./helpers/mockQuery');
 const { valorCanonico, hashLinha } = require('../src/client/domain/verificacao');
 
@@ -89,6 +92,53 @@ test('tabela com SRV_ID: chave é o SRV_ID; sem SRV_ID ainda vira "local:<pk>"; 
   expect(mov.hashes.map(([k]) => k)).toEqual(['26985', 'local:2']);
   expect(mov.pendentes).toEqual(['local:2', '26985']); // PK 999 não está mais no Firebird: fica de fora
   expect(query.mock.calls.some(([, sql]) => /SELECT FIRST \d+ SKIP \d+ ID_MOVIMENTACAO, SRV_ID/.test(sql))).toBe(true);
+});
+
+describe('correções "manter loja"', () => {
+  const ctx = { idPDV: 2, nomeFilial: 'Centro' };
+
+  test('acha a PK local pelo SRV_ID (ou pela chave local:) e reenvia forçado', async () => {
+    http.buscarCorrecoesVerificacao.mockResolvedValue({ correcoes: [
+      { id: 1, tabela: 'MOVIMENTACOES', chave: '26985', tipoChave: 'SRV_ID' },
+      { id: 2, tabela: 'MOVIMENTACOES', chave: 'local:5', tipoChave: 'SRV_ID' },
+    ] });
+    mockQueryPorSql(query, [['WHERE SRV_ID = ?', [{ ID_MOVIMENTACAO: 10 }]]]);
+    prepararPendente.mockImplementation(async (_db, _cfg, { PK_VALOR }) => ({ pkValor: PK_VALOR, registroParaEnviar: { ID_MOVIMENTACAO: Number(PK_VALOR) }, ultimaVersaoConhecida: 40, deletar: false }));
+    http.enviarRegistro.mockResolvedValue({ ok: true, novoId: 99 });
+    processarResultado.mockResolvedValue('enviado');
+
+    await atenderCorrecoes({}, 'http://srv', LOJA, ctx, noop);
+
+    expect(prepararPendente.mock.calls.map(c => c[2])).toEqual([{ PK_VALOR: '10' }, { PK_VALOR: '5' }]);
+    expect(http.enviarRegistro).toHaveBeenCalledWith('http://srv', LOJA, 'MOVIMENTACOES', 'ID_MOVIMENTACAO', { ID_MOVIMENTACAO: 10 }, 40, true, 2, 'Centro', false, true);
+    expect(http.concluirCorrecoesVerificacao).toHaveBeenCalledWith('http://srv', LOJA, { resultados: [{ id: 1, erro: null }, { id: 2, erro: null }] });
+  });
+
+  test('registro que sumiu do Firebird volta como erro e não derruba as outras', async () => {
+    http.buscarCorrecoesVerificacao.mockResolvedValue({ correcoes: [
+      { id: 3, tabela: 'MOVIMENTACOES', chave: '1', tipoChave: 'SRV_ID' },
+      { id: 4, tabela: 'UNIDADES', chave: 'UN', tipoChave: 'PK' },
+      { id: 5, tabela: 'NAO_EXISTE', chave: '1', tipoChave: 'PK' },
+    ] });
+    mockQueryPorSql(query, [['WHERE SRV_ID = ?', []]]);
+    prepararPendente.mockResolvedValue({ deletar: true });
+
+    await atenderCorrecoes({}, 'http://srv', LOJA, ctx, noop);
+
+    const { resultados } = http.concluirCorrecoesVerificacao.mock.calls[0][2];
+    expect(resultados.map(r => r.id)).toEqual([3, 4, 5]);
+    expect(resultados[0].erro).toMatch(/não existe mais no Firebird/);
+    expect(resultados[1].erro).toMatch(/não existe mais no Firebird/);
+    expect(resultados[2].erro).toMatch(/desconhecida/);
+    expect(http.enviarRegistro).not.toHaveBeenCalled();
+  });
+
+  test('servidor sem a rota (404): para de perguntar neste processo', async () => {
+    http.buscarCorrecoesVerificacao.mockRejectedValue(new Error('Servidor retornou 404: Not Found'));
+    await atenderCorrecoes({}, 'http://srv', LOJA, ctx, noop);
+    await atenderCorrecoes({}, 'http://srv', LOJA, ctx, noop);
+    expect(http.buscarCorrecoesVerificacao).toHaveBeenCalledTimes(1);
+  });
 });
 
 test('erro numa tabela vai como erro dela e não derruba o pedido', async () => {
