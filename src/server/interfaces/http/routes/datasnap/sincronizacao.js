@@ -787,7 +787,7 @@ router.get('/StatusReset', auth, async (req, res) => {
 // Mantenha em sincronia manual com src/client/paramsSyncMap.js (deploys separados).
 const CHAVES_ACEITAS = new Set([
   'codigo_interno_unico', 'utilizar_codigo_interno', 'venda_saldo_negativo',
-  'modalidade_frete', 'forma_preenchimento_pedido', 'serie_nfe', 'usa_lista_precos',
+  'modalidade_frete', 'forma_preenchimento_pedido', 'serie_nfe', 'usa_lista_precos', 'desconto_por_item',
 ]);
 
 // Subconjunto de CHAVES_ACEITAS que reconcilia pro mesmo valor em todos os PDVs de um

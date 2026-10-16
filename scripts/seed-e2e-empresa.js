@@ -292,6 +292,11 @@ async function seed() {
       INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('usa_lista_precos', 117, 'S')
       ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
+    // Parâmetro 88 = N (sem desconto por item: valor da lista travado no pedido).
+    await execute(db, `
+      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('desconto_por_item', 88, 'N')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
+    `);
   });
 
   // 6) Usuário de login (role gerente, loja 1 — sem select de loja no wizard, sem exigir vendedor)

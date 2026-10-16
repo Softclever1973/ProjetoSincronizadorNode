@@ -363,6 +363,10 @@ function ddlTenant(schema) {
     `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
  VALUES ('usa_lista_precos', 117, 'N')
  ON CONFLICT (chave) DO NOTHING`,
+    // 88 = S: permite desconto em cada item (valor da lista editável no pedido); padrão N trava.
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('desconto_por_item', 88, 'N')
+ ON CONFLICT (chave) DO NOTHING`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (
       id        SERIAL  PRIMARY KEY,

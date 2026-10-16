@@ -445,7 +445,7 @@ Módulo `faturamento` (leitura):
 | Método | Rota | Descrição |
 |---|---|---|
 | GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `parametros` (era `sync_config`, módulo `configuracoes`) |
-| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`, `usa_lista_precos` = parâmetro 117) |
+| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`, `usa_lista_precos` = parâmetro 117, `desconto_por_item` = parâmetro 88) |
 | GET | `/api/:schema/filiais` | Filiais registradas em `sync_filiais` |
 | GET | `/superadmin/verificacoes/tabelas` · `POST`/`GET /superadmin/empresas/:schema/verificacoes` · `GET /superadmin/verificacoes/:id` · `POST /superadmin/verificacoes/:id/correcoes` | Verificação servidor × Firebird por loja (superadmin) e correção das divergências (manter servidor / manter loja). O client atende via `/datasnap/rest/TSMVerificacao/{Pendente,Tabela,Detalhes,Concluir,Correcoes}` |
 | GET | `/api/:schema/listas-precos` | Listas de preço (`LISTA_PRECOS`) + `QTD_PRODUTOS` (módulo `lista_precos`) |
