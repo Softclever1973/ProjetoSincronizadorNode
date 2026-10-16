@@ -292,9 +292,9 @@ async function seed() {
       INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('usa_lista_precos', 117, 'S')
       ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
-    // Parâmetro 88 = N (sem desconto por item: valor da lista travado no pedido).
+    // Parâmetro 88 ainda não enviado pelo client (vazio): só a lista trava o preço; S e N são simulados nos testes.
     await execute(db, `
-      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('desconto_por_item', 88, 'N')
+      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('desconto_por_item', 88, NULL)
       ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
   });

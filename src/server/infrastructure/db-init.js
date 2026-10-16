@@ -363,10 +363,13 @@ function ddlTenant(schema) {
     `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
  VALUES ('usa_lista_precos', 117, 'N')
  ON CONFLICT (chave) DO NOTHING`,
-    // 88 = S: permite desconto em cada item (valor da lista editável no pedido); padrão N trava.
+    // 88 (permitir desconto a cada item): vazio = client ainda não enviou; N trava o preço do item no pedido.
     `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
- VALUES ('desconto_por_item', 88, 'N')
+ VALUES ('desconto_por_item', 88, NULL)
  ON CONFLICT (chave) DO NOTHING`,
+    // Padrão antigo era 'N': sem descrição = nunca veio do client (que sempre manda a descrição do Firebird).
+    `UPDATE ${schema}.parametros SET parametro = NULL
+ WHERE chave = 'desconto_por_item' AND parametro = 'N' AND descricao IS NULL`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (
       id        SERIAL  PRIMARY KEY,
