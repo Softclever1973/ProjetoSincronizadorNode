@@ -28,7 +28,8 @@ const ID_LOJA  = 1;
 // SALDO_ATUAL baixo de propósito — usado pelo teste de bloqueio de saldo negativo
 // (venda_saldo_negativo = 'N' é o default de parametros, ver src/db-init.js).
 const PRODUTO_SALDO_BAIXO = { ID_PRODUTO: 2, SRV_ID: 2, CODIGO: 'PROD002', DESCRICAO: 'Produto Saldo Baixo E2E', UNIDADE: 'UN', PRECO_VENDA: 5, SALDO_ATUAL: 2 };
-const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 1, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
+// SRV_ID ≠ ID_PRODUTO de propósito (como em banco real): pega quem grava o ID local onde vai o SRV_ID.
+const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 101, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
 const PRODUTO_LISTA       = { ID_PRODUTO: 3, SRV_ID: 3, CODIGO: 'PROD003', DESCRICAO: 'Produto Lista E2E',      UNIDADE: 'UN', PRECO_VENDA: 100, SALDO_ATUAL: 1000 };
 
 // [id, descrição, ajuste, P/V, A/R, comissão] — lista 10 é a do cliente 2; usadas por e2e/pedidos.spec.js.
@@ -204,7 +205,7 @@ async function upsertProduto(db, p) {
     INSERT INTO PRODUTOS (ID_PRODUTO, SRV_ID, CODIGO, DESCRICAO, UNIDADE, PRECO_VENDA, SALDO_ATUAL)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (ID_PRODUTO) DO UPDATE SET
-      CODIGO = EXCLUDED.CODIGO, DESCRICAO = EXCLUDED.DESCRICAO, UNIDADE = EXCLUDED.UNIDADE,
+      SRV_ID = EXCLUDED.SRV_ID, CODIGO = EXCLUDED.CODIGO, DESCRICAO = EXCLUDED.DESCRICAO, UNIDADE = EXCLUDED.UNIDADE,
       PRECO_VENDA = EXCLUDED.PRECO_VENDA, SALDO_ATUAL = EXCLUDED.SALDO_ATUAL
   `, [p.ID_PRODUTO, p.SRV_ID, p.CODIGO, p.DESCRICAO, p.UNIDADE, p.PRECO_VENDA, p.SALDO_ATUAL]);
 }

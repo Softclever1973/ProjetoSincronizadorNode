@@ -522,6 +522,8 @@ A cada ciclo, para cada tabela ativa:
 
 FKs marcadas `traduzirSrvId` são resolvidas para o `SRV_ID` do pai antes do envio; um pai ainda sem `SRV_ID` reenfileira a si mesmo automaticamente.
 
+No recebimento é o caminho inverso (SRV_ID → ID local). Se o pai ainda não existe no Firebird (ex.: produto criado na web enquanto um ciclo rodava, e a movimentação chegou antes dele), a tabela para nesse registro sem avançar o cursor e tenta de novo no próximo ciclo, que já começa pelos pais. Depois de 10 minutos sem o pai, aplica com o valor recebido, como antes.
+
 ---
 
 ## Resolução de Conflitos

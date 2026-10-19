@@ -537,25 +537,68 @@ describe('sincronizarTabela — tradução de FK no lado pull (SRV_ID do servido
     );
   });
 
-  test('FK não encontrada localmente: mantém o valor original recebido do servidor', async () => {
+  // Só a 1ª busca no servidor: a tabela para no registro que espera o pai, sem pedir a página seguinte.
+  function cicloEsperandoPai(registro, config) {
+    buscarRegistrosParaAtualizar.mockResolvedValueOnce([registro]);
+    return sincronizarTabela({}, 'http://servidor-teste', 1, config, noopLog);
+  }
+
+  test('pai ainda não chegou: não grava nem avança o cursor; grava traduzido quando o pai chega', async () => {
+    const config = { ...configComFkPull, nome: 'MOVIMENTACOES_PULL_TESTE_2' };
     const registro = { ID_MOVIMENTACAO: 901, ID_PRODUTO: 500, ID_ULTIMA_ATUALIZACAO_MATRIZ: 1301 };
 
+    query
+      .mockResolvedValueOnce([])   // sem pendente
+      .mockResolvedValueOnce([])   // nunca recebido
+      .mockResolvedValueOnce([])   // proteção overwrite: não existe local
+      .mockResolvedValueOnce([]);  // tradução FK: produto com SRV_ID 500 ainda não chegou nesta filial
+    await cicloEsperandoPai(registro, config);
+
+    expect(execute).not.toHaveBeenCalledWith({}, expect.stringContaining('INTO MOVIMENTACOES_PULL_TESTE_2'), expect.anything());
+    expect(salvarCursor).not.toHaveBeenCalled();
+    expect(buscarRegistrosParaAtualizar).toHaveBeenCalledTimes(1);
+
+    // Próximo ciclo: PRODUTOS já trouxe o pai.
     query
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([])   // tradução FK: produto com SRV_ID 500 ainda não chegou nesta filial
+      .mockResolvedValueOnce([{ ID_PRODUTO: 777 }])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ COLUNA: 'ID_MOVIMENTACAO' }, { COLUNA: 'ID_PRODUTO' }])
       .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);
+    await rodarCiclo(registro, config);
 
-    await rodarCiclo(registro, { ...configComFkPull, nome: 'MOVIMENTACOES_PULL_TESTE_2' });
+    expect(execute).toHaveBeenCalledWith({}, expect.stringContaining('UPDATE OR INSERT INTO MOVIMENTACOES_PULL_TESTE_2'), expect.arrayContaining([901, 777]));
+    expect(salvarCursor).toHaveBeenCalledWith({}, 'MOVIMENTACOES_PULL_TESTE_2', 1301, 0);
+  });
 
-    expect(execute).toHaveBeenCalledWith(
-      {},
-      expect.stringContaining('UPDATE OR INSERT INTO MOVIMENTACOES_PULL_TESTE_2'),
-      expect.arrayContaining([901, 500]) // sem tradução disponível — mantém o SRV_ID como veio
-    );
+  test('pai não chega em 10 min: aplica com o valor recebido (dado antigo com ID local)', async () => {
+    const config = { ...configComFkPull, nome: 'MOVIMENTACOES_PULL_TESTE_3' };
+    const registro = { ID_MOVIMENTACAO: 902, ID_PRODUTO: 500, ID_ULTIMA_ATUALIZACAO_MATRIZ: 1302 };
+    const agora = jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+
+    query.mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    await cicloEsperandoPai(registro, config);
+    expect(salvarCursor).not.toHaveBeenCalled();
+
+    agora.mockReturnValue(1_000_000 + 10 * 60 * 1000);
+    query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])   // pai continua ausente
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ COLUNA: 'ID_MOVIMENTACAO' }, { COLUNA: 'ID_PRODUTO' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+    await rodarCiclo(registro, config);
+    agora.mockRestore();
+
+    expect(execute).toHaveBeenCalledWith({}, expect.stringContaining('UPDATE OR INSERT INTO MOVIMENTACOES_PULL_TESTE_3'), expect.arrayContaining([902, 500]));
+    expect(salvarCursor).toHaveBeenCalledWith({}, 'MOVIMENTACOES_PULL_TESTE_3', 1302, 0);
   });
 });

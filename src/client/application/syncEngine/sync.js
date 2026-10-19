@@ -282,6 +282,10 @@ async function sincronizarGenerator(db, nomeGenerator, novoValor) {
   }
 }
 
+// Registro cujo pai (FK por SRV_ID) ainda não chegou na filial: segura a tabela sem avançar o cursor por até 10 min.
+const ESPERA_PAI_MS = 10 * 60 * 1000;
+const _esperandoPai = new Map(); // "tabela|pk|versão" → desde (ms)
+
 /**
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
  */
@@ -314,6 +318,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     }
 
     log(`[${nome}] recebendo ${registros.length} registro(s) do servidor`);
+    let aguardandoPai = false;
 
     // Suprime o trigger de SYNC_ALTERACOES_PENDENTES durante o pull para evitar
     // loop circular onde registros recebidos do servidor são re-enfileirados para envio.
@@ -481,6 +486,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         // Traduz FKs que armazenam SRV_ID pro PK local — registros criados via web
         // referenciam PRODUTOS pelo SRV_ID, não pelo ID_PRODUTO nativo do Firebird
         // (ex: MOVIMENTACOES.ID_PRODUTO).
+        let paiAusente = null;
         for (const fkRef of (configTabela.fks || [])) {
           if (!fkRef.traduzirSrvId || !fkRef.pkRef) continue;
           const valFk = registroParaUpsert[fkRef.coluna];
@@ -491,8 +497,25 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           if (localRows.length > 0 && localRows[0][fkRef.pkRef] != null) {
             log(`[${nome}] FK ${fkRef.coluna}: SRV_ID=${valFk} → ${fkRef.pkRef}=${localRows[0][fkRef.pkRef]}`);
             registroParaUpsert = { ...registroParaUpsert, [fkRef.coluna]: localRows[0][fkRef.pkRef] };
+          } else if (!paiAusente) {
+            paiAusente = { ...fkRef, valor: valFk };
           }
         }
+
+        // Pai criado logo antes (ex.: produto novo na web + movimentação) pode chegar só no próximo ciclo.
+        const chaveEspera = `${nome}|${pkValor}|${registro.ID_ULTIMA_ATUALIZACAO_MATRIZ}`;
+        if (paiAusente) {
+          const desde = _esperandoPai.get(chaveEspera) ?? Date.now();
+          if (Date.now() - desde < ESPERA_PAI_MS) {
+            _esperandoPai.set(chaveEspera, desde);
+            log(`[${nome}] pk=${pkValor} aguardando ${paiAusente.tabela} SRV_ID=${paiAusente.valor} chegar na filial — tenta de novo no próximo ciclo`);
+            aguardandoPai = true;
+            break;
+          }
+          // Esgotou a espera: segue como antes (valor recebido, pode ser dado antigo com ID local).
+          log(`[${nome}] pk=${pkValor} ${paiAusente.tabela} SRV_ID=${paiAusente.valor} não chegou em ${ESPERA_PAI_MS / 60000} min — aplicando com o valor recebido`);
+        }
+        _esperandoPai.delete(chaveEspera);
 
         // Servidor guarda QTDE sempre positivo (direção via TP.MOV); o Firebird local
         // (Sirius Delphi) espera negativo em Saídas — sem isso o ERP soma ao saldo em
@@ -583,6 +606,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
     // Reativa o trigger de SYNC_ALTERACOES_PENDENTES ao fim do lote
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => { });
+    if (aguardandoPai) break;
   }
 
   if (totalAtualizados > 0) {
@@ -660,6 +684,7 @@ function _resetCachesParaTeste() {
   for (const key of Object.keys(cacheTamanhosPorTabela)) delete cacheTamanhosPorTabela[key];
   for (const key of Object.keys(cacheColunasDataHora)) delete cacheColunasDataHora[key];
   _generatorExiste.clear();
+  _esperandoPai.clear();
 }
 
 module.exports = { sincronizarTabela, COLUNAS_SEMPRE_IGNORADAS, _resetCachesParaTeste };
