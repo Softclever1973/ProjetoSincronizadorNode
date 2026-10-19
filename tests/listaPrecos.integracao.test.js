@@ -105,6 +105,12 @@ test('GET /listas-precos traz a quantidade de produtos e /:id/produtos faz o JOI
 
   const vazio = await request(app).get(`/api/${SCHEMA}/listas-precos/2/produtos?q=parafuso`).set('Authorization', tokenPara('gerente'));
   expect(vazio.body.total).toBe(0);
+
+  // idProduto é exato (q=2 casaria com o 20 por trecho); valor inválido é ignorado.
+  const exato = await request(app).get(`/api/${SCHEMA}/listas-precos/2/produtos?idProduto=20`).set('Authorization', tokenPara('gerente'));
+  expect(exato.body.registros.map(r => Number(r.ID_PRODUTO))).toEqual([20]);
+  expect((await request(app).get(`/api/${SCHEMA}/listas-precos/2/produtos?idProduto=2`).set('Authorization', tokenPara('gerente'))).body.total).toBe(0);
+  expect((await request(app).get(`/api/${SCHEMA}/listas-precos/2/produtos?idProduto=1;DROP`).set('Authorization', tokenPara('gerente'))).body.total).toBe(1);
 });
 
 const salvarLista = (role, registro, metodo = 'post') => request(app)[metodo](`/api/${SCHEMA}/tabelas/LISTA_PRECOS`)

@@ -38,6 +38,8 @@ router.get('/:schema/listas-precos/:id/produtos', authJwt, checkSchema, requireM
   const page     = Math.max(1, parseInt(req.query.page) || 1);
   const pageSize = Math.min(200, Math.max(1, parseInt(req.query.pageSize) || 20));
   const q        = req.query.q?.trim() || '';
+  // Filtro exato (link "abrir na lista" da tela de Produtos); a busca q é por trecho.
+  const idProduto = /^\d+$/.test(req.query.idProduto ?? '') ? Number(req.query.idProduto) : null;
   try {
     const result = await withTenantConnection(schema, async db => {
       const colsPR = new Set((await colunasTabela(db, schema, 'PRODUTOS').catch(() => [])).map(c => c.COLUMN_NAME));
@@ -50,6 +52,7 @@ router.get('/:schema/listas-precos/:id/produtos', authJwt, checkSchema, requireM
         const busca = ['px.ID_PRODUTO::TEXT', ...['CODIGO', 'DESCRICAO'].filter(c => colsPR.has(c)).map(c => `pr.${c}::TEXT`)];
         where.push(`(${busca.map(b => `${b} ILIKE $${params.length}`).join(' OR ')})`);
       }
+      if (idProduto !== null) { params.push(idProduto); where.push(`px.ID_PRODUTO = $${params.length}`); }
       const from = `FROM PRODUTOS_X_LISTA px LEFT JOIN PRODUTOS pr ON pr.ID_PRODUTO = px.ID_PRODUTO WHERE ${where.join(' AND ')}`;
 
       const [{ CNT }] = await query(db, `SELECT COUNT(*) AS cnt ${from}`, params);
