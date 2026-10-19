@@ -205,6 +205,7 @@ async function main() {
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
+  const { colorir } = require('./domain/corLog');
   const { tabelaAtiva, atualizarParametrosTabelas } = require('./infrastructure/config/tabelasConfig');
   const { estaPausado, envioEstaPausado, cargaEstaPausada } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
@@ -237,9 +238,11 @@ async function main() {
     ehBeta: ehBeta(VERSAO_ATUAL), opcoesBeta: null,
   };
 
+  // Cor só no terminal: em segundo plano o log vai para arquivo (códigos de cor virariam lixo).
+  const LOG_COLORIDO = Boolean(process.stdout.isTTY) && !process.env.SINCRONIZADOR_BG && !process.env.NO_COLOR;
   function log(msg) {
     const hora = new Date().toLocaleTimeString('pt-BR');
-    console.log(`[${hora}] ${msg}`);
+    console.log(colorir(`[${hora}] ${msg}`, msg, LOG_COLORIDO));
   }
 
   // AUTO_ATUALIZAR: ligado por padrão — só 'false' explícito desliga o auto-apply e volta
