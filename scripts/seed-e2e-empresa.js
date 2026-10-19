@@ -238,6 +238,12 @@ async function seed() {
       VALUES (2, 2, 'Cliente Lista E2E', 'Cliente Lista', 'S', '98765432100', $1, 10)
       ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA, TABELA_PRECO = EXCLUDED.TABELA_PRECO
     `, [ID_LOJA]);
+    // Cadastrado na web e ainda não sincronizado com a loja: sem ID_CLIENTE.
+    await execute(db, `
+      INSERT INTO CLIENTES (SRV_ID, ID_CLIENTE, RAZAO_SOCIAL, FANTASIA, CONSUMIDOR_FINAL, ID_LOJA)
+      VALUES (3, NULL, 'Cliente Pendente E2E', 'Cliente Pendente', 'S', $1)
+      ON CONFLICT (SRV_ID) DO UPDATE SET ID_CLIENTE = NULL, RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA
+    `, [ID_LOJA]);
 
     // Produto 3 nas duas listas; produto 1 em nenhuma (continua no preço de venda).
     await execute(db, 'TRUNCATE TABLE LISTA_PRECOS, PRODUTOS_X_LISTA');
