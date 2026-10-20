@@ -74,13 +74,11 @@ function encerrarComErro(err) {
   // Atrás de proxy (nginx, IIS…) o IP real vem no X-Forwarded-For; sem isso o limite de login trata todos como um IP só.
   if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
 
-  app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
-    next();
-  });
+  const { criarCors, lerOrigens } = require('./server/interfaces/http/middleware/cors');
+  const origensCors = lerOrigens(process.env.CORS_ORIGINS);
+  if (origensCors.length) console.log(`CORS: só ${origensCors.join(', ')}`);
+  else console.warn('CORS: CORS_ORIGINS não definido — qualquer site pode chamar a API pelo navegador.');
+  app.use(criarCors(origensCors));
 
   // 10mb: o push em lote (ReceberRegistros) passa fácil do padrão de 100kb com tabelas largas.
   app.use(express.json({ limit: '10mb' }));

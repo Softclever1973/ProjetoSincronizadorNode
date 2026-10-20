@@ -147,7 +147,7 @@ O código segue uma organização em camadas (domain / application / infrastruct
 
 ### 1. Criar o arquivo `.env` na raiz do projeto
 
-Na primeira inicialização sem `.env`, o servidor executa automaticamente um **wizard de configuração** interativo. Para configuração manual, copie o modelo:
+Na primeira inicialização sem `.env`, o servidor executa automaticamente um **wizard de configuração** interativo (URL do PostgreSQL, porta e o endereço do site que pode chamar a API — `CORS_ORIGINS`; `JWT_SECRET` e `ADMIN_TOKEN` são gerados). Para configuração manual, copie o modelo:
 
 ```bash
 cp .env.example .env
@@ -273,6 +273,7 @@ npm run client:dev
 | `PORT` | Não | `8080` | Porta HTTP do servidor |
 | `JWT_SECRET` | Sim | — | Segredo para assinar JWTs |
 | `ADMIN_TOKEN` | Não | — | Token para `/admin/reload-empresas` e `/admin/reload-permissoes` |
+| `CORS_ORIGINS` | Não (recomendado em produção) | `*` | Endereços separados por vírgula que podem chamar a API pelo navegador (o do SiriusWebFrontend); `https://*.vercel.app` aceita subdomínios. Não afeta o client das lojas |
 | `TRUST_PROXY` | Não | — | Atrás de proxy reverso: nº de proxies na frente (ex.: `1`), para o servidor ver o IP real do cliente (usado no limite de login) |
 
 ### Cliente (`src/client/.env`, apenas em desenvolvimento)
