@@ -115,8 +115,14 @@ function encerrarComErro(err) {
   // Endpoint admin — recarrega o cache de empresas sem reiniciar o servidor
   // Requer header: x-admin-token: <ADMIN_TOKEN>
   // ---------------------------------------------------------------------------
+  // Comparação em tempo constante (hash dos dois lados, mesmo tamanho): não vaza o token pelo tempo de resposta.
+  const crypto = require('crypto');
+  const hash = v => crypto.createHash('sha256').update(String(v ?? '')).digest();
+  const tokenAdminValido = req => Boolean(process.env.ADMIN_TOKEN)
+    && crypto.timingSafeEqual(hash(req.headers['x-admin-token']), hash(process.env.ADMIN_TOKEN));
+
   app.post('/admin/reload-empresas', async (req, res) => {
-    if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+    if (!tokenAdminValido(req)) {
       return res.status(403).json({ erro: 'acesso negado' });
     }
     await recarregarEmpresas();
@@ -128,7 +134,7 @@ function encerrarComErro(err) {
   // sem reiniciar o servidor. Requer header: x-admin-token: <ADMIN_TOKEN>
   // ---------------------------------------------------------------------------
   app.post('/admin/reload-permissoes', async (req, res) => {
-    if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+    if (!tokenAdminValido(req)) {
       return res.status(403).json({ erro: 'acesso negado' });
     }
     await recarregarPermissoes();
