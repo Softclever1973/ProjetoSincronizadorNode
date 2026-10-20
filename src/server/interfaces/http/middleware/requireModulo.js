@@ -1,7 +1,7 @@
 const { pool } = require('#server/infrastructure/db.js');
 const { obterNivelEfetivo } = require('#server/infrastructure/cache/permissoesCache.js');
 const { podeLer, podeEscrever } = require('#server/domain/permissoes.js');
-const { TABELA_MODULO } = require('#server/domain/tabelaModulo.js');
+const { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_INTERNAS } = require('#server/domain/tabelaModulo.js');
 const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // Lê o plano fresco de sync_tenants a cada requisição (mesmo princípio de
@@ -41,16 +41,25 @@ function requireModulo(modulo, nivelExigido) {
 }
 
 /** Middleware table-driven: resolve o módulo a partir de :tabela via TABELA_MODULO, então
- * aplica a mesma checagem. Tabela não mapeada -> next() sem gate (fora do escopo do
- * sistema de módulos, preserva o comportamento atual). */
+ * aplica a mesma checagem. Tabela interna da sincronização -> 403 sempre. Tabela não
+ * mapeada -> leitura liberada; gravação pelo módulo de TABELA_MODULO_ESCRITA ou só pelo dono. */
 function requireModuloDaTabela(nivelExigido) {
   return async (req, res, next) => {
     try {
       const tabela = (req.params.tabela || '').toUpperCase();
-      const modulo = TABELA_MODULO[tabela];
+      const schema = req.params.schema;
+      if (TABELAS_INTERNAS.has(tabela)) return res.status(403).json({ erro: 'tabela não disponível' });
+
+      let modulo = TABELA_MODULO[tabela];
+      if (!modulo && nivelExigido === 'w') {
+        modulo = TABELA_MODULO_ESCRITA[tabela];
+        if (!modulo) {
+          if (req.userRoles?.[schema] === 'dono') return next();
+          return res.status(403).json({ erro: 'permissão insuficiente' });
+        }
+      }
       if (!modulo) return next();
 
-      const schema = req.params.schema;
       const nivel  = await resolverNivelModulo(req, schema, modulo);
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();

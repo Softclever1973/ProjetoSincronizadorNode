@@ -321,7 +321,7 @@ Cada área do sistema é um **módulo** (`produtos`, `clientes`, `pedidos`, `for
 
 Isso é resolvido a cada requisição (`obterPermissoesEfetivas`, com cache invalidado ao editar permissões pelo superadmin) e aplicado via middleware:
 - `requireModulo(modulo, 'r'|'w')` — rotas cujo módulo é fixo (financeiro, usuários, faturamento, auditoria, configurações).
-- `requireModuloDaTabela('r'|'w')` — rotas do CRUD genérico (`/tabelas/:tabela`), que resolve o módulo a partir do nome da tabela (`domain/tabelaModulo.js`); uma tabela fora desse mapa não é gateada por módulo.
+- `requireModuloDaTabela('r'|'w')` — rotas do CRUD genérico (`/tabelas/:tabela`), que resolve o módulo a partir do nome da tabela (`domain/tabelaModulo.js`); uma tabela fora desse mapa tem leitura liberada e gravação só pelo dono (ou pelo módulo de `TABELA_MODULO_ESCRITA`), e as tabelas internas da sincronização (`TABELAS_INTERNAS`) nunca são acessíveis.
 
 No frontend, o mesmo dado chega em `GET /api/:schema/plano` (campo `modulos`) e alimenta `AUTH.podeLerModulo(modulo)` / `AUTH.podeEscreverModulo(modulo)`, usados tanto pra esconder telas inteiras quanto botões específicos.
 
@@ -375,7 +375,7 @@ Rotas usadas pela interface **SiriusWebFrontend**. Requerem `Authorization: Bear
 | POST/PUT | `/api/:schema/tabelas/:tabela` | módulo `w` | Upsert — body: `{ pk, registro }` (pk pode ser array) |
 | DELETE | `/api/:schema/tabelas/:tabela` | módulo `w` | Deleção por PK — body: `{ pk, pkValores }` |
 
-O módulo é resolvido a partir da tabela (`domain/tabelaModulo.js`: `PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`, `MOVIMENTACOES`→`produtos_movimentacao`, `NOTAS_FISCAIS`/`NOTAS_FISCAIS_ITENS`→`notas_fiscais`); tabelas fora desse mapa não são gateadas por módulo, só por `checkSchema` — e, pelo isolamento de `search_path`, só alcançam tabelas da própria empresa.
+O módulo é resolvido a partir da tabela (`domain/tabelaModulo.js`: `PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`, `MOVIMENTACOES`→`produtos_movimentacao`, `NOTAS_FISCAIS`/`NOTAS_FISCAIS_ITENS`→`notas_fiscais`, `LISTA_PRECOS`/`PRODUTOS_X_LISTA`→`lista_precos`, `A_RECEBER`/`A_PAGAR`→`financeiro`). Fora desse mapa (cadastros auxiliares: `AUX_*`, `FORMAS_DE_PAGAMENTOS`, `UNIDADES`, `TRANSPORTADORES`…): leitura liberada para quem é da empresa, gravação só pelo **dono** — exceto `TABELA_MODULO_ESCRITA` (`VENDEDORES` grava com `pedidos` 'w', cadastro rápido no Pedido). `TABELAS_INTERNAS` (`parametros`, `srv_id_map`, `sync_filiais`, `filiais_bloqueadas`, `registros_deletados`) dão **403 para todos**, até o dono — são controle da sincronização. Pelo isolamento de `search_path`, tudo isso só alcança tabelas da própria empresa.
 
 Todas essas rotas aplicam o [escopo de loja](#roles) nas tabelas de loja (listagem, `by-pk`, `distinct`, gravação e exclusão). Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja` (só vale pro dono nas tabelas de loja), `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
 
