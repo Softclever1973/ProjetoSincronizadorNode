@@ -216,4 +216,60 @@ function normalizarBlobs(row) {
   );
 }
 
-module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas, getColunasComputadas, getColunasFirebird, normalizarBlobs };
+const cacheBlobsTexto = {};
+
+// Colunas BLOB SUB_TYPE 1 (texto) da tabela — o driver devolve uma função de leitura no lugar do texto.
+async function getColunasBlobTexto(db, tabela) {
+  if (cacheBlobsTexto[tabela]) return cacheBlobsTexto[tabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ?
+      AND f.RDB$FIELD_TYPE = 261 AND f.RDB$FIELD_SUB_TYPE = 1
+      AND f.RDB$COMPUTED_SOURCE IS NULL
+  `, [tabela]);
+  cacheBlobsTexto[tabela] = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  return cacheBlobsTexto[tabela];
+}
+
+// Pedaço lido por CAST (4000 caracteres = até 16 KB em UTF8; 3 colunas por SELECT cabem no limite de 64 KB da linha).
+const PEDACO_BLOB = 4000;
+const BLOBS_POR_SELECT = 3;
+const castPedaco = (col, inicio) => `CAST(SUBSTRING(${col} FROM ${inicio} FOR ${PEDACO_BLOB}) AS VARCHAR(${PEDACO_BLOB}))`;
+
+/**
+ * Lê um registro local pela PK com os BLOBs de texto já como string completa.
+ * `naoLer` são BLOBs que ficam fora do registro (ex.: XML do SAT, que o site não usa).
+ * Retorna null quando o registro não existe.
+ */
+async function lerRegistroLocal(db, tabela, pks, pkValores, { naoLer = [] } = {}) {
+  const where = pks.map(p => `${p} = ?`).join(' AND ');
+  const rows = await query(db, `SELECT * FROM ${tabela} WHERE ${where}`, pkValores);
+  if (rows.length === 0) return null;
+  const registro = rows[0];
+
+  const blobs = [...await getColunasBlobTexto(db, tabela)].filter(c => c in registro);
+  for (const c of blobs) delete registro[c];
+  const ler = blobs.filter(c => !naoLer.includes(c));
+
+  for (let i = 0; i < ler.length; i += BLOBS_POR_SELECT) {
+    const grupo = ler.slice(i, i + BLOBS_POR_SELECT);
+    const sel = grupo.map((c, j) => `CHAR_LENGTH(${c}) AS TAM_BLOB_${j}, ${castPedaco(c, 1)} AS ${c}`).join(', ');
+    const [linha] = await query(db, `SELECT ${sel} FROM ${tabela} WHERE ${where}`, pkValores);
+    if (!linha) return null;
+    for (const [j, c] of grupo.entries()) {
+      let texto = linha[c] ?? null;
+      const tamanho = Number(linha[`TAM_BLOB_${j}`]) || 0;
+      // Texto maior que um pedaço: lê o resto em sequência.
+      for (let inicio = PEDACO_BLOB + 1; texto !== null && inicio <= tamanho; inicio += PEDACO_BLOB) {
+        const [resto] = await query(db, `SELECT ${castPedaco(c, inicio)} AS PEDACO FROM ${tabela} WHERE ${where}`, pkValores);
+        texto += resto?.PEDACO ?? '';
+      }
+      registro[c] = texto;
+    }
+  }
+  return registro;
+}
+
+module.exports = { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasTipadas, getColunasComputadas, getColunasFirebird, normalizarBlobs, getColunasBlobTexto, lerRegistroLocal };

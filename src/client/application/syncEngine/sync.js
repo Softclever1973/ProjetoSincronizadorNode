@@ -7,7 +7,7 @@ const {
   buscarProdutosParaAtualizar,
 } = require('#client/http.js');
 const { salvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
-const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('#client/infrastructure/firebird/db-utils.js');
+const { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasBlobTexto, lerRegistroLocal } = require('#client/infrastructure/firebird/db-utils.js');
 const { estaPausado } = require('./controle');
 const { camposDivergentes } = require('#client/domain/conflitos.js');
 
@@ -37,6 +37,13 @@ async function resolverSemDiferenca(db, configTabela, idLoja, local, registro, p
   }
   log(`[${configTabela.nome}] pk=${pkValor} igual ao servidor — sem conflito, versão ${versao} registrada`);
   return true;
+}
+
+// Registro local para comparar com o do servidor (BLOB de texto lido como string, como o push envia); [] se não existe.
+async function lerLocal(db, configTabela, pks, registro) {
+  const local = await lerRegistroLocal(db, configTabela.nome, pks, pks.map(p => registro[p]),
+    { naoLer: configTabela.blobsNaoEnviados || [] }).catch(() => null);
+  return local ? [local] : [];
 }
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
@@ -169,12 +176,13 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
 async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.log) {
-  const [computadas, existentes, naoNulas, tamanhos, dataHora] = await Promise.all([
+  const [computadas, existentes, naoNulas, tamanhos, dataHora, blobsTexto] = await Promise.all([
     getColunasComputadas(db, nomeTabela),
     getColunasExistentes(db, nomeTabela),
     getColunasNaoNulas(db, nomeTabela),
     getTamanhosColunas(db, nomeTabela),
     getColunasDataHora(db, nomeTabela),
+    getColunasBlobTexto(db, nomeTabela),
   ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
@@ -184,6 +192,7 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     !computadas.has(k) &&
     existentes.has(k) &&
     !(registro[k] === null && naoNulas.has(k)) &&  // não escreve null em coluna NOT NULL
+    !(registro[k] == null && blobsTexto.has(k)) &&  // BLOB de texto null no servidor = nunca chegou lá; não apaga o da loja
     !(registro[k] === null && pks.some(p => p.toUpperCase() === k.toUpperCase()))  // não escreve null em coluna PK (NOT NULL via constraint, não via flag)
   );
 
@@ -347,11 +356,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
           if (versaoConhecida !== null && versaoConhecida.length === 0) {
             // ── Colisão de PK: dois registros criados independentemente com o mesmo PK ──
-            const wherePartsLocal = pks.map(p => `${p} = ?`).join(' AND ');
-            const existeLocal = await query(db,
-              `SELECT * FROM ${nome} WHERE ${wherePartsLocal}`,
-              pks.map(p => registro[p])
-            ).catch(() => []);
+            const existeLocal = await lerLocal(db, configTabela, pks, registro);
 
             const novoIdColisao = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
 
@@ -392,11 +397,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             }
 
             // Servidor tem versão mais nova E cliente tem mudança pendente → conflito real.
-            const whereParts  = pks.map(p => `${p} = ?`).join(' AND ');
-            const whereValores = pks.map(p => registro[p]);
-            const localRows = await query(db,
-              `SELECT * FROM ${nome} WHERE ${whereParts}`, whereValores
-            ).catch(() => []);
+            const localRows = await lerLocal(db, configTabela, pks, registro);
 
             // Servidor chegou no mesmo estado do local: nada a decidir, o push pendente segue normal.
             if (localRows.length > 0 && await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;
@@ -441,11 +442,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         // vazia) mas já existe localmente é dado que não passou pelo push — salva
         // conflito em vez de sobrescrever.
         if (versaoConhecida !== null && versaoConhecida.length === 0) {
-          const whereLocal = pks.map(p => `${p} = ?`).join(' AND ');
-          const localRows = await query(db,
-            `SELECT * FROM ${nome} WHERE ${whereLocal}`,
-            pks.map(p => registro[p])
-          ).catch(() => []);
+          const localRows = await lerLocal(db, configTabela, pks, registro);
 
           if (localRows.length > 0) {
             if (await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;

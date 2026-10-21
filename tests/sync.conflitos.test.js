@@ -26,6 +26,12 @@ jest.mock('../src/client/infrastructure/firebird/db-utils', () => ({
   getFKRefs: jest.fn().mockResolvedValue([]),
   gerarNovoPK: jest.fn(),
   renomearPKLocal: jest.fn(),
+  getColunasBlobTexto: jest.fn().mockResolvedValue(new Set()),
+  // Leitura local = o SELECT * de sempre (consome o próximo mock de query).
+  lerRegistroLocal: jest.fn(async (db, tabela, pks, valores) => {
+    const { query: q } = require('../src/client/infrastructure/firebird/db');
+    return (await q(db, `SELECT * FROM ${tabela}`, valores))[0] ?? null;
+  }),
 }));
 
 const { query, execute } = require('../src/client/infrastructure/firebird/db');
@@ -240,6 +246,29 @@ describe('sincronizarTabela — caminho normal (sem pendente, sem eco, sem dado 
       expect.arrayContaining([55, 'Produto Novo'])
     );
     expect(salvarCursor).toHaveBeenCalledWith({}, 'PRODUTOS_TESTE_UPSERT', 700, 0);
+  });
+
+  test('BLOB de texto null no servidor não apaga o da loja; com texto, grava', async () => {
+    const { getColunasBlobTexto } = require('../src/client/infrastructure/firebird/db-utils');
+    getColunasBlobTexto.mockResolvedValueOnce(new Set(['OBS', 'FICHA']));
+    const registro = { ID_PRODUTO: 56, NOME: 'P', OBS: null, FICHA: 'texto do site', ID_ULTIMA_ATUALIZACAO_MATRIZ: 701 };
+
+    query
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(['ID_PRODUTO', 'NOME', 'OBS', 'FICHA'].map(COLUNA => ({ COLUNA })))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    await rodarCiclo(registro, { nome: 'PRODUTOS_TESTE_BLOB' });
+
+    const [, sql, valores] = execute.mock.calls.find(([, s]) => s.includes('UPDATE OR INSERT INTO PRODUTOS_TESTE_BLOB'));
+    expect(sql).not.toMatch(/\bOBS\b/);
+    expect(sql).toContain('FICHA');
+    expect(valores).toContain('texto do site');
   });
 });
 

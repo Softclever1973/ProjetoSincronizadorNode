@@ -54,6 +54,7 @@
  * @property {boolean}          srvId            — servidor atribui e rastreia um SRV_ID global para esta tabela
  * @property {FKRef[]}          fks              — FKs para outras tabelas sincronizadas (topological sort)
  * @property {string[]}         colunasAbsolutas — colunas cujo valor absoluto deve ser enviado ao servidor (push)
+ * @property {string[]}         blobsNaoEnviados — BLOBs de texto que o push não lê nem envia (o pull nunca apaga BLOB com null)
  * @property {{ coluna: string, colunaRef: string, negativoQuando: string[] }} [normalizarSinal]
  *   — ao receber do servidor (pull), nega `coluna` quando `colunaRef` contém qualquer string de `negativoQuando`
  *     e o valor atual é positivo (ex: QTDE em MOVIMENTACOES — servidor usa positivo, Firebird espera negativo)
@@ -99,6 +100,7 @@ function tabela({
   fks = [],
   colunasAbsolutas = [],
   normalizarSinal = null,
+  blobsNaoEnviados = [],
 }) {
   // Tabela pai do filtroFilialViaFK, tirada da própria FK — falha na carga se não houver FK correspondente.
   let filtroFilialViaTabela = null;
@@ -106,7 +108,7 @@ function tabela({
     filtroFilialViaTabela = fks.find(f => f.coluna === filtroFilialViaFK)?.tabela ?? null;
     if (!filtroFilialViaTabela) throw new Error(`tabelas.js: ${nome}.filtroFilialViaFK='${filtroFilialViaFK}' sem FK correspondente em fks`);
   }
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, parametroAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, parametroAtivo, srvId, fks, colunasAbsolutas, normalizarSinal, blobsNaoEnviados };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
@@ -203,6 +205,8 @@ const TABELAS = [
     colunaData: 'DATA_HORA',
     defaultAtivo: true,
     srvId: true,
+    // XML/impressão do SAT: grandes e sem uso no site.
+    blobsNaoEnviados: ['XML_SAT', 'XML_CANC_SAT', 'SAT_IMP_TXT'],
   }),
   tabela({
     nome: 'PEDIDOS_ITENS',

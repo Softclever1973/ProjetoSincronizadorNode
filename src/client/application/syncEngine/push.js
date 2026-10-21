@@ -1,4 +1,5 @@
 const { query, execute } = require('#client/infrastructure/firebird/db.js');
+const { lerRegistroLocal } = require('#client/infrastructure/firebird/db-utils.js');
 const { enviarRegistro, enviarRegistros } = require('#client/http.js');
 const { atualizarOuSalvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
 const { registrarEcho } = require('./echos');
@@ -25,21 +26,20 @@ async function prepararPendente(db, configTabela, pendente, idLoja, log) {
   const pkValor = pendente.PK_VALOR;
   const pkValores = pkValor.split('|');
 
-  let registros;
+  let registro;
   try {
-    registros = await query(db, `SELECT * FROM ${nome} WHERE ${pks.map(p => `${p} = ?`).join(' AND ')}`, pkValores);
+    // BLOB de texto lido por inteiro; sem isso a coluna sumia no JSON (o driver devolve uma função).
+    registro = await lerRegistroLocal(db, nome, pks, pkValores, { naoLer: configTabela.blobsNaoEnviados || [] });
   } catch (e) {
     log(`[${nome}] Erro ao buscar registro local (${pkValor}): ${e.message}`);
     return null;
   }
 
-  if (registros.length === 0) {
+  if (!registro) {
     const registroDelete = {};
     pks.forEach((coluna, i) => { registroDelete[coluna] = pkValores[i]; });
     return { pkValor, pkValores, deletar: true, registro: registroDelete, registroParaEnviar: registroDelete, ultimaVersaoConhecida: 0 };
   }
-
-  const registro = registros[0];
 
   // ID_LOJA nulo é preenchido com o ID da filial — garante que registros criados
   // localmente pelo Delphi (sem ID_LOJA explícito) sejam identificados corretamente
