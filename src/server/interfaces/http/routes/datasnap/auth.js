@@ -4,7 +4,6 @@ const crypto         = require('crypto');
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const { pool }              = require('#server/infrastructure/db.js');
-const { vincularVendedorDono } = require('#server/application/onboarding/vincularVendedorDono.js');
 const authJwt        = require('#server/interfaces/http/middleware/authJwt.js');
 const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
 const tentativasLogin = require('#server/infrastructure/cache/tentativasLogin.js');
@@ -19,13 +18,7 @@ const RESET_THROTTLE_MS  = 60 * 1000;      // evita reenvio em disparada pelo me
 // restart nem é compartilhado entre instâncias; suficiente para um único processo).
 const _ultimoPedidoReset = new Map(); // email → timestamp do último pedido aceito
 
-/**
- * Lê os vínculos do usuário com empresas e monta os claims schemas/roles/lojas/vendedores.
- * Para schemas em que o usuário é dono e ainda não tem vendedor vinculado, tenta vincular
- * a um VENDEDORES "DONO" agora — no momento da criação da empresa isso ainda não é possível
- * (VENDEDORES só existe depois do primeiro sync do Firebird), então login/refresh é o ponto
- * em que, mais cedo ou mais tarde, a tabela já vai existir e o vínculo é feito automaticamente.
- */
+/** Lê os vínculos do usuário com empresas e monta os claims schemas/roles/lojas/vendedores. */
 async function montarClaims(idUsuario) {
   const { rows } = await pool.query(
     `SELECT ue.schema_name, ue.role, ue.id_loja, ue.id_vendedor, st.plano
@@ -35,19 +28,12 @@ async function montarClaims(idUsuario) {
     [idUsuario]
   );
 
-  const vendedores = Object.fromEntries(rows.map(r => [r.schema_name, r.id_vendedor ?? null]));
-  for (const r of rows) {
-    if (r.role === 'dono' && vendedores[r.schema_name] == null) {
-      const novoId = await vincularVendedorDono(r.schema_name, idUsuario);
-      if (novoId != null) vendedores[r.schema_name] = novoId;
-    }
-  }
-
   return {
     schemas:    rows.map(r => r.schema_name),
     roles:      Object.fromEntries(rows.map(r => [r.schema_name, r.role])),
     lojas:      Object.fromEntries(rows.map(r => [r.schema_name, r.id_loja ?? null])),
-    vendedores,
+    // Só vendedor vinculado na tela de Usuários (vendedor real do Sirius); o servidor não cria vendedor.
+    vendedores: Object.fromEntries(rows.map(r => [r.schema_name, r.id_vendedor ?? null])),
     planos:     Object.fromEntries(rows.map(r => [r.schema_name, r.plano])),
   };
 }

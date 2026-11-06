@@ -1,7 +1,7 @@
 const { pool } = require('#server/infrastructure/db.js');
 const { obterNivelEfetivo } = require('#server/infrastructure/cache/permissoesCache.js');
 const { podeLer, podeEscrever } = require('#server/domain/permissoes.js');
-const { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_INTERNAS } = require('#server/domain/tabelaModulo.js');
+const { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_SOMENTE_LEITURA, TABELAS_INTERNAS } = require('#server/domain/tabelaModulo.js');
 const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // Lê o plano fresco de sync_tenants a cada requisição (mesmo princípio de
@@ -49,6 +49,8 @@ function requireModuloDaTabela(nivelExigido) {
       const tabela = (req.params.tabela || '').toUpperCase();
       const schema = req.params.schema;
       if (TABELAS_INTERNAS.has(tabela)) return res.status(403).json({ erro: 'tabela não disponível' });
+      if (nivelExigido === 'w' && TABELAS_SOMENTE_LEITURA.has(tabela))
+        return res.status(403).json({ erro: 'Cadastro feito só no Sirius: o registro chega ao site na próxima sincronização.' });
 
       let modulo = TABELA_MODULO[tabela];
       if (!modulo && nivelExigido === 'w') {

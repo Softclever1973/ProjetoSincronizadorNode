@@ -18,14 +18,15 @@ const TABELA_MODULO = Object.freeze({
   A_PAGAR: 'financeiro',
 });
 
-// Só a gravação é gateada: a leitura continua liberada (ex.: vendedores aparecem em Pedidos, NF e Usuários).
-const TABELA_MODULO_ESCRITA = Object.freeze({
-  VENDEDORES: 'pedidos', // cadastro rápido de vendedor no Pedido
-});
+// Só a gravação é gateada: a leitura continua liberada.
+const TABELA_MODULO_ESCRITA = Object.freeze({});
+
+// Leitura liberada, gravação negada para todos: o ID nasce na loja (VENDEDORES: o Sirius usa MAX+1 no Firebird).
+const TABELAS_SOMENTE_LEITURA = Object.freeze(new Set(['VENDEDORES']));
 
 // Controle da sincronização no schema do tenant: nunca pelo CRUD genérico (nem leitura).
 const TABELAS_INTERNAS = Object.freeze(new Set([
   'PARAMETROS', 'SRV_ID_MAP', 'SYNC_FILIAIS', 'FILIAIS_BLOQUEADAS', 'REGISTROS_DELETADOS',
 ]));
 
-module.exports = { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_INTERNAS };
+module.exports = { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_SOMENTE_LEITURA, TABELAS_INTERNAS };

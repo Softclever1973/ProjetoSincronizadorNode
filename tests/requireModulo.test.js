@@ -113,17 +113,15 @@ describe('requireModuloDaTabela', () => {
       expect(obterNivelEfetivo).not.toHaveBeenCalled();
     });
 
-  test('VENDEDORES: leitura liberada, gravação pelo módulo pedidos', async () => {
+  test('VENDEDORES: leitura liberada, gravação negada até para o dono (vendedor nasce no Sirius)', async () => {
     expect((await rodar('r', 'VENDEDORES', 'vendedor')).next).toHaveBeenCalled();
     expect(obterNivelEfetivo).not.toHaveBeenCalled();
 
-    pool.query.mockResolvedValue({ rows: [{ plano: 'LITE1' }] });
-    obterNivelEfetivo.mockResolvedValue('rw');
-    expect((await rodar('w', 'VENDEDORES', 'vendedor')).next).toHaveBeenCalled();
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'pedidos', 'empresa_kr');
-
-    obterNivelEfetivo.mockResolvedValue('r-');
-    expect((await rodar('w', 'VENDEDORES', 'vendedor')).res.status).toHaveBeenCalledWith(403);
+    for (const role of ['vendedor', 'gerente', 'dono']) {
+      const { res, next } = await rodar('w', 'VENDEDORES', role);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    }
   });
 
   test.each(['parametros', 'SRV_ID_MAP', 'sync_filiais', 'filiais_bloqueadas', 'registros_deletados'])(

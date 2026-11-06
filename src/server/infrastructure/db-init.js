@@ -537,4 +537,4 @@ async function migrarTodosSchemas() {
   }
 }
 
-module.exports = { initializeDatabase, initializeTenantSchema, migrarTodosSchemas, SEED_PERMISSOES_PLANO, SEED_PERMISSOES_ROLE };
+module.exports = { initializeDatabase, initializeTenantSchema, migrarTodosSchemas, migrarTriggersDelecao, SEED_PERMISSOES_PLANO, SEED_PERMISSOES_ROLE };

@@ -1,7 +1,7 @@
 const express  = require('express');
 const router   = express.Router();
 const bcrypt   = require('bcryptjs');
-const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
+const { pool, withTenantConnection, query } = require('#server/infrastructure/db.js');
 const authJwt  = require('#server/interfaces/http/middleware/authJwt.js');
 const { requireRole } = require('#server/interfaces/http/middleware/checkRole.js');
 const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
@@ -64,56 +64,16 @@ router.get('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 
   }
 });
 
-/**
- * Tenta criar um registro na tabela VENDEDORES do tenant e retorna o novo ID.
- * Detecta colunas dinamicamente para tolerar schemas variados.
- * Retorna null silenciosamente se a tabela não existir ou falhar.
- *
- * @param {string} schema
- * @param {{ nome: string|null, id_loja: number|null }} dados
- * @returns {Promise<number|null>}
- */
-async function _criarVendedorNoTenant(schema, { nome, id_loja }) {
+// Vínculo só com vendedor ativo que já existe (veio do Sirius): o servidor nunca escolhe ID_VENDEDOR — o Sirius usa MAX+1 na loja.
+async function vendedorExiste(schema, idVendedor) {
   try {
-    return await withTenantConnection(schema, async (db) => {
-      // Detecta colunas disponíveis
-      const { rows: colRows } = await db.query(
-        `SELECT column_name FROM information_schema.columns
-         WHERE table_schema = current_schema() AND LOWER(table_name) = 'vendedores'
-         ORDER BY ordinal_position`
-      );
-      if (!colRows.length) return null;
-
-      const colsRaw = colRows.map(r => r.column_name);
-      const colsUp  = colsRaw.map(c => c.toUpperCase());
-      const has     = (c) => colsUp.includes(c);
-
-      if (!has('ID_VENDEDOR')) return null;
-
-      // Próximo ID via MAX+1
-      const [{ max }] = (await db.query(`SELECT COALESCE(MAX(ID_VENDEDOR), 0) AS max FROM VENDEDORES`)).rows;
-      const nextId = Number(max) + 1;
-
-      // Monta INSERT dinamicamente com as colunas que existirem
-      const insertCols = ['ID_VENDEDOR'];
-      const insertVals = [nextId];
-
-      const nomeCol = colsRaw[colsUp.findIndex(c => ['NOME_VENDEDOR','NOME','RAZAO_SOCIAL'].includes(c))] ?? null;
-      if (nomeCol && nome) { insertCols.push(nomeCol); insertVals.push(nome.trim()); }
-
-      if (has('ID_LOJA')  && id_loja != null) { insertCols.push(colsRaw[colsUp.indexOf('ID_LOJA')]);  insertVals.push(id_loja); }
-      if (has('ATIVO'))                        { insertCols.push(colsRaw[colsUp.indexOf('ATIVO')]);    insertVals.push('S'); }
-      if (has('SITUACAO'))                     { insertCols.push(colsRaw[colsUp.indexOf('SITUACAO')]); insertVals.push('A'); }
-
-      const ph = insertVals.map((_, i) => `$${i + 1}`);
-      await db.query(
-        `INSERT INTO VENDEDORES (${insertCols.join(', ')}) VALUES (${ph.join(', ')})`,
-        insertVals
-      );
-      return nextId;
+    return await withTenantConnection(schema, async db => {
+      const [v] = await query(db, 'SELECT * FROM VENDEDORES WHERE ID_VENDEDOR = $1 LIMIT 1', [idVendedor]);
+      return !!v && String(v.STATUS ?? '').trim().toUpperCase() !== 'I';
     });
-  } catch {
-    return null; // falha silenciosa — não bloqueia criação do usuário
+  } catch (e) {
+    if (e.code === '42P01') return false; // VENDEDORES ainda não sincronizada
+    throw e;
   }
 }
 
@@ -121,7 +81,8 @@ async function _criarVendedorNoTenant(schema, { nome, id_loja }) {
 router.post('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios', 'w'), async (req, res) => {
   const { schema } = req.params;
   const callerRole = req.userRoles[schema];
-  const { nome, email, senha, role, id_loja, id_vendedor, criarVendedor } = req.body;
+  // criarVendedor (site antigo) é ignorado: vendedor novo se cadastra no Sirius.
+  const { nome, email, senha, role, id_loja, id_vendedor } = req.body;
 
   if (!nome || !String(nome).trim())
     return res.status(400).json({ erro: 'nome é obrigatório' });
@@ -151,11 +112,11 @@ router.post('/:schema/usuarios', authJwt, checkSchema, requireModulo('usuarios',
   if (role !== 'dono' && !id_loja)
     return res.status(400).json({ erro: 'id_loja é obrigatório para gerente e vendedor' });
 
-  // Auto-cria vendedor no tenant se solicitado e nenhum foi vinculado manualmente
-  let idVendedorFinal = id_vendedor ?? null;
-  if (criarVendedor && !idVendedorFinal && (role === 'vendedor' || role === 'gerente')) {
-    idVendedorFinal = await _criarVendedorNoTenant(schema, { nome: nome || null, id_loja: id_loja ?? null });
-  }
+  const idVendedorFinal = id_vendedor ?? null;
+  try {
+    if (idVendedorFinal != null && !(await vendedorExiste(schema, idVendedorFinal)))
+      return res.status(400).json({ erro: 'Vendedor não encontrado ou inativo. Cadastre o vendedor no Sirius e aguarde a sincronização.' });
+  } catch (e) { return erroServidor(res, e); }
 
   const client = await pool.connect();
   try {
@@ -331,6 +292,8 @@ router.patch('/:schema/usuarios/:id/role', authJwt, checkSchema, requireModulo('
     return res.status(400).json({ erro: 'id_loja é obrigatório para gerente e vendedor' });
 
   try {
+    if (id_vendedor != null && !(await vendedorExiste(schema, id_vendedor)))
+      return res.status(400).json({ erro: 'Vendedor não encontrado ou inativo. Cadastre o vendedor no Sirius e aguarde a sincronização.' });
     const alvo = await pool.query(
       'SELECT role FROM public.usuarios_empresas WHERE id_usuario = $1 AND schema_name = $2',
       [id, schema]
