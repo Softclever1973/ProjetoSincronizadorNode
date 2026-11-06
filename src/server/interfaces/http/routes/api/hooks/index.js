@@ -8,7 +8,7 @@
  *   denormalizar(db, schema, registro, allowed, req)
  *   validarTransicao(db, { registro, update, dadosAntes })
  *   validarUnicidade(db, { registro, pkVals })
- *   depoisDeGravar(db, { registro, update, dadosAntes, schema })
+ *   depoisDeGravar(db, { registro, update, dadosAntes, schema, srvId, req })
  *   aposSalvar(schema, { registro, dadosAntes })
  * E, fora do handleSave, na listagem (GET /tabelas/:tabela):
  *   expressaoOrdenacao(coluna, tipoPg) → expressão SQL no lugar da coluna no ORDER BY, ou null

@@ -25,6 +25,7 @@ function escopoRequisicao(req, schema, tabela) {
 const { colunasTipadasDeRegistro } = require('#server/domain/schema.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const { proximoSrvIdDaTabela } = require('#server/infrastructure/repositories/srvIdSequencia.js');
 const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 const { pedidoEstaCancelado } = require('./helpers');
 const { getCurrentTime } = require('#server/infrastructure/timeService.js');
@@ -468,24 +469,11 @@ async function handleSave(req, res, forceUpdate) {
         // Tabela com SRV_ID como PK (NOT NULL sem DEFAULT): aloca da sequência
         // por-tabela (mesma usada pelo push de sincronização — evita colisão de PKs).
         if (allowed.has('SRV_ID') && !insertCols.some(c => c.toUpperCase() === 'SRV_ID')) {
-          const seqNome = `seq_srv_id_${tabela.toLowerCase()}`;
-          await execute(db, `CREATE SEQUENCE IF NOT EXISTS "${schema}"."${seqNome}"`).catch(() => {});
-          // Avança a sequência além do maior SRV_ID existente: Firebird pode reenviar
-          // registros com SRV_ID já atribuído (ramo srvIdFilial em sincronizacao.js) sem
-          // nunca avançar a sequência, o que colidiria com SRV_ID=1 já existente.
-          const [seqInfo] = await query(db, `
-            SELECT
-              COALESCE((SELECT MAX(SRV_ID) FROM ${tabela}), 0) AS max_srv,
-              (SELECT last_value FROM "${schema}"."${seqNome}") AS seq_last
-          `).catch(() => [null]);
-          if (seqInfo && Number(seqInfo.MAX_SRV ?? 0) >= Number(seqInfo.SEQ_LAST ?? 0)) {
-            await execute(db, `SELECT setval('${schema}.${seqNome}', $1)`, [Number(seqInfo.MAX_SRV)]).catch(() => {});
-          }
-          const [seq] = await query(db, `SELECT nextval('${schema}.${seqNome}') AS v`);
-          if (seq?.V != null) {
+          const novoSrvId = await proximoSrvIdDaTabela(db, schema, tabela);
+          if (novoSrvId != null) {
             insertCols = ['SRV_ID', ...insertCols];
-            insertVals = [seq.V, ...insertVals];
-            insertedSrvId = seq.V;
+            insertVals = [novoSrvId, ...insertVals];
+            insertedSrvId = novoSrvId;
           }
         }
         const insertPh = insertCols.map((_, i) => `$${i + 1}`);
@@ -518,8 +506,8 @@ async function handleSave(req, res, forceUpdate) {
           pksUpper.map(p => registro[Object.keys(registro).find(k => k.toUpperCase() === p)])
         );
       }
-      // LISTA_PRECOS: percentual mudou → recalcula o PRECO dos produtos da lista na mesma conexão.
-      await hooks?.depoisDeGravar?.(db, { registro, update, dadosAntes, schema });
+      // LISTA_PRECOS: percentual mudou → recalcula o PRECO; PRODUTOS novo → movimentação de Implantação.
+      await hooks?.depoisDeGravar?.(db, { registro, update, dadosAntes, schema, srvId: insertedSrvId ?? null, req });
       return { isUpdate: update, dadosAntes, srvId: insertedSrvId ?? null };
     });
 
