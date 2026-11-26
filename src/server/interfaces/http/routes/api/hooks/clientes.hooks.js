@@ -27,4 +27,22 @@ async function validarUnicidade(db, { registro, pkVals }) {
   }
 }
 
-module.exports = { validarUnicidade };
+// SITUACAO nunca fica vazia: cliente novo nasce 'A'; na edição, vazio não sobrescreve o valor gravado.
+function aplicarCamposAutomaticos(req, registro) {
+  const chave = Object.keys(registro).find(k => k.toUpperCase() === 'SITUACAO') ?? 'SITUACAO';
+  const novo = Object.keys(registro).every(k => k.toUpperCase() !== 'SRV_ID' || registro[k] == null);
+  if (String(registro[chave] ?? '').trim()) return;
+  if (novo) registro[chave] = 'A';
+  else delete registro[chave];
+}
+
+// Edição de cliente que ficou sem SITUACAO (cadastro antigo do site) já o grava como 'A'.
+async function denormalizar(db, schema, registro, allowed) {
+  if (!allowed.has('SITUACAO') || registro.SITUACAO) return;
+  const srvId = registro[Object.keys(registro).find(k => k.toUpperCase() === 'SRV_ID')];
+  if (srvId == null) return;
+  const [atual] = await query(db, 'SELECT SITUACAO FROM CLIENTES WHERE SRV_ID = $1 LIMIT 1', [srvId]);
+  if (atual && !String(atual.SITUACAO ?? '').trim()) registro.SITUACAO = 'A';
+}
+
+module.exports = { validarUnicidade, aplicarCamposAutomaticos, denormalizar };

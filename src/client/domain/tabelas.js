@@ -19,6 +19,8 @@
  *   colunaData       — coluna de data de negócio para a política de retenção de 2 anos;
  *                      null = cadastro/referência sem expiração por data
  *   defaultAtivo     — se a tabela começa ativa no painel de configurações (padrão: false)
+ *   parametroAtivo   — { id, valor }: o parâmetro decide o sync (PARAMETROS(id) = valor → ativa,
+ *                      senão inativa) e o toggle fica travado; null = decide o toggle
  *
  * Ordem importa: tabelas referenciadas por FK devem vir antes das dependentes.
  */
@@ -43,13 +45,16 @@
  * @property {boolean}          temDelete
  * @property {string|null}      filtroFilial
  * @property {string|null}      filtroFilialViaFK
+ * @property {string|null}      filtroFilialViaTabela — tabela pai do filtroFilialViaFK (derivada de fks)
  * @property {string|null}      endpoint
  * @property {string|null}      generator
  * @property {string|null}      colunaData
  * @property {boolean}          defaultAtivo
+ * @property {{ id: number, valor: string }|null} parametroAtivo
  * @property {boolean}          srvId            — servidor atribui e rastreia um SRV_ID global para esta tabela
  * @property {FKRef[]}          fks              — FKs para outras tabelas sincronizadas (topological sort)
  * @property {string[]}         colunasAbsolutas — colunas cujo valor absoluto deve ser enviado ao servidor (push)
+ * @property {string[]}         blobsNaoEnviados — BLOBs de texto que o push não lê nem envia (o pull nunca apaga BLOB com null)
  * @property {{ coluna: string, colunaRef: string, negativoQuando: string[] }} [normalizarSinal]
  *   — ao receber do servidor (pull), nega `coluna` quando `colunaRef` contém qualquer string de `negativoQuando`
  *     e o valor atual é positivo (ex: QTDE em MOVIMENTACOES — servidor usa positivo, Firebird espera negativo)
@@ -90,12 +95,20 @@ function tabela({
   generator = null,
   colunaData = null,
   defaultAtivo = false,
+  parametroAtivo = null,
   srvId = false,
   fks = [],
   colunasAbsolutas = [],
   normalizarSinal = null,
+  blobsNaoEnviados = [],
 }) {
-  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, endpoint, generator, colunaData, defaultAtivo, srvId, fks, colunasAbsolutas, normalizarSinal };
+  // Tabela pai do filtroFilialViaFK, tirada da própria FK — falha na carga se não houver FK correspondente.
+  let filtroFilialViaTabela = null;
+  if (filtroFilialViaFK) {
+    filtroFilialViaTabela = fks.find(f => f.coluna === filtroFilialViaFK)?.tabela ?? null;
+    if (!filtroFilialViaTabela) throw new Error(`tabelas.js: ${nome}.filtroFilialViaFK='${filtroFilialViaFK}' sem FK correspondente em fks`);
+  }
+  return { nome, pk, grupo, temDelete, filtroFilial, filtroFilialViaFK, filtroFilialViaTabela, endpoint, generator, colunaData, defaultAtivo, parametroAtivo, srvId, fks, colunasAbsolutas, normalizarSinal, blobsNaoEnviados };
 }
 
 // ── Lista de tabelas ──────────────────────────────────────────────────────────
@@ -116,6 +129,10 @@ const TABELAS = [
   tabela({ nome: 'AUX_SUB_GRUPOS', pk: 'ID_AUX_SUB_GRUPO', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'AUX_MOEDAS', pk: 'SIGLA_MOEDA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
   tabela({ nome: 'EMPRESAS', pk: 'ID_EMPRESA', grupo: GRUPOS.AUXILIARES, defaultAtivo: true }),
+  // Sem PK/índice único declarado no Firebird; TIPO_OPERACAO (código curto, ex. "DV") é a chave
+  // usada na prática pela aplicação Delphi e por NOTAS_FISCAIS.TIPO_OPERACAO — confirmado sem
+  // duplicatas em produção antes de usar como pk aqui.
+  tabela({ nome: 'TIPOS_DE_OPERACOES', pk: 'TIPO_OPERACAO', grupo: GRUPOS.AUXILIARES, temDelete: false, defaultAtivo: true }),
 
   // ── Cadastros base ──────────────────────────────────────────────────────────
   tabela({ nome: 'CENTROS_DE_CUSTO', pk: 'CODIGO_CENTRO_DE_CUSTO', grupo: GRUPOS.CADASTROS }),
@@ -123,7 +140,9 @@ const TABELAS = [
   tabela({ nome: 'CODIGOS_REGIMES_TRIBUTARIOS', pk: 'ID_CODIGO_REGIME_TRIBUTARIO', grupo: GRUPOS.CADASTROS }),
   tabela({ nome: 'CONTAS', pk: 'REDUZIDO', grupo: GRUPOS.CADASTROS }),
   tabela({ nome: 'DEPARTAMENTOS', pk: 'SIGLA_DEPARTAMENTO', grupo: GRUPOS.CADASTROS }),
-  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS }),
+  // Lista de preços: parâmetro 117 = S indica que o cliente usa o recurso.
+  // Generator usado pelo sincronizador Delphi antigo (classRequisicoes.pas); listas também nascem no site.
+  tabela({ nome: 'LISTA_PRECOS', pk: 'ID_LISTA', grupo: GRUPOS.CADASTROS, generator: 'NOVA_LISTA_PRECOS', parametroAtivo: { id: 117, valor: 'S' } }),
   tabela({ nome: 'TIPOS_PRODUTOS', pk: 'ID_TIPO_PRODUTO', grupo: GRUPOS.CADASTROS }),
 
   // ── Produtos ────────────────────────────────────────────────────────────────
@@ -137,7 +156,7 @@ const TABELAS = [
     srvId: true,
   }),
   tabela({ nome: 'PRODUTOS_GRADES', pk: 'ID_PRODUTO_GRADE', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTOS_GRADES', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
-  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA', srvId: true, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
+  tabela({ nome: 'PRODUTOS_X_LISTA', pk: 'ID_PRODUTO_X_LISTA', grupo: GRUPOS.PRODUTOS, generator: 'NOVO_PRODUTO_X_LISTA', srvId: true, parametroAtivo: { id: 117, valor: 'S' }, fks: [{ coluna: 'ID_PRODUTO', tabela: 'PRODUTOS' }] }),
   tabela({
     nome: 'MOVIMENTACOES',
     pk: 'ID_MOVIMENTACAO',
@@ -165,7 +184,7 @@ const TABELAS = [
   tabela({ nome: 'FORMAS_DE_PAGAMENTOS_SISPAG', pk: 'ID_FORMA_DE_PAGAMENTO_SISPAG', grupo: GRUPOS.FORNECEDORES }),
 
   // ── Transportadores ─────────────────────────────────────────────────────────
-  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR', srvId: true }),
+  tabela({ nome: 'TRANSPORTADORES', pk: 'ID_TRANSPORTADOR', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR', defaultAtivo: true, srvId: true }),
   tabela({ nome: 'TRANSP_CONTATOS_ADICIONAIS', pk: 'ID_TRANS_CONTATO_ADICIONAL', grupo: GRUPOS.TRANSPORTADORES, generator: 'NOVO_TRANSP_CONTATO_ADICIONAL', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
   tabela({ nome: 'TRANSPORTADORES_PLACAS', pk: 'ID_TRANSPORTADOR_PLACA', grupo: GRUPOS.TRANSPORTADORES, generator: 'TRANSPORTADOR_PLACA', srvId: true, fks: [{ coluna: 'ID_TRANSPORTADOR', tabela: 'TRANSPORTADORES' }] }),
 
@@ -186,6 +205,8 @@ const TABELAS = [
     colunaData: 'DATA_HORA',
     defaultAtivo: true,
     srvId: true,
+    // XML/impressão do SAT: grandes e sem uso no site.
+    blobsNaoEnviados: ['XML_SAT', 'XML_CANC_SAT', 'SAT_IMP_TXT'],
   }),
   tabela({
     nome: 'PEDIDOS_ITENS',

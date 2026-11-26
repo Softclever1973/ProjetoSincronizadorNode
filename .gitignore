@@ -8,6 +8,7 @@ sirius-client.ini
 # Estado de sincronização (gerado em runtime, específico por instalação)
 conflitos.json
 tabelas-config.json
+sync-pausa.json
 
 # Mapeamento local schema → conexão Firebird de cada loja (contém senhas) — ver
 # scripts/lojas.example.json para o formato esperado.

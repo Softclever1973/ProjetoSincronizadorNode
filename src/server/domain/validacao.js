@@ -6,10 +6,12 @@
 /** Valida nomes de tabelas, colunas e PKs vindos de parâmetros HTTP. */
 const NOME_VALIDO = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** Tabelas transacionais que exigem filtro obrigatório de ID_LOJA para gerente/vendedor. */
-const TABELAS_FILTRO_LOJA = new Set([
-  'PEDIDOS', 'PEDIDOS_ITENS', 'PEDIDOS_PARCELAS_PAGAMENTOS', 'CLIENTES',
-]);
+// Schema de empresa: minúsculo, e nunca um schema do sistema (public guarda usuários e tokens de todas as empresas).
+const SCHEMAS_RESERVADOS = new Set(['public', 'information_schema']);
+function schemaTenantValido(nome) {
+  return typeof nome === 'string' && /^[a-z_][a-z0-9_]*$/.test(nome)
+    && !SCHEMAS_RESERVADOS.has(nome) && !nome.startsWith('pg_');
+}
 
 /** Colunas de controle de sincronização que nunca devem ser exibidas ao usuário. */
 const COLS_OCULTAS = new Set([
@@ -104,7 +106,7 @@ const REGRAS_TABELA = Object.freeze({
     ],
   },
   CLIENTES: {
-    obrigatorios: ['RAZAO_SOCIAL', 'FANTASIA', 'PESSOA_P_CONTATO', 'CONSUMIDOR_FINAL'],
+    obrigatorios: ['RAZAO_SOCIAL', 'CONSUMIDOR_FINAL'],
     validacoes: [
       r => {
         const razao = String(campo(r, 'RAZAO_SOCIAL') ?? '').trim();
@@ -174,7 +176,7 @@ function validarRegistro(tabela, registro, { isUpdate = false } = {}) {
 
 module.exports = {
   NOME_VALIDO,
-  TABELAS_FILTRO_LOJA,
+  schemaTenantValido,
   COLS_OCULTAS,
   COLS_DATA_PEDIDO,
   CHAVES_PERMITIDAS,

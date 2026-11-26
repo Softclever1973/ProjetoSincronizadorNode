@@ -11,6 +11,7 @@ const jwt = require('jsonwebtoken');
 const { pool } = require('../src/server/infrastructure/db');
 const crudRouter = require('../src/server/interfaces/http/routes/api/crud');
 const { TEST_SCHEMA, setupTestSchema, truncateTestSchema } = require('./helpers/testSchema');
+const { fixarOverrides, limparOverrides } = require('./helpers/permissoesReais');
 
 const app = express();
 app.use(express.json());
@@ -18,7 +19,8 @@ app.use('/api', crudRouter);
 
 function tokenPara(role) {
   return jwt.sign(
-    { id: 999999, nome: 'Teste', schemas: [TEST_SCHEMA], roles: { [TEST_SCHEMA]: role }, lojas: {}, vendedores: {} },
+    // Gerente/vendedor sempre têm loja no vínculo (sem ela não veem nada — escopoLoja.js).
+    { id: 999999, nome: 'Teste', schemas: [TEST_SCHEMA], roles: { [TEST_SCHEMA]: role }, lojas: { [TEST_SCHEMA]: 1 }, vendedores: {} },
     process.env.JWT_SECRET
   );
 }
@@ -183,12 +185,12 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
     expect(Number(res.body.srvId)).toBeGreaterThan(500); // não colide com o SRV_ID pré-existente
   });
 
-  test('CODIGO duplicado é bloqueado quando sync_config.codigo_interno_unico = S', async () => {
+  test('CODIGO duplicado é bloqueado quando parametros.codigo_interno_unico = S', async () => {
     // db-init.js não semeia 'codigo_interno_unico' por padrão (só chega via sync do Firebird)
     // — schema recém-criado não tem essa linha, então UPDATE não bastaria; precisa de upsert.
     await pool.query(`
-      INSERT INTO ${TEST_SCHEMA}.sync_config (chave, valor) VALUES ('codigo_interno_unico', 'S')
-      ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor
+      INSERT INTO ${TEST_SCHEMA}.parametros (chave, parametro) VALUES ('codigo_interno_unico', 'S')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
 
     await request(app)
@@ -205,10 +207,10 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
     expect(res.body.erro).toMatch(/já está em uso por outro produto/);
   });
 
-  test('CODIGO duplicado é permitido quando sync_config.codigo_interno_unico != S', async () => {
+  test('CODIGO duplicado é permitido quando parametros.codigo_interno_unico != S', async () => {
     await pool.query(`
-      INSERT INTO ${TEST_SCHEMA}.sync_config (chave, valor) VALUES ('codigo_interno_unico', 'N')
-      ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor
+      INSERT INTO ${TEST_SCHEMA}.parametros (chave, parametro) VALUES ('codigo_interno_unico', 'N')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
     `);
 
     await request(app)
@@ -228,6 +230,11 @@ describe('PRODUTOS — SRV_ID alocado por sequência real (crud.js:511-533)', ()
 describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.js: requireRoleOuVendedorEm)', () => {
   const AUTH_VENDEDOR = `Bearer ${tokenPara('vendedor')}`;
 
+  // Níveis do seed fixados por override da empresa de teste — a matriz global é editável pela tela.
+  const NIVEIS = { pedidos: 'rw', pedidos_inserir: 'rw', pedidos_editar: 'rw', produtos: 'r-', clientes: 'r-' };
+  beforeAll(() => fixarOverrides(TEST_SCHEMA, 'vendedor', NIVEIS));
+  afterAll(() => limparOverrides(TEST_SCHEMA, 'vendedor', Object.keys(NIVEIS)));
+
   test('vendedor consegue criar um pedido', async () => {
     const res = await request(app)
       .post(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS`)
@@ -238,7 +245,7 @@ describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.j
   });
 
   test('vendedor consegue editar um pedido que ele mesmo criou', async () => {
-    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5002, 1, 'P')`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status, id_loja) VALUES (5002, 1, 'P', 1)`);
 
     const res = await request(app)
       .put(`/api/${TEST_SCHEMA}/tabelas/PEDIDOS`)
@@ -249,7 +256,7 @@ describe('Vendedor — escrita liberada só em PEDIDOS e subtabelas (checkRole.j
   });
 
   test('vendedor consegue excluir uma parcela de pagamento (PEDIDOS_PARCELAS_PAGAMENTOS, PK composta)', async () => {
-    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status) VALUES (5003, 1, 'P')`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos (id_pedido, id_cliente, status, id_loja) VALUES (5003, 1, 'P', 1)`);
     await pool.query(`INSERT INTO ${TEST_SCHEMA}.pedidos_parcelas_pagamentos (id_pedido, parcela, valor) VALUES (5003, 1, 100)`);
 
     const res = await request(app)

@@ -1,7 +1,8 @@
 const { pool } = require('#server/infrastructure/db.js');
 const { obterNivelEfetivo } = require('#server/infrastructure/cache/permissoesCache.js');
 const { podeLer, podeEscrever } = require('#server/domain/permissoes.js');
-const { TABELA_MODULO } = require('#server/domain/tabelaModulo.js');
+const { TABELA_MODULO, TABELA_MODULO_ESCRITA, TABELAS_SOMENTE_LEITURA, TABELAS_INTERNAS } = require('#server/domain/tabelaModulo.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // Lê o plano fresco de sync_tenants a cada requisição (mesmo princípio de
 // requirePlanFeature.js: não confiar no claim do JWT, pra não dar 403 indevido logo
@@ -22,7 +23,7 @@ function _autorizado(nivel, nivelExigido) {
 async function resolverNivelModulo(req, schema, modulo) {
   const role  = req.userRoles?.[schema];
   const plano = await _planoDoSchema(schema);
-  return obterNivelEfetivo(plano, role, modulo);
+  return obterNivelEfetivo(plano, role, modulo, schema);
 }
 
 /** Middleware fixo: gate para uma rota cujo módulo é conhecido em tempo de definição da rota. */
@@ -34,27 +35,38 @@ function requireModulo(modulo, nivelExigido) {
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
-      res.status(500).json({ erro: e.message });
+      erroServidor(res, e);
     }
   };
 }
 
 /** Middleware table-driven: resolve o módulo a partir de :tabela via TABELA_MODULO, então
- * aplica a mesma checagem. Tabela não mapeada -> next() sem gate (fora do escopo do
- * sistema de módulos, preserva o comportamento atual). */
+ * aplica a mesma checagem. Tabela interna da sincronização -> 403 sempre. Tabela não
+ * mapeada -> leitura liberada; gravação pelo módulo de TABELA_MODULO_ESCRITA ou só pelo dono. */
 function requireModuloDaTabela(nivelExigido) {
   return async (req, res, next) => {
     try {
       const tabela = (req.params.tabela || '').toUpperCase();
-      const modulo = TABELA_MODULO[tabela];
+      const schema = req.params.schema;
+      if (TABELAS_INTERNAS.has(tabela)) return res.status(403).json({ erro: 'tabela não disponível' });
+      if (nivelExigido === 'w' && TABELAS_SOMENTE_LEITURA.has(tabela))
+        return res.status(403).json({ erro: 'Cadastro feito só no Sirius: o registro chega ao site na próxima sincronização.' });
+
+      let modulo = TABELA_MODULO[tabela];
+      if (!modulo && nivelExigido === 'w') {
+        modulo = TABELA_MODULO_ESCRITA[tabela];
+        if (!modulo) {
+          if (req.userRoles?.[schema] === 'dono') return next();
+          return res.status(403).json({ erro: 'permissão insuficiente' });
+        }
+      }
       if (!modulo) return next();
 
-      const schema = req.params.schema;
       const nivel  = await resolverNivelModulo(req, schema, modulo);
       if (!_autorizado(nivel, nivelExigido)) return res.status(403).json({ erro: 'permissão insuficiente' });
       next();
     } catch (e) {
-      res.status(500).json({ erro: e.message });
+      erroServidor(res, e);
     }
   };
 }

@@ -39,6 +39,12 @@
     placeholder="Filtrar por ID, tabela, descrição…"
     style="padding:8px 12px;border:1px solid #d1d5db;border-radius:var(--radius-sm);font-size:13px;font-family:var(--font-sans);width:320px">
   <span id="contador" style="font-size:12px;color:var(--color-text-muted)"></span>
+  <button id="btn-sincronizar"
+    style="margin-left:auto;padding:8px 16px;border:1px solid var(--color-primary);border-radius:var(--radius-sm);background:white;color:var(--color-primary);font-size:13px;font-weight:600;cursor:pointer;font-family:var(--font-sans)"
+    title="Envia os parâmetros do Firebird pro servidor agora, sem esperar o próximo ciclo automático">
+    ⟳ Sincronizar com o servidor
+  </button>
+  <span id="sync-feedback" style="font-size:12px;display:none"></span>
 </div>
 
 <% if (rows.length === 0 && !error) { %>
@@ -245,6 +251,50 @@
       erroEl.style.display = 'block';
     } finally {
       btn.disabled = false; btn.textContent = 'Salvar';
+    }
+  });
+
+  // ── Sincronizar agora (POST /parametros/sincronizar) ────────────────────────
+  document.getElementById('btn-sincronizar').addEventListener('click', async function () {
+    var btn = this;
+    var feedback = document.getElementById('sync-feedback');
+    btn.disabled = true; btn.textContent = 'Sincronizando…';
+    feedback.style.display = 'none';
+    try {
+      var r = await fetch('/parametros/sincronizar', { method: 'POST' });
+      if (r.status === 401) { window.location.href = '/login'; return; }
+      var d = await r.json();
+      if (d.ok) {
+        Object.keys(d.sincronizados || {}).forEach(function (fbId) {
+          var sinc = d.sincronizados[fbId];
+          var tr = tbody.querySelector('tr[data-id="' + fbId + '"]');
+          if (!tr) return;
+          var td = tr.querySelectorAll('td')[5];
+          if (!td) return;
+          if (sinc.status === 'ok') {
+            td.innerHTML = '<span class="badge-sinc ok" title="Valor enviado: ' + (sinc.valor || '') + '">✓ Sincronizado (' +
+              (sinc.sincronizadoEm ? new Date(sinc.sincronizadoEm).toLocaleTimeString('pt-BR') : '') + ')</span>';
+          } else if (sinc.status === 'erro') {
+            td.innerHTML = '<span class="badge-sinc erro" title="' + (sinc.erro || '') + '">✗ Falha ao sincronizar</span>';
+          } else {
+            td.innerHTML = '<span class="badge-sinc aguardando">Aguardando 1ª sincronização</span>';
+          }
+        });
+        feedback.textContent = 'Sincronizado com sucesso.';
+        feedback.style.color = '#166534';
+        feedback.style.display = '';
+      } else {
+        feedback.textContent = d.message || 'Erro desconhecido';
+        feedback.style.color = 'var(--color-danger)';
+        feedback.style.display = '';
+      }
+    } catch (ex) {
+      feedback.textContent = 'Erro de rede: ' + ex.message;
+      feedback.style.color = 'var(--color-danger)';
+      feedback.style.display = '';
+    } finally {
+      btn.disabled = false; btn.textContent = '⟳ Sincronizar com o servidor';
+      setTimeout(function () { feedback.style.display = 'none'; }, 5000);
     }
   });
 })();

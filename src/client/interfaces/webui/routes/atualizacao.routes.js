@@ -4,16 +4,21 @@ function criarAtualizacaoRouter(contexto) {
   const router = express.Router();
 
   // ── ATUALIZAÇÃO ──────────────────────────────────────────────────────────
-  router.post('/atualizacao/aplicar', async (_req, res) => {
+  router.post('/atualizacao/aplicar', async (req, res) => {
     if (typeof contexto._aplicarAtualizacao !== 'function') {
       return res.status(400).json({ ok: false, message: 'Atualização automática não disponível neste modo de execução.' });
+    }
+    // Versão de teste: a faixa diz para qual versão ir ('beta' mais nova ou 'estavel').
+    const alvo = req.body?.alvo;
+    if (contexto.ehBeta && !['beta', 'estavel'].includes(alvo)) {
+      return res.status(400).json({ ok: false, message: 'Escolha a beta mais recente ou a versão estável.' });
     }
     try {
       // Baixa, substitui o .exe, relança e espera ~10s pra confirmar que a nova versão
       // ficou de pé antes de resolver — por isso esta chamada demora mais que as outras.
       // Se a nova versão não sobreviver à janela, isso lança e a versão anterior nunca
       // chega a sair (rollback automático já aconteceu antes do throw).
-      await contexto._aplicarAtualizacao();
+      await contexto._aplicarAtualizacao(alvo);
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ ok: false, message: e.message });

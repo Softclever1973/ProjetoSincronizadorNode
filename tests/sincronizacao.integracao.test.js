@@ -33,9 +33,10 @@ beforeAll(async () => {
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.produtos_sync_teste CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.a_receber CASCADE`);
   await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.status_filtro_sync_teste CASCADE`);
+  await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.fk_loja_sync_teste CASCADE`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_produtos_sync_teste`);
   await pool.query(`DROP SEQUENCE IF EXISTS ${TEST_SCHEMA}.seq_srv_id_a_receber`);
-  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER', 'STATUS_FILTRO_SYNC_TESTE')`);
+  await pool.query(`DELETE FROM ${TEST_SCHEMA}.srv_id_map WHERE tabela IN ('PRODUTOS_SYNC_TESTE', 'A_RECEBER', 'STATUS_FILTRO_SYNC_TESTE', 'FK_LOJA_SYNC_TESTE')`);
 }, 30000);
 
 afterAll(async () => {
@@ -74,6 +75,36 @@ describe('POST /ReceberRegistro — recuperação de sequência seq_srv_id_<tabe
       [push2.body.srvId]
     );
     expect(rows[0].codigo).toBe('P2');
+  });
+});
+
+describe('POST /ReceberRegistro — texto do Firebird em coluna NUMERIC do servidor', () => {
+  // ID_* nulo no 1º registro vira NUMERIC (inferirTipoPg); no Firebird a coluna pode ser VARCHAR.
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.tipo_texto_sync_teste CASCADE`);
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 1, ID_REDUZIDO: null } });
+    expect(r.status).toBe(200);
+  });
+
+  test("'' em coluna numérica é gravado como NULL (antes: 'sintaxe de entrada é inválida para tipo numeric')", async () => {
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 2, ID_REDUZIDO: '' } });
+    expect(r.status).toBe(200);
+    expect(r.body.avisos[0]).toMatch(/ID_REDUZIDO/);
+    const { rows } = await pool.query(`SELECT id_reduzido FROM ${TEST_SCHEMA}.tipo_texto_sync_teste WHERE id = 2`);
+    expect(rows[0].id_reduzido).toBeNull();
+  });
+
+  test('texto não numérico devolve erro nomeando a coluna', async () => {
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 3, ID_REDUZIDO: 'ABC' } });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toMatch(/ID_REDUZIDO="ABC"/);
+  });
+
+  test('NOT NULL violado: erro traz a coluna', async () => {
+    await pool.query(`ALTER TABLE ${TEST_SCHEMA}.tipo_texto_sync_teste ADD COLUMN IF NOT EXISTS obrigatoria TEXT NOT NULL DEFAULT 'x'`);
+    const r = await receberRegistro({ tabela: 'TIPO_TEXTO_SYNC_TESTE', pk: 'ID', registro: { ID: 4, OBRIGATORIA: null } });
+    expect(r.status).toBe(400);
+    expect(r.body.message).toMatch(/coluna OBRIGATORIA="null"/);
   });
 });
 
@@ -214,5 +245,180 @@ describe('GET /StatusTabelas — restringe total/maxId à loja quando a tabela t
     const linhaLoja2 = acharTabela(resLoja2, 'STATUS_FILTRO_SYNC_TESTE');
     expect(linhaLoja2.total).toBe(1);
     expect(linhaLoja2.maxId).toBe(maxIdEmpresaInteira);
+  });
+
+  test('contar=0 — só maxId, total null (página Status abre sem esperar COUNT)', async () => {
+    const filtros = JSON.stringify([{ nome: 'STATUS_FILTRO_SYNC_TESTE', filtroFilial: 'ID_LOJA' }]);
+    const comTotal = acharTabela(await statusTabelas({ idLoja: 1, filtros }), 'STATUS_FILTRO_SYNC_TESTE');
+    const res = await statusTabelas({ idLoja: 1, filtros, contar: 0 });
+    const linha = res.body.find(t => t.tabela === 'STATUS_FILTRO_SYNC_TESTE');
+    expect(linha.total).toBeNull();
+    expect(Number(linha.maxId)).toBe(comTotal.maxId);
+  });
+});
+
+describe('GET /RegistrosParaAtualizar — autocura quando a coluna do filtroFilial não existe ainda', () => {
+  // Reproduz o incidente real: o primeiro registro sincronizado de uma tabela recém-ativada
+  // não trazia ID_LOJA no payload (ausente, não apenas null) — a tabela nasceu sem essa
+  // coluna, e o pull seguinte quebrava pra sempre com "coluna ID_LOJA não existe", num
+  // cliente novo, sem push nenhum ter sido bem-sucedido antes pra autocurar via push.
+  test('cria a coluna do filtroFilial em vez de quebrar, e o pull volta 200', async () => {
+    const push = await receberRegistro({
+      tabela: 'FK_LOJA_SYNC_TESTE',
+      pk: 'ID_FK_LOJA_TESTE',
+      // Sem ID_LOJA no registro — é exatamente essa ausência que faz a coluna nunca nascer.
+      registro: { ID_FK_LOJA_TESTE: 1, NOME: 'Sem loja' },
+    });
+    expect(push.status).toBe(200);
+
+    const { rows: antes } = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'fk_loja_sync_teste' AND column_name = 'id_loja'`,
+      [TEST_SCHEMA]
+    );
+    expect(antes).toHaveLength(0); // confirma que a coluna realmente não existe ainda
+
+    const pull = await request(app)
+      .get('/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar')
+      .query({
+        token: TEST_TOKEN,
+        nomeTabela: 'FK_LOJA_SYNC_TESTE',
+        idUltimaAtualizacaoMatriz: 0,
+        idLoja: 1,
+        filtroFilial: 'ID_LOJA',
+      });
+
+    expect(pull.status).toBe(200);
+    expect(pull.body).toEqual([]); // nenhum registro tem ID_LOJA=1 (coluna acabou de nascer, tudo NULL)
+
+    const { rows: depois } = await pool.query(
+      `SELECT column_name FROM information_schema.columns
+       WHERE table_schema = $1 AND table_name = 'fk_loja_sync_teste' AND column_name = 'id_loja'`,
+      [TEST_SCHEMA]
+    );
+    expect(depois).toHaveLength(1); // autocurada
+  });
+});
+
+describe('filtroFilialViaFK — tabela filha filtra pela loja do pai certo (NOTAS_FISCAIS, não PEDIDOS)', () => {
+  // Antes o servidor fixava PEDIDOS como pai: itens de nota vinham de outra loja ou davam erro.
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.notas_fiscais_itens CASCADE`);
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.notas_fiscais CASCADE`);
+    await pool.query(`CREATE TABLE ${TEST_SCHEMA}.notas_fiscais (id_nota_fiscal NUMERIC PRIMARY KEY, id_loja NUMERIC, id_ultima_atualizacao_matriz NUMERIC)`);
+    await pool.query(`CREATE TABLE ${TEST_SCHEMA}.notas_fiscais_itens (id_nota_fiscal_item NUMERIC PRIMARY KEY, id_nota_fiscal NUMERIC, id_ultima_atualizacao_matriz NUMERIC)`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.notas_fiscais VALUES (10, 1, 1), (20, 2, 2)`);
+    await pool.query(`INSERT INTO ${TEST_SCHEMA}.notas_fiscais_itens VALUES (101, 10, 3), (102, 10, 4), (201, 20, 5)`);
+  });
+
+  const pullItens = idLoja => request(app)
+    .get('/datasnap/rest/TSMSincronizacao/RegistrosParaAtualizar')
+    .query({ token: TEST_TOKEN, nomeTabela: 'NOTAS_FISCAIS_ITENS', idUltimaAtualizacaoMatriz: 0, idLoja, filtroFilialViaFK: 'ID_NOTA_FISCAL' });
+
+  test('pull da loja 1 recebe só os itens das notas da loja 1', async () => {
+    const r = await pullItens(1);
+    expect(r.status).toBe(200);
+    expect(r.body.map(i => Number(i.ID_NOTA_FISCAL_ITEM)).sort()).toEqual([101, 102]);
+  });
+
+  test('pull da loja 2 recebe só os itens das notas da loja 2', async () => {
+    const r = await pullItens(2);
+    expect(r.status).toBe(200);
+    expect(r.body.map(i => Number(i.ID_NOTA_FISCAL_ITEM))).toEqual([201]);
+  });
+
+  test('StatusTabelas conta só os itens da loja', async () => {
+    const r = await request(app)
+      .get('/datasnap/rest/TSMSincronizacao/StatusTabelas')
+      .query({ token: TEST_TOKEN, idLoja: 1, filtros: JSON.stringify([{ nome: 'NOTAS_FISCAIS_ITENS', filtroFilialViaFK: 'ID_NOTA_FISCAL' }]) });
+    expect(r.status).toBe(200);
+    const s = r.body.find(t => t.tabela === 'NOTAS_FISCAIS_ITENS');
+    expect(Number(s.total)).toBe(2);
+    expect(Number(s.maxId)).toBe(4);
+  });
+});
+
+describe('POST /ReceberRegistros — lote', () => {
+  const receberLote = body => request(app)
+    .post('/datasnap/rest/TSMSincronizacao/ReceberRegistros')
+    .query({ token: TEST_TOKEN, idLoja: 1 })
+    .send(body);
+
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.lote_sync_teste CASCADE`);
+    const r = await receberRegistro({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registro: { ID: 1, QTD: 5, NOME: 'base' } });
+    expect(r.status).toBe(200);
+  });
+
+  test('aplica cada registro isoladamente: um erro não derruba os outros', async () => {
+    const r = await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [
+      { registro: { ID: 10, QTD: 1, NOME: 'ok 1' } },
+      { registro: { ID: 11, QTD: 'abc', NOME: 'quebra' } },
+      { registro: { ID: 12, QTD: 3, NOME: 'ok 2' } },
+    ] });
+
+    expect(r.status).toBe(200);
+    expect(r.body.resultados).toHaveLength(3);
+    expect(r.body.resultados[0]).toMatchObject({ ok: true });
+    expect(r.body.resultados[1].erro).toMatch(/QTD="abc"/);
+    expect(r.body.resultados[2]).toMatchObject({ ok: true });
+    const { rows } = await pool.query(`SELECT id FROM ${TEST_SCHEMA}.lote_sync_teste WHERE id IN (10, 11, 12) ORDER BY id`);
+    expect(rows.map(x => Number(x.id))).toEqual([10, 12]);
+  });
+
+  test('conflito de versão volta por registro, igual à rota unitária', async () => {
+    const { rows: [atual] } = await pool.query(`SELECT id_ultima_atualizacao_matriz v FROM ${TEST_SCHEMA}.lote_sync_teste WHERE id = 1`);
+    const r = await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [
+      { registro: { ID: 1, QTD: 9, NOME: 'local' }, ultimaVersaoConhecida: Number(atual.v) - 1 },
+    ] });
+    expect(r.status).toBe(200);
+    expect(r.body.resultados[0]).toMatchObject({ conflito: true });
+  });
+
+  test('lote vazio ou acima do limite é recusado', async () => {
+    expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: [] })).status).toBe(400);
+    const grande = Array.from({ length: 201 }, (_, i) => ({ registro: { ID: 1000 + i } }));
+    expect((await receberLote({ tabela: 'LOTE_SYNC_TESTE', pk: 'ID', registros: grande })).status).toBe(400);
+  });
+});
+
+describe('POST /GarantirTabela — tabela existente ganha as colunas faltantes com o tipo do Firebird', () => {
+  const garantir = colunas => request(app)
+    .post('/datasnap/rest/TSMSincronizacao/GarantirTabela')
+    .query({ token: TEST_TOKEN })
+    .send({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', pks: ['ID'], colunas });
+
+  beforeAll(async () => {
+    await pool.query(`DROP TABLE IF EXISTS ${TEST_SCHEMA}.garantir_sync_teste CASCADE`);
+    // Nasceu pelo push com ID_REDUZIDO nulo → NUMERIC (inferirTipoPg).
+    const r = await receberRegistro({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', registro: { ID: 1, ID_REDUZIDO: null } });
+    expect(r.status).toBe(200);
+  });
+
+  const tipoColuna = async nome => (await pool.query(
+    `SELECT data_type FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'garantir_sync_teste' AND column_name = $2`,
+    [TEST_SCHEMA, nome])).rows[0]?.data_type;
+
+  test('cria ID_* texto como TEXT (não NUMERIC) e aponta a coluna já criada com tipo errado', async () => {
+    const r = await garantir([
+      { nome: 'ID', tipo: 'numero' },
+      { nome: 'ID_REDUZIDO', tipo: 'texto' },
+      { nome: 'ID_EXTERNO', tipo: 'texto' },
+      { nome: 'PRECO', tipo: 'numero' },
+    ]);
+    expect(r.status).toBe(200);
+    expect(r.body.adicionadas).toEqual(['ID_EXTERNO', 'PRECO']);
+    expect(r.body.divergentes).toEqual(['ID_REDUZIDO']);
+    expect(await tipoColuna('id_externo')).toBe('text');
+    expect(await tipoColuna('preco')).toBe('numeric');
+
+    // Push seguinte com texto na coluna nova passa.
+    const push = await receberRegistro({ tabela: 'GARANTIR_SYNC_TESTE', pk: 'ID', registro: { ID: 2, ID_EXTERNO: 'AB-12' } });
+    expect(push.status).toBe(200);
+  });
+
+  test('segunda chamada não adiciona nada', async () => {
+    const r = await garantir([{ nome: 'ID', tipo: 'numero' }, { nome: 'ID_EXTERNO', tipo: 'texto' }]);
+    expect(r.body.adicionadas).toEqual([]);
   });
 });

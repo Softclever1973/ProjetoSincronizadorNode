@@ -23,4 +23,13 @@ async function denormalizar(db, schema, registro, allowed, req) {
   if (u?.NOME) registro.USUARIO = `Web - ${u.NOME}`;
 }
 
-module.exports = { denormalizar };
+// DATA/HORA em texto misturam o site ('2026-10-14' / '11:42:06', hora local) e o client (ISO em UTC): ordena tudo como data e hora local.
+const RE_HORA_ISO = `'^1970-01-0[12]T[0-9]{2}:[0-9]{2}:[0-9]{2}'`;
+function expressaoOrdenacao(col, tipo) {
+  if (tipo !== 'text' && tipo !== 'character varying') return null;
+  if (col === 'DATA') return 'LEFT(DATA, 10)';
+  if (col === 'HORA') return `(CASE WHEN HORA ~ ${RE_HORA_ISO} THEN to_char(HORA::timestamptz, 'HH24:MI:SS') ELSE HORA END)`;
+  return null;
+}
+
+module.exports = { denormalizar, expressaoOrdenacao };

@@ -138,6 +138,59 @@
     revertida: function(v) { return 'Falha ao atualizar para v' + v + ' — revertido automaticamente para a versão anterior.'; },
   };
 
+  function _escBeta(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; });
+  }
+
+  // PC de teste interno (versão beta): nunca atualiza sozinho — a faixa oferece a beta mais nova e/ou a estável.
+  function _htmlBannerBeta(versao, opcoes) {
+    var estiloBtn = 'padding:4px 14px;font-size:12px;border:1px solid #5b21b6;border-radius:var(--radius-sm);background:white;color:#5b21b6;cursor:pointer;font-family:var(--font-sans)';
+    var botoes = '';
+    var nota = '';
+    if (opcoes && opcoes.beta) {
+      botoes += '<button class="btn-beta-ir" data-alvo="beta" style="' + estiloBtn + '">Atualizar para a beta mais recente (v' + _escBeta(opcoes.beta.versao) + ')</button>';
+    }
+    if (opcoes && opcoes.estavel) {
+      botoes += '<button class="btn-beta-ir" data-alvo="estavel" style="' + estiloBtn + '">' +
+        (opcoes.estavel.voltaVersao ? 'Voltar para a versão estável' : 'Ir para a versão estável') + ' (v' + _escBeta(opcoes.estavel.versao) + ')</button>';
+    }
+    if (!opcoes) nota = 'Verificando versões disponíveis…';
+    else if (!opcoes.beta && !opcoes.estavel) nota = 'Nenhuma outra versão disponível.';
+    else if (!opcoes.beta) nota = 'Você já está na beta mais recente.';
+    return '<div id="banner-atualizacao" style="background:#ede9fe;border-bottom:1px solid #c4b5fd;color:#5b21b6;padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
+      '<span>🧪 Versão de teste <strong>v' + _escBeta(versao) + '</strong> — não atualiza sozinha.' + (nota ? ' ' + nota : '') + '</span>' +
+      (botoes ? '<span style="margin-left:auto;display:flex;gap:8px;flex-wrap:wrap">' + botoes + '</span>' : '') +
+      '</div>';
+  }
+
+  async function _irParaVersaoBeta(btn) {
+    var alvo = btn.dataset.alvo;
+    var op = (window.__opcoesBeta || {})[alvo];
+    if (!op) return;
+    var msg = alvo === 'beta'
+      ? 'O cliente vai baixar a beta v' + op.versao + ', substituir o executável e reiniciar sozinho (até ~10 segundos). Se algo der errado, ele volta para a versão atual. Continuar?'
+      : (op.voltaVersao
+        ? 'ATENÇÃO: a versão estável v' + op.versao + ' é ANTERIOR à beta instalada (v' + window.__versaoBeta + ') — isto é uma volta de versão. O que só existe na beta deixa de funcionar.\n\n'
+        : 'O cliente vai trocar a beta pela versão estável v' + op.versao + '.\n\n') +
+        'Depois disso este PC sai do modo de teste e volta a se atualizar sozinho só com versões estáveis, como as lojas. Continuar?';
+    if (!confirm(msg)) return;
+    var rotulo = btn.textContent;
+    document.querySelectorAll('.btn-beta-ir').forEach(function (b) { b.disabled = true; });
+    btn.textContent = 'Atualizando…';
+    try {
+      var r = await fetch('/atualizacao/aplicar', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ alvo: alvo }) });
+      var d = await r.json();
+      if (!d.ok) {
+        _notificarErro(btn, 'Erro ao atualizar: ' + (d.message || 'erro desconhecido'));
+        document.querySelectorAll('.btn-beta-ir').forEach(function (b) { b.disabled = false; });
+        btn.textContent = rotulo;
+      }
+      // Sucesso: o evento SSE 'atualizacao-status' já atualiza a faixa sozinho.
+    } catch (ex) {
+      // A conexão pode cair se o processo antigo já tiver saído — não é necessariamente erro.
+    }
+  }
+
   function renderBannerAtualizacao(disponivel, status) {
     var wrap = document.getElementById('banner-atualizacao-wrap');
     if (!wrap) return;
@@ -149,6 +202,11 @@
         '<div id="banner-atualizacao" style="background:' + cor.bg + ';border-bottom:1px solid ' + cor.border +
         ';color:' + cor.text + ';padding:8px 16px;font-size:13px;display:flex;align-items:center;gap:12px;flex-wrap:wrap">' +
         '<span>' + cor.icone + ' ' + texto + '</span></div>';
+      return;
+    }
+
+    if (window.__versaoBeta) {
+      wrap.innerHTML = _htmlBannerBeta(window.__versaoBeta, window.__opcoesBeta);
       return;
     }
 
@@ -223,6 +281,7 @@
   document.addEventListener('click', function (e) {
     if (e.target && e.target.id === 'btn-atualizar-agora') _iniciarAtualizacaoManual(e.target);
     if (e.target && e.target.id === 'btn-resetar-local') _iniciarResetLocal(e.target);
+    if (e.target && e.target.classList && e.target.classList.contains('btn-beta-ir')) _irParaVersaoBeta(e.target);
   });
 
   renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, window.__atualizacaoStatusInicial);
@@ -279,7 +338,15 @@
     es.addEventListener('atualizacao-status', function(e) {
       try {
         var status = JSON.parse(e.data);
+        window.__atualizacaoStatusInicial = status; // a faixa de beta (evento 'beta-opcoes') não apaga um "Atualizando…" em curso
         renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, status);
+      } catch (_) {}
+    });
+
+    es.addEventListener('beta-opcoes', function(e) {
+      try {
+        window.__opcoesBeta = JSON.parse(e.data);
+        renderBannerAtualizacao(window.__atualizacaoDisponivelInicial, window.__atualizacaoStatusInicial);
       } catch (_) {}
     });
 

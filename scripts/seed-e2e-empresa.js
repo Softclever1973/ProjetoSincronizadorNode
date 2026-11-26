@@ -26,9 +26,26 @@ const SENHA    = 'senha123456';
 const ID_LOJA  = 1;
 
 // SALDO_ATUAL baixo de propósito — usado pelo teste de bloqueio de saldo negativo
-// (venda_saldo_negativo = 'N' é o default de sync_config, ver src/db-init.js).
+// (venda_saldo_negativo = 'N' é o default de parametros, ver src/db-init.js).
 const PRODUTO_SALDO_BAIXO = { ID_PRODUTO: 2, SRV_ID: 2, CODIGO: 'PROD002', DESCRICAO: 'Produto Saldo Baixo E2E', UNIDADE: 'UN', PRECO_VENDA: 5, SALDO_ATUAL: 2 };
-const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 1, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
+// SRV_ID ≠ ID_PRODUTO de propósito (como em banco real): pega quem grava o ID local onde vai o SRV_ID.
+const PRODUTO_PADRAO      = { ID_PRODUTO: 1, SRV_ID: 101, CODIGO: 'PROD001', DESCRICAO: 'Produto Teste E2E',      UNIDADE: 'UN', PRECO_VENDA: 25.5, SALDO_ATUAL: 1000 };
+const PRODUTO_LISTA       = { ID_PRODUTO: 3, SRV_ID: 3, CODIGO: 'PROD003', DESCRICAO: 'Produto Lista E2E',      UNIDADE: 'UN', PRECO_VENDA: 100, SALDO_ATUAL: 1000 };
+
+// [id, descrição, ajuste, P/V, A/R, comissão] — lista 10 é a do cliente 2; usadas por e2e/pedidos.spec.js.
+const LISTAS_PRECOS_E2E = [
+  [10, 'FABRICANTE E2E', -10, 'P', 'R', 5],
+  [11, 'REP E2E',          5, 'V', 'A', 3],
+];
+
+// [id, nº, série, cliente, emissão, entrada/saída, E/S, status, status SEFAZ, valor, loja] — usadas por e2e/notas-fiscais.spec.js.
+const NOTAS_FISCAIS_E2E = [
+  [1, 101, '1', 'NF Alfa E2E',       '2026-09-10 10:00', '2026-09-10 10:00', 'S', 'Pendente',  'Autorizada', 100,  ID_LOJA],
+  [2, 102, '1', 'NF Beta E2E',       '2026-09-20 18:30', '2026-09-25 09:00', 'E', 'Entregue',  'Digitacao',  250,  ID_LOJA],
+  [3, 103, '2', 'NF Gama E2E',       '2026-10-01 08:00', '2026-10-01 08:00', 'S', 'Cancelada', 'Cancelada',  999,  ID_LOJA],
+  [5, 105, '1', 'NF Delta E2E',      '2026-09-15 09:00', '2026-09-15 09:00', 'S', 'Pendente',  null,         50,   ID_LOJA],
+  [4, 104, '1', 'NF Outra Loja E2E', '2026-09-20 12:00', '2026-09-25 12:00', 'E', 'Pendente',  'Autorizada', 300,  2],
+];
 
 const DDL_TABELAS_NEGOCIO = [
   `CREATE TABLE IF NOT EXISTS PEDIDOS (
@@ -126,6 +143,55 @@ const DDL_TABELAS_NEGOCIO = [
     ID_FORMA_DE_PAGAMENTO INTEGER PRIMARY KEY,
     DESCRICAO_FORMA_DE_PAGAMENTO TEXT
   )`,
+  // Só as colunas que a listagem e os filtros de notas-fiscais.html usam.
+  `CREATE TABLE IF NOT EXISTS NOTAS_FISCAIS (
+    SRV_ID INTEGER PRIMARY KEY,
+    ID_NOTA_FISCAL INTEGER,
+    N_NOTA_FISCAL INTEGER,
+    SERIE TEXT,
+    CL_RAZAO_SOCIAL TEXT,
+    CL_CNPJ TEXT,
+    DATA_EMISSAO TIMESTAMP,
+    DATA_ENTRADA_SAIDA TIMESTAMP,
+    ENTRADA_SAIDA VARCHAR(1),
+    STATUS TEXT,
+    STATUS_NFE TEXT,
+    VALOR_TOTAL_DA_NOTA NUMERIC(15,2),
+    ID_LOJA INTEGER,
+    DATA_FOI_CADASTRADO TIMESTAMP,
+    DATA_ULTIMA_ATUALIZACAO TIMESTAMP,
+    ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER
+  )`,
+  `CREATE TABLE IF NOT EXISTS LISTA_PRECOS (
+    ID_LISTA INTEGER PRIMARY KEY,
+    DESCRICAO TEXT,
+    PERCENTUAL_ACRESCIMO_REDUCAO NUMERIC(5,2),
+    PERCENTUAL_OU_VALOR VARCHAR(4),
+    ACRESCIMO_OU_REDUCAO VARCHAR(1),
+    PERCENTUAL_DE_COMISSAO NUMERIC(5,2)
+  )`,
+  `CREATE TABLE IF NOT EXISTS PRODUTOS_X_LISTA (
+    ID_PRODUTO_X_LISTA INTEGER PRIMARY KEY,
+    ID_LISTA INTEGER,
+    ID_PRODUTO INTEGER,
+    PRECO NUMERIC(15,2)
+  )`,
+  // Colunas da lista de preços em tabelas que já existiam em rodadas anteriores do seed.
+  `ALTER TABLE CLIENTES ADD COLUMN IF NOT EXISTS TABELA_PRECO INTEGER`,
+  // Aba Tributação do cliente (nomes reais do Firebird).
+  `ALTER TABLE CLIENTES ADD COLUMN IF NOT EXISTS CONTRIBUINTE_DE_ICMS VARCHAR(1)`,
+  `ALTER TABLE CLIENTES ADD COLUMN IF NOT EXISTS PERMITE_APROVEITAMENTO_DE_CRED VARCHAR(1)`,
+  `ALTER TABLE CLIENTES ADD COLUMN IF NOT EXISTS ID_CODIGO_REGIME_TRIBUTARIO INTEGER`,
+  `CREATE TABLE IF NOT EXISTS CODIGOS_REGIMES_TRIBUTARIOS (
+    ID_CODIGO_REGIME_TRIBUTARIO INTEGER PRIMARY KEY,
+    DESCRICAO TEXT
+  )`,
+  `ALTER TABLE LISTA_PRECOS ADD COLUMN IF NOT EXISTS MOSTRAR_NO_RELATORIO VARCHAR(1)`,
+  `ALTER TABLE LISTA_PRECOS ADD COLUMN IF NOT EXISTS PERCENTUAL_COMISSAO_REPRES NUMERIC(15,2)`,
+  `ALTER TABLE LISTA_PRECOS ADD COLUMN IF NOT EXISTS PERCENTUAL_COMISSAO_SUPERV NUMERIC(15,2)`,
+  `ALTER TABLE LISTA_PRECOS ADD COLUMN IF NOT EXISTS PERCENTUAL_DE_COMISSAO_GERENTE NUMERIC(15,2)`,
+  `ALTER TABLE PEDIDOS_ITENS ADD COLUMN IF NOT EXISTS ID_LISTA INTEGER`,
+  `ALTER TABLE PEDIDOS_ITENS ADD COLUMN IF NOT EXISTS PERCENTUAL_DE_COMISSAO NUMERIC(5,2)`,
   `CREATE TABLE IF NOT EXISTS MOVIMENTACOES (
     ID_MOVIMENTACAO INTEGER PRIMARY KEY,
     ID_PRODUTO INTEGER,
@@ -147,13 +213,13 @@ async function upsertProduto(db, p) {
     INSERT INTO PRODUTOS (ID_PRODUTO, SRV_ID, CODIGO, DESCRICAO, UNIDADE, PRECO_VENDA, SALDO_ATUAL)
     VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (ID_PRODUTO) DO UPDATE SET
-      CODIGO = EXCLUDED.CODIGO, DESCRICAO = EXCLUDED.DESCRICAO, UNIDADE = EXCLUDED.UNIDADE,
+      SRV_ID = EXCLUDED.SRV_ID, CODIGO = EXCLUDED.CODIGO, DESCRICAO = EXCLUDED.DESCRICAO, UNIDADE = EXCLUDED.UNIDADE,
       PRECO_VENDA = EXCLUDED.PRECO_VENDA, SALDO_ATUAL = EXCLUDED.SALDO_ATUAL
   `, [p.ID_PRODUTO, p.SRV_ID, p.CODIGO, p.DESCRICAO, p.UNIDADE, p.PRECO_VENDA, p.SALDO_ATUAL]);
 }
 
 async function seed() {
-  // 1) Schema + infraestrutura padrão (sync_config, sync_filiais, srv_id_map, seq_atualizacao_matriz...)
+  // 1) Schema + infraestrutura padrão (parametros, sync_filiais, srv_id_map, seq_atualizacao_matriz...)
   await initializeTenantSchema(SCHEMA);
 
   // 2) Registra o schema em public.sync_tenants — usuarios_empresas.schema_name tem FK pra cá.
@@ -176,9 +242,47 @@ async function seed() {
       VALUES (1, 1, 'Cliente Teste E2E', 'Cliente E2E', 'Fulano de Tal', 'S', '12345678909', $1)
       ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA
     `, [ID_LOJA]);
+    await execute(db, `
+      INSERT INTO CLIENTES (SRV_ID, ID_CLIENTE, RAZAO_SOCIAL, FANTASIA, CONSUMIDOR_FINAL, CPF, ID_LOJA, TABELA_PRECO)
+      VALUES (2, 2, 'Cliente Lista E2E', 'Cliente Lista', 'S', '98765432100', $1, 10)
+      ON CONFLICT (SRV_ID) DO UPDATE SET RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA, TABELA_PRECO = EXCLUDED.TABELA_PRECO
+    `, [ID_LOJA]);
+    // Tributação do cliente 1 volta ao padrão a cada rodada (contribuinte S, aproveitamento vazio, regime 3).
+    await execute(db, `UPDATE CLIENTES SET CONTRIBUINTE_DE_ICMS = 'S', PERMITE_APROVEITAMENTO_DE_CRED = NULL, ID_CODIGO_REGIME_TRIBUTARIO = 3 WHERE SRV_ID = 1`);
+    await execute(db, `
+      INSERT INTO CODIGOS_REGIMES_TRIBUTARIOS (ID_CODIGO_REGIME_TRIBUTARIO, DESCRICAO) VALUES
+        (1, 'Simples Nacional'), (2, 'Simples Nacional - excesso de sublimite'), (3, 'Regime Normal')
+      ON CONFLICT (ID_CODIGO_REGIME_TRIBUTARIO) DO UPDATE SET DESCRICAO = EXCLUDED.DESCRICAO
+    `);
+    // Cadastrado na web e ainda não sincronizado com a loja: sem ID_CLIENTE.
+    await execute(db, `
+      INSERT INTO CLIENTES (SRV_ID, ID_CLIENTE, RAZAO_SOCIAL, FANTASIA, CONSUMIDOR_FINAL, ID_LOJA)
+      VALUES (3, NULL, 'Cliente Pendente E2E', 'Cliente Pendente', 'S', $1)
+      ON CONFLICT (SRV_ID) DO UPDATE SET ID_CLIENTE = NULL, RAZAO_SOCIAL = EXCLUDED.RAZAO_SOCIAL, ID_LOJA = EXCLUDED.ID_LOJA
+    `, [ID_LOJA]);
+
+    // Produto 3 nas duas listas; produto 1 em nenhuma (continua no preço de venda).
+    await execute(db, 'TRUNCATE TABLE LISTA_PRECOS, PRODUTOS_X_LISTA');
+    for (const l of LISTAS_PRECOS_E2E) {
+      await execute(db, `
+        INSERT INTO LISTA_PRECOS (ID_LISTA, DESCRICAO, PERCENTUAL_ACRESCIMO_REDUCAO, PERCENTUAL_OU_VALOR, ACRESCIMO_OU_REDUCAO, PERCENTUAL_DE_COMISSAO)
+        VALUES ($1, $2, $3, $4, $5, $6)
+      `, l);
+      await execute(db, 'INSERT INTO PRODUTOS_X_LISTA (ID_PRODUTO_X_LISTA, ID_LISTA, ID_PRODUTO, PRECO) VALUES ($1, $1, $2, 0)', [l[0], PRODUTO_LISTA.ID_PRODUTO]);
+    }
+
+    // Notas com emissão ≠ entrada/saída (os dois filtros de data não se confundem); a 4ª é de outra loja e o gerente não pode ver.
+    await execute(db, 'TRUNCATE TABLE NOTAS_FISCAIS');
+    for (const nf of NOTAS_FISCAIS_E2E) {
+      await execute(db, `
+        INSERT INTO NOTAS_FISCAIS (SRV_ID, ID_NOTA_FISCAL, N_NOTA_FISCAL, SERIE, CL_RAZAO_SOCIAL, DATA_EMISSAO, DATA_ENTRADA_SAIDA, ENTRADA_SAIDA, STATUS, STATUS_NFE, VALOR_TOTAL_DA_NOTA, ID_LOJA)
+        VALUES ($1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+      `, nf);
+    }
 
     await upsertProduto(db, PRODUTO_PADRAO);
     await upsertProduto(db, PRODUTO_SALDO_BAIXO);
+    await upsertProduto(db, PRODUTO_LISTA);
 
     await execute(db, `
       INSERT INTO FORMAS_DE_PAGAMENTOS (ID_FORMA_DE_PAGAMENTO, DESCRICAO_FORMA_DE_PAGAMENTO)
@@ -204,7 +308,17 @@ async function seed() {
 
     // Garante que venda_saldo_negativo comece em 'N' (bloqueia saldo negativo) — pode ter
     // sido deixado em 'S' por uma rodada anterior do teste de bloqueio de saldo.
-    await execute(db, `UPDATE sync_config SET valor = 'N' WHERE chave = 'venda_saldo_negativo'`);
+    await execute(db, `UPDATE parametros SET parametro = 'N' WHERE chave = 'venda_saldo_negativo'`);
+    // Parâmetro 117 = S (empresa usa lista de preços).
+    await execute(db, `
+      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('usa_lista_precos', 117, 'S')
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
+    `);
+    // Parâmetro 88 ainda não enviado pelo client (vazio): só a lista trava o preço; S e N são simulados nos testes.
+    await execute(db, `
+      INSERT INTO parametros (chave, id_parametro, parametro) VALUES ('desconto_por_item', 88, NULL)
+      ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro
+    `);
   });
 
   // 6) Usuário de login (role gerente, loja 1 — sem select de loja no wizard, sem exigir vendedor)
@@ -228,6 +342,12 @@ async function seed() {
     VALUES ($1, $2, 'gerente', $3)
     ON CONFLICT (id_usuario, schema_name) DO UPDATE SET role = 'gerente', id_loja = $3
   `, [idUsuario, SCHEMA, ID_LOJA]);
+
+  // Notas Fiscais liberado só nesta empresa de teste (override por empresa vale acima do plano).
+  await pool.query(`
+    INSERT INTO public.permissoes_empresa (schema_name, role, modulo, nivel) VALUES ($1, 'gerente', 'notas_fiscais', 'rw')
+    ON CONFLICT (schema_name, role, modulo) DO UPDATE SET nivel = EXCLUDED.nivel
+  `, [SCHEMA]);
 
   console.log(`Seed e2e OK — schema=${SCHEMA} email=${EMAIL} senha=${SENHA}`);
 }

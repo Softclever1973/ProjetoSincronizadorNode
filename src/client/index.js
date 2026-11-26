@@ -201,13 +201,16 @@ async function main() {
   const { getColunasTipadas } = require('./infrastructure/firebird/db-utils');
   const { syncParametrosGlobais } = require('./application/syncParametrosGlobais');
   const { verificarResetServidor } = require('./application/resetLocal');
+  const { atenderVerificacao, atenderCorrecoes } = require('./application/verificacaoSync');
   const { setup } = require('./setup');
   const { iniciarWebUI } = require('./webui');
   const TABELAS = require('./domain/tabelas');
-  const { tabelaAtiva } = require('./infrastructure/config/tabelasConfig');
+  const { colorir } = require('./domain/corLog');
+  const { tabelaAtiva, atualizarParametrosTabelas } = require('./infrastructure/config/tabelasConfig');
+  const { estaPausado, envioEstaPausado, cargaEstaPausada } = require('./application/syncEngine/controle');
   const { salvarErro } = require('./infrastructure/persistence/erros');
   const {
-    verificarAtualizacao, aplicarAtualizacaoComRespawn, limparExeAntigo,
+    verificarAtualizacao, verificarOpcoesBeta, ehBeta, aplicarAtualizacaoComRespawn, limparExeAntigo,
     lerEstadoPendente, confirmarAtualizacao, emitter: atualizacaoEmitter,
   } = require('./application/updater');
   const { notificarToast } = require('./infrastructure/notificar');
@@ -231,11 +234,15 @@ async function main() {
     baseURI: null, idLoja: null, idPDV: null, parametrosSincronizados: {},
     versaoAtual: VERSAO_ATUAL, atualizacaoDisponivel: null, atualizacaoStatus: null,
     resetPendente: null,
+    // PC de teste interno (versão beta instalada): nunca atualiza sozinho; a faixa do topo oferece { beta, estavel }.
+    ehBeta: ehBeta(VERSAO_ATUAL), opcoesBeta: null,
   };
 
+  // Cor só no terminal: em segundo plano o log vai para arquivo (códigos de cor virariam lixo).
+  const LOG_COLORIDO = Boolean(process.stdout.isTTY) && !process.env.SINCRONIZADOR_BG && !process.env.NO_COLOR;
   function log(msg) {
     const hora = new Date().toLocaleTimeString('pt-BR');
-    console.log(`[${hora}] ${msg}`);
+    console.log(colorir(`[${hora}] ${msg}`, msg, LOG_COLORIDO));
   }
 
   // AUTO_ATUALIZAR: ligado por padrão — só 'false' explícito desliga o auto-apply e volta
@@ -264,6 +271,20 @@ async function main() {
     if (!isPackaged) return;
     if (Date.now() - ultimaVerificacaoAtualizacao < INTERVALO_ATUALIZACAO_MS) return;
     ultimaVerificacaoAtualizacao = Date.now();
+    if (contextoSync.ehBeta) {
+      try {
+        const opcoes = await verificarOpcoesBeta(VERSAO_ATUAL);
+        const chave = o => `${o?.beta?.versao}|${o?.estavel?.versao}`;
+        if (chave(opcoes) !== chave(contextoSync.opcoesBeta)) {
+          log(`[Atualização] Versão de teste v${VERSAO_ATUAL} — beta mais nova: ${opcoes.beta ? 'v' + opcoes.beta.versao : 'nenhuma'}; estável: ${opcoes.estavel ? 'v' + opcoes.estavel.versao : 'nenhuma'}`);
+          atualizacaoEmitter.emit('beta-opcoes', opcoes);
+        }
+        contextoSync.opcoesBeta = opcoes;
+      } catch (e) {
+        log(`[Atualização] falha ao verificar versões (beta): ${e.message}`);
+      }
+      return;
+    }
     try {
       const disponivel = await verificarAtualizacao(VERSAO_ATUAL);
       if (disponivel && disponivel.versao !== contextoSync.atualizacaoDisponivel?.versao) {
@@ -281,7 +302,7 @@ async function main() {
   // (nunca no meio de um pull/push), ver `cicloComAutoAtualizacao` mais abaixo.
   const tentativasFalhasPorVersao = {};
   async function aplicarAtualizacaoSeNecessario() {
-    if (!isPackaged || !AUTO_ATUALIZAR) return;
+    if (!isPackaged || !AUTO_ATUALIZAR || contextoSync.ehBeta) return; // beta: só pela faixa, nunca sozinho
     const info = contextoSync.atualizacaoDisponivel;
     if (!info?.urlDownload) return;
     if (!contextoSync.idLoja) return; // ainda sem loja conhecida — sem isso não dá pra calcular o jitter
@@ -310,8 +331,9 @@ async function main() {
 
     // Usada tanto pelo fluxo automático quanto pelo botão manual "Atualizar agora" — ambos
     // ganham o mesmo respawn supervisionado + rollback (ver updater.js).
-    contextoSync._aplicarAtualizacao = async () => {
-      const info = contextoSync.atualizacaoDisponivel;
+    // alvo ('beta' | 'estavel') só no PC de teste — escolhido na faixa de versão de teste.
+    contextoSync._aplicarAtualizacao = async (alvo) => {
+      const info = contextoSync.ehBeta ? contextoSync.opcoesBeta?.[alvo] : contextoSync.atualizacaoDisponivel;
       if (!info?.urlDownload) throw new Error('Nenhuma atualização disponível para baixar.');
       await aplicarAtualizacaoComRespawn({
         urlDownload: info.urlDownload,
@@ -335,9 +357,21 @@ async function main() {
     iniciarTray(PORTA_WEBUI, LOG_PATH).catch(e => console.error('[tray] ' + e.message));
   }
 
+  let avisouPausa = false;
+  let avisouPausaCarga = false;
+  let temMaisPendentes = false;
+
   async function executarCiclo() {
     if (rodando) return;
+    if (estaPausado()) {
+      if (!avisouPausa) log('Sincronização pausada pelo operador — retome em http://localhost:3001/status');
+      avisouPausa = true;
+      return;
+    }
+    avisouPausa = false;
     rodando = true;
+    contextoSync.cicloEmAndamento = true;
+    temMaisPendentes = false;
     await verificarAtualizacaoSeNecessario(); // primeiro passo do ciclo — ver comentário acima
     let db;
     try {
@@ -346,6 +380,7 @@ async function main() {
       log(`Firebird indisponível no ciclo: ${e.message} — aguardando próximo intervalo`);
       salvarErro({ operacao: 'ciclo', mensagem: e.message });
       rodando = false;
+      contextoSync.cicloEmAndamento = false;
       return;
     }
     try {
@@ -378,8 +413,19 @@ async function main() {
         } catch (e) {
           log(`[Reset] erro ao verificar status de reset: ${e.message}`);
         }
+        try {
+          await atenderVerificacao(db, baseURI, idLoja, tabelasExistentes, log);
+        } catch (e) {
+          log(`[Verificação] erro ao consultar pedido de verificação: ${e.message}`);
+        }
+        try {
+          await atenderCorrecoes(db, baseURI, idLoja, { idPDV, nomeFilial }, log);
+        } catch (e) {
+          log(`[Verificação] erro ao aplicar correções: ${e.message}`);
+        }
       }
 
+      await atualizarParametrosTabelas(db); // ex.: 117 = S libera LISTA_PRECOS/PRODUTOS_X_LISTA
       const tabelasAusentes = TABELAS.filter(t => tabelaAtiva(t.nome) && !tabelasExistentes.has(t.nome));
       for (const tabelaAusente of tabelasAusentes) {
         log(`[${tabelaAusente.nome}] tabela ausente no Firebird — pulando sync`);
@@ -424,7 +470,9 @@ async function main() {
           const pks = Array.isArray(tabela.pk) ? tabela.pk : [tabela.pk];
           const colunas = await getColunasTipadas(db, tabela.nome);
           if (colunas.length > 0) {
-            await garantirTabela(baseURI, tabela.nome, colunas, pks, !!tabela.srvId);
+            const r = await garantirTabela(baseURI, tabela.nome, colunas, pks, !!tabela.srvId);
+            if (r?.adicionadas?.length) log(`[${tabela.nome}] Colunas criadas no servidor com o tipo do Firebird: ${r.adicionadas.join(', ')}`);
+            if (r?.divergentes?.length) log(`[${tabela.nome}] Aviso: colunas texto no Firebird e numéricas no servidor: ${r.divergentes.join(', ')}`);
           }
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
@@ -433,6 +481,7 @@ async function main() {
       }
 
       for (const tabela of tabelasParaSincronizar) {
+        if (estaPausado()) break;
         try {
           await sincronizarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
         } catch (e) {
@@ -442,9 +491,17 @@ async function main() {
         }
       }
 
+      if (cargaEstaPausada() && !estaPausado()) {
+        if (!avisouPausaCarga) log('Carga inicial pausada pelo operador — as alterações do dia a dia continuam sendo enviadas.');
+        avisouPausaCarga = true;
+      } else {
+        avisouPausaCarga = false;
+      }
       for (const tabela of tabelasParaSincronizar) {
+        if (envioEstaPausado()) break;
         try {
-          await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
+          const r = await empurrarTabela(db, baseURI, idLoja, tabela, log, idPDV, nomeFilial);
+          if (r?.temMais) temMaisPendentes = true;
         } catch (e) {
           const msg = e instanceof Error ? e.message : String(e);
           log(`[${tabela.nome}] Erro no push: ${msg}`);
@@ -452,7 +509,7 @@ async function main() {
         }
       }
 
-      log('Ciclo concluído.');
+      log(estaPausado() ? 'Ciclo interrompido — sincronização pausada.' : 'Ciclo concluído.');
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       log(`Erro no ciclo: ${msg}`);
@@ -460,8 +517,13 @@ async function main() {
     } finally {
       await closeConnection(db);
       rodando = false;
+      contextoSync.cicloEmAndamento = false;
+      contextoSync.ultimoCicloFim = Date.now();
     }
   }
+
+  // Retomar pela web UI dispara um ciclo na hora, sem esperar o intervalo.
+  contextoSync.executarCicloAgora = () => { setTimeout(cicloComAutoAtualizacao, 0); };
 
   log(`Cliente iniciado. Intervalo: ${INTERVALO_MS / 1000}s`);
 
@@ -483,6 +545,8 @@ async function main() {
   async function cicloComAutoAtualizacao() {
     await executarCiclo();
     await aplicarAtualizacaoSeNecessario();
+    // Lote de push encheu: emenda outro ciclo em vez de esperar o intervalo inteiro.
+    if (temMaisPendentes && !envioEstaPausado()) setTimeout(cicloComAutoAtualizacao, 1000);
   }
 
   // Pausa breve para o Firebird liberar a sessão do setup antes do primeiro ciclo.

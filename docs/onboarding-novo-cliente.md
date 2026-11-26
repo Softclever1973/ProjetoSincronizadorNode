@@ -36,11 +36,12 @@ node scripts/create-empresa.js \
 **Regras para `--schema`:**
 - Apenas letras minúsculas, números e `_`
 - Deve começar com letra ou `_`
+- Não pode ser `public`, `information_schema` nem começar com `pg_` (schemas do sistema — `public` guarda usuários e tokens de todas as empresas). O script, a tela do superadmin e a API recusam.
 - Exemplos válidos: `empresa_kr`, `filial_sp01`, `rede_jb`
 
 **O que esse script faz:**
 - Cria o schema PostgreSQL `empresa_kr`
-- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config` e as funções `fn_seq_atualizacao()` e `fn_registrar_delecao()`
+- Cria dentro dele: `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`) e as funções `fn_seq_atualizacao()` e `fn_registrar_delecao()`
 - Registra o par `(token, schema_name)` em `public.sync_tenants`
 - O servidor detecta o novo token automaticamente — **não precisa reiniciar**
 

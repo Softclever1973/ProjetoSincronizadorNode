@@ -4,10 +4,11 @@ const crypto         = require('crypto');
 const bcrypt         = require('bcryptjs');
 const jwt            = require('jsonwebtoken');
 const { pool }              = require('#server/infrastructure/db.js');
-const { vincularVendedorDono } = require('#server/application/onboarding/vincularVendedorDono.js');
 const authJwt        = require('#server/interfaces/http/middleware/authJwt.js');
 const tokenBlacklist = require('#server/infrastructure/cache/tokenBlacklist.js');
+const tentativasLogin = require('#server/infrastructure/cache/tentativasLogin.js');
 const { enviarEmail } = require('#server/infrastructure/email/emailApiClient.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 const JWT_EXPIRES_IN = '24h';
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1h
@@ -17,13 +18,7 @@ const RESET_THROTTLE_MS  = 60 * 1000;      // evita reenvio em disparada pelo me
 // restart nem é compartilhado entre instâncias; suficiente para um único processo).
 const _ultimoPedidoReset = new Map(); // email → timestamp do último pedido aceito
 
-/**
- * Lê os vínculos do usuário com empresas e monta os claims schemas/roles/lojas/vendedores.
- * Para schemas em que o usuário é dono e ainda não tem vendedor vinculado, tenta vincular
- * a um VENDEDORES "DONO" agora — no momento da criação da empresa isso ainda não é possível
- * (VENDEDORES só existe depois do primeiro sync do Firebird), então login/refresh é o ponto
- * em que, mais cedo ou mais tarde, a tabela já vai existir e o vínculo é feito automaticamente.
- */
+/** Lê os vínculos do usuário com empresas e monta os claims schemas/roles/lojas/vendedores. */
 async function montarClaims(idUsuario) {
   const { rows } = await pool.query(
     `SELECT ue.schema_name, ue.role, ue.id_loja, ue.id_vendedor, st.plano
@@ -33,19 +28,12 @@ async function montarClaims(idUsuario) {
     [idUsuario]
   );
 
-  const vendedores = Object.fromEntries(rows.map(r => [r.schema_name, r.id_vendedor ?? null]));
-  for (const r of rows) {
-    if (r.role === 'dono' && vendedores[r.schema_name] == null) {
-      const novoId = await vincularVendedorDono(r.schema_name, idUsuario);
-      if (novoId != null) vendedores[r.schema_name] = novoId;
-    }
-  }
-
   return {
     schemas:    rows.map(r => r.schema_name),
     roles:      Object.fromEntries(rows.map(r => [r.schema_name, r.role])),
     lojas:      Object.fromEntries(rows.map(r => [r.schema_name, r.id_loja ?? null])),
-    vendedores,
+    // Só vendedor vinculado na tela de Usuários (vendedor real do Sirius); o servidor não cria vendedor.
+    vendedores: Object.fromEntries(rows.map(r => [r.schema_name, r.id_vendedor ?? null])),
     planos:     Object.fromEntries(rows.map(r => [r.schema_name, r.plano])),
   };
 }
@@ -67,21 +55,31 @@ router.post('/login', async (req, res) => {
   if (!email || !senha)
     return res.status(400).json({ erro: 'email e senha obrigatórios' });
 
+  // Bloqueado não chega a conferir a senha: nem acerto passa durante a trava.
+  const espera = tentativasLogin.segundosBloqueado(email, req.ip);
+  if (espera) {
+    res.set('Retry-After', String(espera));
+    return res.status(429).json({ erro: `Muitas tentativas de login. Tente novamente em ${Math.ceil(espera / 60)} minuto(s).` });
+  }
+
   try {
     const result = await pool.query(
       'SELECT id, email, nome, senha_hash, is_super_admin FROM public.usuarios WHERE email = $1 AND ativo = TRUE',
       [email]
     );
     const usuario = result.rows[0];
-    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash)))
+    if (!usuario || !(await bcrypt.compare(senha, usuario.senha_hash))) {
+      tentativasLogin.registrarFalha(email, req.ip);
       return res.status(401).json({ erro: 'credenciais inválidas' });
+    }
+    tentativasLogin.registrarSucesso(email);
 
     const claims = await montarClaims(usuario.id);
     const { token, nome, isSuperAdmin } = assinarToken(usuario, claims);
 
     res.json({ id: usuario.id, email: usuario.email, token, ...claims, nome, isSuperAdmin });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -165,7 +163,7 @@ router.post('/redefinir-senha', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -189,9 +187,12 @@ router.post('/refresh', authJwt, async (req, res) => {
 
     res.json({ id: usuario.id, email: usuario.email, token, ...claims, nome, isSuperAdmin });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
+
+// Sinal de vida da aba aberta: o authJwt registra a atividade (lista de online) e recusa sessão revogada.
+router.post('/ping', authJwt, (req, res) => res.json({ ok: true }));
 
 router.post('/logout', authJwt, (req, res) => {
   const token = req.headers.authorization.slice(7);
@@ -213,7 +214,7 @@ router.get('/me', authJwt, async (req, res) => {
       isSuperAdmin: u?.is_super_admin === true,
     });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

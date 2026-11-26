@@ -1,5 +1,9 @@
+jest.mock('../src/server/infrastructure/db.js', () => ({ pool: { query: jest.fn() } }));
+
 const jwt = require('jsonwebtoken');
+const { pool } = require('../src/server/infrastructure/db.js');
 const tokenBlacklist = require('../src/server/infrastructure/cache/tokenBlacklist');
+const sessoes = require('../src/server/infrastructure/cache/sessoesCache');
 const authJwt = require('../src/server/interfaces/http/middleware/authJwt');
 
 const SECRET = 'segredo-de-teste';
@@ -109,5 +113,53 @@ describe('authJwt', () => {
     expect(req.userVendedores).toEqual({});
     expect(req.userPlanos).toEqual({});
     expect(req.isSuperAdmin).toBe(false);
+  });
+
+  describe('desconexão pelo superadmin', () => {
+    const agoraSeg = () => Math.floor(Date.now() / 1000);
+
+    beforeAll(async () => {
+      pool.query.mockResolvedValueOnce({ rows: [{ sessao_revogada_em: new Date() }] });
+      await sessoes.revogarSessoes(10);
+    });
+
+    test('token emitido antes da desconexão retorna 401', () => {
+      const token = jwt.sign({ id: 10, iat: agoraSeg() - 60 }, SECRET);
+      const req = { headers: { authorization: `Bearer ${token}` } };
+      const res = mockRes();
+      const next = jest.fn();
+      authJwt(req, res, next);
+
+      expect(next).not.toHaveBeenCalled();
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith({ erro: 'sessão encerrada pelo administrador' });
+    });
+
+    test('token emitido depois da desconexão (novo login) passa', () => {
+      const token = jwt.sign({ id: 10, iat: agoraSeg() + 5 }, SECRET);
+      const req = { headers: { authorization: `Bearer ${token}` } };
+      const next = jest.fn();
+      authJwt(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    test('desconectar um usuário não afeta os outros', () => {
+      const token = jwt.sign({ id: 11, iat: agoraSeg() - 60 }, SECRET);
+      const req = { headers: { authorization: `Bearer ${token}` } };
+      const next = jest.fn();
+      authJwt(req, mockRes(), next);
+
+      expect(next).toHaveBeenCalled();
+    });
+
+    test('requisição autenticada aparece na lista de online', () => {
+      const token = jwt.sign({ id: 12, nome: 'Online' }, SECRET);
+      const req = { headers: { authorization: `Bearer ${token}`, 'user-agent': 'jest' }, originalUrl: '/api/empresa_kr/tabelas/X', ip: '::1' };
+      authJwt(req, mockRes(), jest.fn());
+
+      const s = sessoes.listarOnline().find(x => x.id === 12);
+      expect(s).toMatchObject({ nome: 'Online', schema: 'empresa_kr', userAgent: 'jest' });
+    });
   });
 });

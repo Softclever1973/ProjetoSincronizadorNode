@@ -6,7 +6,7 @@ const TOKEN = process.env.SYNC_TOKEN;
 /**
  * Faz um POST JSON para a URL informada e retorna o corpo parseado.
  */
-function post(url, corpo) {
+function post(url, corpo, timeoutMs = 15_000) {
   return new Promise((resolve, reject) => {
     const lib = url.startsWith('https') ? https : http;
     const dados = JSON.stringify(corpo);
@@ -27,8 +27,8 @@ function post(url, corpo) {
       let data = '';
       res.on('data', chunk => (data += chunk));
       res.on('end', () => {
-        if (res.statusCode === 401) return reject(new Error('Filial bloqueada (401)'));
-        if (res.statusCode !== 200) return reject(new Error(`Servidor retornou ${res.statusCode}: ${data}`));
+        if (res.statusCode === 401) return reject(Object.assign(new Error('Filial bloqueada (401)'), { status: 401 }));
+        if (res.statusCode !== 200) return reject(Object.assign(new Error(`Servidor retornou ${res.statusCode}: ${data}`), { status: res.statusCode }));
         try {
           resolve(JSON.parse(data));
         } catch {
@@ -37,7 +37,7 @@ function post(url, corpo) {
       });
     });
 
-    req.setTimeout(15_000, () => req.destroy(new Error('Timeout de 15s ao conectar ao servidor')));
+    req.setTimeout(timeoutMs, () => req.destroy(new Error(`Timeout de ${timeoutMs / 1000}s ao conectar ao servidor`)));
     req.on('error', reject);
     req.write(dados);
     req.end();
@@ -149,6 +149,19 @@ function enviarRegistro(baseURI, idLoja, tabela, pk, registro, ultimaVersaoConhe
 }
 
 /**
+ * Envia um lote de registros de UMA tabela (rota ReceberRegistros). itens: [{ registro,
+ * ultimaVersaoConhecida, deletar }]. Retorna { resultados } na mesma ordem. Servidor antigo
+ * responde 404 (err.status) — quem chama volta pro envio unitário.
+ */
+function enviarRegistros(baseURI, idLoja, tabela, pk, itens, idPDV = null, nomeFilial = '', temSrvId = false) {
+  let url = `${baseURI}/datasnap/rest/TSMSincronizacao/ReceberRegistros` +
+    `?token=${TOKEN}&idLoja=${idLoja}`;
+  if (idPDV != null) url += `&idPDV=${idPDV}`;
+  if (nomeFilial)    url += `&nomeFilial=${encodeURIComponent(nomeFilial)}`;
+  return post(url, { tabela, pk, registros: itens, temSrvId }, 60_000);
+}
+
+/**
  * Garante que a tabela existe no servidor com a estrutura correta, mesmo sem nenhum
  * registro real pra inferir tipo por valor — cobre tabelas que existem na filial mas
  * estão vazias (instalação nova). No-op no servidor se a tabela já existe.
@@ -171,9 +184,12 @@ function atualizarRegime(baseURI, regime) {
 }
 
 /**
- * Envia parâmetros lidos do Firebird ao servidor para armazenamento em sync_config.
+ * Envia parâmetros lidos do Firebird ao servidor para armazenamento em `parametros`
+ * (era sync_config). O servidor aceita tanto o valor cru (compat. com client.exe antigo,
+ * ainda não recompilado) quanto um objeto rico — ex: { codigo_interno_unico: { valor: 'S',
+ * id_parametro: 122, nome_da_tabela: 'PRODUTOS', descricao: '...', observacoes: '...' } }.
  * @param {string} baseURI
- * @param {Record<string, string>} parametros — ex: { codigo_interno_unico: 'S' }
+ * @param {Record<string, string|object>} parametros
  */
 function atualizarParametros(baseURI, parametros) {
   return post(
@@ -201,11 +217,46 @@ function verificarStatusReset(baseURI) {
     .then(rows => rows[0] || {});
 }
 
+// Verificação de sincronização pedida no admin (ver application/verificacaoSync.js).
+const URL_VERIFICACAO = (baseURI, rota, idLoja) =>
+  `${baseURI}/datasnap/rest/TSMVerificacao/${rota}?token=${TOKEN}&idLoja=${idLoja}`;
+
+function buscarVerificacaoPendente(baseURI, idLoja) {
+  return get(URL_VERIFICACAO(baseURI, 'Pendente', idLoja)).then(rows => rows[0] || {});
+}
+
+function enviarVerificacaoTabela(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Tabela', idLoja), corpo, 120_000);
+}
+
+function enviarVerificacaoDetalhes(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Detalhes', idLoja), corpo, 60_000);
+}
+
+function concluirVerificacao(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Concluir', idLoja), corpo);
+}
+
+function buscarCorrecoesVerificacao(baseURI, idLoja) {
+  return get(URL_VERIFICACAO(baseURI, 'Correcoes', idLoja)).then(rows => rows[0] || {});
+}
+
+function concluirCorrecoesVerificacao(baseURI, idLoja, corpo) {
+  return post(URL_VERIFICACAO(baseURI, 'Correcoes', idLoja), corpo);
+}
+
 module.exports = {
+  buscarCorrecoesVerificacao,
+  concluirCorrecoesVerificacao,
+  buscarVerificacaoPendente,
+  enviarVerificacaoTabela,
+  enviarVerificacaoDetalhes,
+  concluirVerificacao,
   buscarRegistrosParaAtualizar,
   buscarRegistrosParaDeletar,
   buscarProdutosParaAtualizar,
   enviarRegistro,
+  enviarRegistros,
   garantirTabela,
   atualizarRegime,
   atualizarParametros,

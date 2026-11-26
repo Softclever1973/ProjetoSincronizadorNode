@@ -19,18 +19,19 @@ const { PLANOS, PLANO_PADRAO } = require('#server/domain/planos.js');
 const { obterPermissoesEfetivas } = require('#server/infrastructure/cache/permissoesCache.js');
 const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { buildNomeLojaExpr } = require('./helpers');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /* ── GET /api/:schema/admin/sync-config ── */
 router.get('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('configuracoes', 'r'), async (req, res) => {
   const { schema } = req.params;
   try {
     const rows = await withTenantConnection(schema, db =>
-      query(db, 'SELECT chave, valor FROM sync_config ORDER BY chave')
+      query(db, 'SELECT chave, parametro FROM parametros ORDER BY chave')
     );
-    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR])));
+    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.PARAMETRO])));
   } catch (e) {
     if (isMissingTableError(e)) return res.json({});
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -49,11 +50,11 @@ router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('co
   try {
     let dadosAntes = null;
     await withTenantConnection(schema, async db => {
-      const rows = await query(db, 'SELECT valor FROM sync_config WHERE chave = $1', [chave]);
-      dadosAntes = rows.length > 0 ? { chave, valor: rows[0].VALOR } : null;
+      const rows = await query(db, 'SELECT parametro FROM parametros WHERE chave = $1', [chave]);
+      dadosAntes = rows.length > 0 ? { chave, valor: rows[0].PARAMETRO } : null;
       await execute(db,
-        `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
-         ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
+        `INSERT INTO parametros (chave, parametro) VALUES ($1, $2)
+         ON CONFLICT (chave) DO UPDATE SET parametro = EXCLUDED.parametro`,
         [chave, valor || null]
       );
     });
@@ -61,7 +62,7 @@ router.put('/:schema/admin/sync-config', authJwt, checkSchema, requireModulo('co
       { chave, valor: valor || null }, dadosAntes);
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -70,12 +71,12 @@ router.get('/:schema/sync-flags', authJwt, checkSchema, async (req, res) => {
   const { schema } = req.params;
   try {
     const rows = await withTenantConnection(schema, db =>
-      query(db, `SELECT chave, valor FROM sync_config WHERE chave IN ('venda_saldo_negativo', 'modalidade_frete', 'forma_preenchimento_pedido')`)
+      query(db, `SELECT chave, parametro FROM parametros WHERE chave IN ('venda_saldo_negativo', 'modalidade_frete', 'forma_preenchimento_pedido', 'serie_nfe', 'usa_lista_precos', 'desconto_por_item', 'codigo_interno_unico')`)
     );
-    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.VALOR])));
+    res.json(Object.fromEntries(rows.map(r => [r.CHAVE, r.PARAMETRO])));
   } catch (e) {
     if (isMissingTableError(e)) return res.json({});
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -126,10 +127,10 @@ router.get('/:schema/plano', authJwt, checkSchema, async (req, res) => {
     );
     const plano = rows[0]?.plano || PLANO_PADRAO;
     const role = req.userRoles?.[schema];
-    const modulos = await obterPermissoesEfetivas(plano, role);
+    const modulos = await obterPermissoesEfetivas(plano, role, schema);
     res.json({ plano, nome: PLANOS[plano]?.nome ?? plano, modulos });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

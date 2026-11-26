@@ -12,6 +12,7 @@
 require('dotenv').config();
 const { pool } = require('../src/server/infrastructure/db');
 const { initializeTenantSchema } = require('../src/server/infrastructure/db-init');
+const { schemaTenantValido } = require('../src/server/domain/validacao');
 
 const args = Object.fromEntries(
   process.argv.slice(2)
@@ -31,8 +32,8 @@ if (!schema || !token) {
   process.exit(1);
 }
 
-if (!/^[a-z_][a-z0-9_]*$/.test(schema)) {
-  console.error(`Schema inválido: '${schema}'. Use apenas letras minúsculas, números e underscore.`);
+if (!schemaTenantValido(schema)) {
+  console.error(`Schema inválido: '${schema}'. Use apenas letras minúsculas, números e underscore (public, information_schema e pg_* são reservados).`);
   process.exit(1);
 }
 

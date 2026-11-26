@@ -1,6 +1,7 @@
 const express = require('express');
 const TABELAS = require('#client/domain/tabelas.js');
-const { isColunaIgnorada, saoIguais } = require('#client/domain/auditoria.js');
+const { isColunaIgnorada } = require('#client/domain/auditoria.js');
+const { camposDivergentes } = require('#client/domain/conflitos.js');
 const { getConnection, query: dbQuery, execute: dbExecute, closeConnection } = require('#client/infrastructure/firebird/db.js');
 const { getColunasComputadas, normalizarBlobs } = require('#client/infrastructure/firebird/db-utils.js');
 const { salvarLoteConflitos } = require('#client/infrastructure/persistence/conflitos.js');
@@ -96,7 +97,7 @@ function criarAuditoriaRouter(contexto) {
       const srv = mapServidor.get(pkValor);
       const loc = mapLocal.get(pkValor);
       if (!loc) { totalAusente++; rows.push({ pkValor, srv, loc: null, difColunas: [] }); continue; }
-      const difColunas = todasColunas.filter(c => !saoIguais(srv[c], loc[c]));
+      const difColunas = camposDivergentes(loc, srv, { idLoja: contexto.idLoja, configTabela: config });
       if (difColunas.length === 0) totalOk++; else totalDif++;
       rows.push({ pkValor, srv, loc, difColunas });
     }
@@ -159,7 +160,7 @@ function criarAuditoriaRouter(contexto) {
 
           // Se idêntico, pula
           if (existeLocal) {
-            const difs = Object.keys(srv).filter(c => !isColunaIgnorada(c) && !saoIguais(srv[c], localRows[0][c]));
+            const difs = camposDivergentes(localRows[0], srv, { idLoja: contexto.idLoja, configTabela: config });
             if (difs.length === 0) continue;
           }
 

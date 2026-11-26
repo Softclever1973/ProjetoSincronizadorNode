@@ -50,6 +50,7 @@ function encerrarComErro(err) {
   const { initializeDatabase, migrarTodosSchemas } = require('./server/infrastructure/db-init');
   const { recarregarEmpresas } = require('./server/infrastructure/cache/empresasCache');
   const { recarregarPermissoes } = require('./server/infrastructure/cache/permissoesCache');
+  const { carregarRevogacoes }   = require('./server/infrastructure/cache/sessoesCache');
   const { agendarLimpeza }     = require('./limpeza');
 
   const sincronizacaoRoutes      = require('./server/interfaces/http/routes/datasnap/sincronizacao');
@@ -60,6 +61,8 @@ function encerrarComErro(err) {
   const authRoutes               = require('./server/interfaces/http/routes/datasnap/auth');
   const userEmpresasRoutes       = require('./server/interfaces/http/routes/datasnap/userEmpresas');
   const adminEmpresasRoutes      = require('./server/interfaces/http/routes/datasnap/adminEmpresas');
+  const adminVerificacaoRoutes   = require('./server/interfaces/http/routes/datasnap/adminVerificacao');
+  const verificacaoRoutes        = require('./server/interfaces/http/routes/datasnap/verificacao');
   const tabelasRoutes            = require('./server/interfaces/http/routes/api');
   const usuariosRoutes           = require('./server/interfaces/http/routes/datasnap/usuarios');
   const financeiroRoutes         = require('./server/interfaces/http/routes/datasnap/financeiro');
@@ -68,15 +71,17 @@ function encerrarComErro(err) {
 
   const app = express();
 
-  app.use((req, res, next) => {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-admin-token');
-    if (req.method === 'OPTIONS') return res.sendStatus(204);
-    next();
-  });
+  // Atrás de proxy (nginx, IIS…) o IP real vem no X-Forwarded-For; sem isso o limite de login trata todos como um IP só.
+  if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
 
-  app.use(express.json());
+  const { criarCors, lerOrigens } = require('./server/interfaces/http/middleware/cors');
+  const origensCors = lerOrigens(process.env.CORS_ORIGINS);
+  if (origensCors.length) console.log(`CORS: só ${origensCors.join(', ')}`);
+  else console.warn('CORS: CORS_ORIGINS não definido — qualquer site pode chamar a API pelo navegador.');
+  app.use(criarCors(origensCors));
+
+  // 10mb: o push em lote (ReceberRegistros) passa fácil do padrão de 100kb com tabelas largas.
+  app.use(express.json({ limit: '10mb' }));
 
   // ---------------------------------------------------------------------------
   // Rotas — espelham o padrão DataSnap: /datasnap/rest/{Classe}/{Metodo}
@@ -86,9 +91,11 @@ function encerrarComErro(err) {
   app.use('/datasnap/rest/TSMPedidos',                   pedidosRoutes);
   app.use('/datasnap/rest/TSMMovimetacaoCaixas',         movimentacaoCaixasRoutes);
   app.use('/datasnap/rest/TSMDistribuicaoDeMercadorias', distribuicaoRoutes);
+  app.use('/datasnap/rest/TSMVerificacao',               verificacaoRoutes);
   app.use('/auth',          authRoutes);
   app.use('/user/empresas', userEmpresasRoutes);
   app.use('/superadmin',    authJwt, requireSuperAdmin, adminEmpresasRoutes);
+  app.use('/superadmin',    authJwt, requireSuperAdmin, adminVerificacaoRoutes);
   app.use('/api',           usuariosRoutes);
   app.use('/api',           financeiroRoutes);
   app.use('/api',           tabelasRoutes);
@@ -108,8 +115,14 @@ function encerrarComErro(err) {
   // Endpoint admin — recarrega o cache de empresas sem reiniciar o servidor
   // Requer header: x-admin-token: <ADMIN_TOKEN>
   // ---------------------------------------------------------------------------
+  // Comparação em tempo constante (hash dos dois lados, mesmo tamanho): não vaza o token pelo tempo de resposta.
+  const crypto = require('crypto');
+  const hash = v => crypto.createHash('sha256').update(String(v ?? '')).digest();
+  const tokenAdminValido = req => Boolean(process.env.ADMIN_TOKEN)
+    && crypto.timingSafeEqual(hash(req.headers['x-admin-token']), hash(process.env.ADMIN_TOKEN));
+
   app.post('/admin/reload-empresas', async (req, res) => {
-    if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+    if (!tokenAdminValido(req)) {
       return res.status(403).json({ erro: 'acesso negado' });
     }
     await recarregarEmpresas();
@@ -121,7 +134,7 @@ function encerrarComErro(err) {
   // sem reiniciar o servidor. Requer header: x-admin-token: <ADMIN_TOKEN>
   // ---------------------------------------------------------------------------
   app.post('/admin/reload-permissoes', async (req, res) => {
-    if (!process.env.ADMIN_TOKEN || req.headers['x-admin-token'] !== process.env.ADMIN_TOKEN) {
+    if (!tokenAdminValido(req)) {
       return res.status(403).json({ erro: 'acesso negado' });
     }
     await recarregarPermissoes();
@@ -144,7 +157,9 @@ function encerrarComErro(err) {
     const id = `SRV-${Date.now().toString(36).slice(-6).toUpperCase()}`;
     console.error(`[${id}] ${req.method} ${req.path} →`, err.stack || err.message);
     if (!res.headersSent) {
-      res.status(err.status || 500).json({ erro: err.message || 'Erro interno do servidor', id });
+      // 4xx (JSON malformado, corpo grande demais) diz respeito à requisição; 5xx fica só no log.
+      const status = err.status || 500;
+      res.status(status).json({ erro: status < 500 && err.message ? err.message : 'Erro interno do servidor.', id });
     }
   });
 
@@ -154,6 +169,7 @@ function encerrarComErro(err) {
   try {
     await initializeDatabase();
     await migrarTodosSchemas().catch(e => console.error(`[migração] ${e.message}`));
+    await carregarRevogacoes();
     app.listen(config.portaHttp, () => {
       console.log(`Sincronizador rodando em http://localhost:${config.portaHttp}`);
       console.log(`Banco: ${config.databaseUrl.replace(/:\/\/[^@]+@/, '://***@')}`);

@@ -63,7 +63,7 @@ const DDL_TABELAS_NEGOCIO = [
 ];
 
 async function setupTestSchema() {
-  await initializeTenantSchema(TEST_SCHEMA); // schema + infraestrutura padrão (sync_config, srv_id_map, seq_atualizacao_matriz, ...)
+  await initializeTenantSchema(TEST_SCHEMA); // schema + infraestrutura padrão (parametros, srv_id_map, seq_atualizacao_matriz, ...)
   const client = await pool.connect();
   try {
     await client.query(`SET search_path TO ${TEST_SCHEMA}, public`);
@@ -95,8 +95,9 @@ async function truncateTestSchema() {
       ${TEST_SCHEMA}.produtos
     RESTART IDENTITY CASCADE
   `);
-  // sync_config é reaproveitado entre testes (não é truncado) — alguns testes dependem
-  // de valores nele (ex: codigo_interno_unico); cada teste que o usa reseta explicitamente.
+  // parametros (era sync_config) é reaproveitado entre testes (não é truncado) — alguns
+  // testes dependem de valores nele (ex: codigo_interno_unico); cada teste que o usa
+  // reseta explicitamente.
 }
 
 module.exports = { TEST_SCHEMA, TEST_TOKEN, setupTestSchema, truncateTestSchema };

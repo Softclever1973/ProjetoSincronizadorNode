@@ -22,7 +22,7 @@ app.use('/api', crudRouter);
 
 function tokenPara(role) {
   return `Bearer ${jwt.sign(
-    { id: 999999, schemas: [SCHEMA], roles: { [SCHEMA]: role }, lojas: {}, vendedores: {} },
+    { id: 999999, schemas: [SCHEMA], roles: { [SCHEMA]: role }, lojas: { [SCHEMA]: 1 }, vendedores: {} },
     process.env.JWT_SECRET
   )}`;
 }

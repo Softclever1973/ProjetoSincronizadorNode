@@ -27,8 +27,13 @@ describe('validarRegistro — isUpdate ignora todas as regras', () => {
 
 describe('validarRegistro — CLIENTES', () => {
   test('bloqueia quando falta um campo obrigatório', () => {
-    const { FANTASIA, ...semFantasia } = clienteValido;
-    expect(validarRegistro('CLIENTES', semFantasia)).toBe('O campo "FANTASIA" é obrigatório');
+    const { CONSUMIDOR_FINAL, ...semConsumidor } = clienteValido;
+    expect(validarRegistro('CLIENTES', semConsumidor)).toBe('O campo "CONSUMIDOR_FINAL" é obrigatório');
+  });
+
+  test('Fantasia e Pessoa p/ Contato são opcionais', () => {
+    const { FANTASIA, PESSOA_P_CONTATO, ...semOpcionais } = clienteValido;
+    expect(validarRegistro('CLIENTES', semOpcionais)).toBeNull();
   });
 
   test('exige CPF ou CNPJ quando nenhum foi informado', () => {

@@ -2,6 +2,7 @@ const readline = require('readline');
 const fs       = require('fs');
 const path     = require('path');
 const crypto   = require('crypto');
+const { lerOrigens } = require('./server/interfaces/http/middleware/cors');
 
 function gerarSecret(bytes = 64) {
   return crypto.randomBytes(bytes).toString('hex');
@@ -68,6 +69,17 @@ async function runSetupWizard() {
     const portaRaw = await pergunta(rl, '\nPorta HTTP [8080]:\n> ');
     const porta = portaRaw || '8080';
 
+    // Origens que o navegador pode usar para chamar a API (CORS); vazio = qualquer site.
+    let origens = [];
+    for (;;) {
+      const resp = await pergunta(rl,
+        '\nEndereco(s) do site (SiriusWebFrontend) que pode chamar a API, separados por virgula' +
+        '\n  ex: https://sirius.suaempresa.com.br   (vazio = qualquer site, nao recomendado em producao)\n> ');
+      origens = lerOrigens(resp);
+      if (origens.every(o => /^https?:\/\/[^/\s]+$/.test(o))) break;
+      console.log('  [!] Use so o endereco, com http:// ou https:// e sem caminho (ex: https://site.com.br).\n');
+    }
+
     const jwtSecret  = gerarSecret(64);
     const adminToken = gerarSecret(32);
 
@@ -76,12 +88,14 @@ async function runSetupWizard() {
       `PORT=${porta}`,
       `JWT_SECRET=${jwtSecret}`,
       `ADMIN_TOKEN=${adminToken}`,
+      ...(origens.length ? [`CORS_ORIGINS=${origens.join(',')}`] : []),
     ].join('\n') + '\n';
 
     fs.writeFileSync(envPath, conteudo, 'utf8');
 
     console.log('\n  [OK] .env criado em: ' + envPath);
     console.log('  JWT_SECRET e ADMIN_TOKEN foram gerados automaticamente.');
+    if (!origens.length) console.log('  [!] CORS liberado para qualquer site — defina CORS_ORIGINS no .env antes de ir para producao.');
     console.log('\n  Proximo passo: cadastre a primeira empresa (token por empresa):');
     console.log('  node scripts/create-empresa.js --schema=empresa_xx --token=TOKEN --nome="Nome"');
     console.log('\n  Para reconfigurar, delete o .env e execute novamente.\n');

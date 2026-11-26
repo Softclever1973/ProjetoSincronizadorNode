@@ -1,4 +1,5 @@
 const { pool } = require('./db');
+const { schemaTenantValido } = require('../domain/validacao');
 
 // Seed do sistema de permissões por módulo (plano × módulo, role × módulo) — reproduz
 // exatamente o comportamento anterior (requireRole/requireRoleOuVendedorEm/
@@ -11,7 +12,7 @@ const { pool } = require('./db');
 // pedidos_inserir/editar/realizar/cancelar e produtos_movimentacao: novas permissões
 // granulares (ver domain/modulos.js) — 'rw' em todo plano, mesmo padrão de 'imprimir'
 // acima (não variam por plano; a granularidade real é só por role, em SEED_PERMISSOES_ROLE).
-const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' };
+const _MOD_RW_TODOS = { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'--', usuarios:'rw', financeiro:'--', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'--', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' };
 // Ordem de poder (não alfabética): Lite < Bronze < Prata < Ouro < Diamante < Safira —
 // mesma ordem de planos.json, que é a fonte de verdade pra exibição (listarPlanos()).
 // exportacao migrou de planos.json (`features: ['exportacao']`) pra cá — mesmos dois planos.
@@ -34,10 +35,11 @@ const SEED_PERMISSOES_PLANO = {
 // vendedor só tinha 'produtos:r-', mas conseguia registrar movimentação de estoque sem
 // nenhum gate — agora explicitamente bloqueado ('--') pra ele, liberado ('rw') pra
 // gerente/dono, mesmo nível que 'produtos' já tem pra esses dois papéis.
+// lista_precos: vendedor só lê (o Pedido aplica a lista); vincular produtos é de gerente/dono.
 const SEED_PERMISSOES_ROLE = {
-  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--' },
-  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
-  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw' },
+  vendedor: { produtos:'r-', clientes:'r-', pedidos:'rw', fornecedores:'--', usuarios:'--', financeiro:'--', faturamento:'--', auditoria:'--', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'--', lista_precos:'r-' },
+  gerente:  { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'--', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' },
+  dono:     { produtos:'rw', clientes:'rw', pedidos:'rw', fornecedores:'rw', usuarios:'rw', financeiro:'rw', faturamento:'rw', auditoria:'rw', configuracoes:'rw', exportacao:'rw', imprimir:'rw', pedidos_inserir:'rw', pedidos_editar:'rw', pedidos_realizar:'rw', pedidos_cancelar:'rw', produtos_movimentacao:'rw', lista_precos:'rw' },
 };
 
 /** Monta um INSERT multi-linha com params, a partir de um objeto { chave: { modulo: nivel } }. */
@@ -94,6 +96,9 @@ const DDL_CONTROLE = [
      ADD COLUMN IF NOT EXISTS reset_token_hash TEXT`,
   `ALTER TABLE public.usuarios
      ADD COLUMN IF NOT EXISTS reset_token_expira TIMESTAMPTZ`,
+  // Migração: "Desconectar" do superadmin — tokens emitidos antes deste instante são recusados
+  `ALTER TABLE public.usuarios
+     ADD COLUMN IF NOT EXISTS sessao_revogada_em TIMESTAMPTZ`,
   `CREATE TABLE IF NOT EXISTS public.audit_log (
     id          SERIAL       PRIMARY KEY,
     id_usuario  INTEGER      REFERENCES public.usuarios(id),
@@ -149,8 +154,74 @@ const DDL_CONTROLE = [
     nivel   TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
     PRIMARY KEY (role, modulo)
   )`,
+  // Verificação de sincronização (admin): pedido por loja, atendido pelo client no ciclo; resultado em JSON.
+  `CREATE TABLE IF NOT EXISTS public.verificacoes_sync (
+    id             SERIAL PRIMARY KEY,
+    schema_name    TEXT NOT NULL,
+    id_loja        INTEGER NOT NULL,
+    tabelas        TEXT[] NOT NULL,
+    status         TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'executando', 'concluida', 'erro', 'cancelada')),
+    solicitado_por INTEGER,
+    solicitado_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    iniciado_em    TIMESTAMPTZ,
+    concluido_em   TIMESTAMPTZ,
+    erro           TEXT,
+    resultado      JSONB NOT NULL DEFAULT '{}'::jsonb
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_verificacoes_sync_schema ON public.verificacoes_sync(schema_name, id_loja, status)`,
+  // Correções pedidas no detalhe da verificação: 'servidor' é aplicada na hora; 'loja' fica na fila do client.
+  `CREATE TABLE IF NOT EXISTS public.verificacoes_correcoes (
+    id             SERIAL PRIMARY KEY,
+    verificacao_id INTEGER NOT NULL REFERENCES public.verificacoes_sync(id) ON DELETE CASCADE,
+    schema_name    TEXT NOT NULL,
+    id_loja        INTEGER NOT NULL,
+    tabela         TEXT NOT NULL,
+    chave          TEXT NOT NULL,
+    tipo_chave     TEXT NOT NULL CHECK (tipo_chave IN ('SRV_ID', 'PK')),
+    lado           TEXT NOT NULL CHECK (lado IN ('servidor', 'loja')),
+    status         TEXT NOT NULL DEFAULT 'pendente' CHECK (status IN ('pendente', 'executando', 'feita', 'erro')),
+    erro           TEXT,
+    solicitado_por INTEGER,
+    solicitado_em  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    iniciado_em    TIMESTAMPTZ,
+    concluido_em   TIMESTAMPTZ,
+    UNIQUE (verificacao_id, tabela, chave)
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_verificacoes_correcoes_loja ON public.verificacoes_correcoes(schema_name, id_loja, status)`,
   _sqlSeedPermissoes('permissoes_plano', 'plano', SEED_PERMISSOES_PLANO),
   _sqlSeedPermissoes('permissoes_role', 'role', SEED_PERMISSOES_ROLE),
+  // Limpeza (2026-09-30): nomes antigos que saíram de domain/modulos.js (viraram pedidos_editar e imprimir).
+  `DELETE FROM public.permissoes_plano WHERE modulo IN ('pedidos_alterar', 'pedidos_imprimir', 'produtos_imprimir', 'clientes_imprimir')`,
+  `DELETE FROM public.permissoes_role  WHERE modulo IN ('pedidos_alterar', 'pedidos_imprimir', 'produtos_imprimir', 'clientes_imprimir')`,
+  // Migração (2026-09-28): override por empresa (cliente) — 3ª camada além de plano×role.
+  // Diferente de permissoes_plano/permissoes_role, aqui a AUSÊNCIA de linha significa
+  // "sem override, usa o efetivo de plano×role normalmente" (não fail-closed) — por isso
+  // não tem seed nenhum: uma empresa sem nenhuma linha aqui se comporta 100% como hoje.
+  // Quando existe uma linha pra (schema_name, role, modulo), ela vence sobre plano×role —
+  // pode tanto restringir quanto LIBERAR além do que o plano cobre (ex. cliente compra uma
+  // função avulsa sem mudar de plano) — ver domain/permissoes.js#permissaoEfetiva.
+  //
+  // Revisão (2026-09-28, mesmo dia): a 1ª versão não tinha `role` na chave — um override
+  // valia pra empresa inteira, qualquer usuário. Usuário pediu que fosse configurável por
+  // role dentro da empresa também (ex. a função comprada só pro dono, não pro vendedor) —
+  // mesma granularidade de permissoes_role, só que escopada por schema_name. Migração
+  // recria a tabela do zero se ela existir na forma antiga (sem coluna role) — sem
+  // preservar dado, porque a versão antiga nunca chegou a rodar em produção (só em teste
+  // local, que já reportou não estar funcionando mesmo).
+  `DO $$
+   BEGIN
+     IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'permissoes_empresa')
+        AND NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'permissoes_empresa' AND column_name = 'role') THEN
+       DROP TABLE public.permissoes_empresa;
+     END IF;
+   END $$`,
+  `CREATE TABLE IF NOT EXISTS public.permissoes_empresa (
+    schema_name TEXT NOT NULL REFERENCES public.sync_tenants(schema_name),
+    role        TEXT NOT NULL CHECK (role IN ('vendedor', 'gerente', 'dono')),
+    modulo      TEXT NOT NULL,
+    nivel       TEXT NOT NULL CHECK (nivel IN ('--', 'r-', 'rw')),
+    PRIMARY KEY (schema_name, role, modulo)
+  )`,
 ];
 
 // DDL criado dentro do schema de cada empresa (sequence + tabelas de infraestrutura de sync)
@@ -219,22 +290,86 @@ function ddlTenant(schema) {
        RETURN OLD;
      END;
      $$ LANGUAGE plpgsql`,
-    `CREATE TABLE IF NOT EXISTS ${schema}.sync_config (
-  chave TEXT PRIMARY KEY,
-  valor TEXT
+    // ── parametros (era sync_config) ─────────────────────────────────────────────
+    // 2026-09: sync_config virou parametros, espelhando as colunas "de negócio" da
+    // PARAMETROS real do Firebird (ID_PARAMETRO, NOME_DA_TABELA, DESCRICAO, PARAMETRO,
+    // OBSERVACOES — as demais colunas da tabela do Firebird são posicionamento/estilo de
+    // tela do Delphi, fora de escopo aqui) + srv_id (chave primária nova, só Postgres) e
+    // chave (mantida do sync_config antigo — é o que o resto do código já usa pra achar a
+    // linha certa; nem todo parâmetro tem ID_PARAMETRO, ex. filtro_filial_clientes é
+    // só-web, sem origem no Firebird, por isso id_parametro é opcional).
+    //
+    // Migração idempotente: se sync_config existe e parametros ainda não, recria do zero
+    // com a ordem de coluna definitiva e copia os dados — não usa ALTER TABLE ADD COLUMN
+    // pra isso porque no Postgres toda coluna adicionada por ADD COLUMN vai pro final da
+    // tabela (não pra onde o comando aparece na lista), o que bagunçaria a ordem pedida
+    // (srv_id, id_parametro, chave, nome_da_tabela, descricao, parametro, observacoes) pra
+    // quem já tinha sync_config. Tenant novo cai direto no CREATE TABLE IF NOT EXISTS
+    // abaixo, que já nasce com a ordem certa.
+    `DO $$
+     BEGIN
+       IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'sync_config')
+          AND NOT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = '${schema}' AND table_name = 'parametros') THEN
+         EXECUTE 'CREATE TABLE ${schema}.parametros (
+           srv_id         SERIAL PRIMARY KEY,
+           id_parametro   INTEGER,
+           chave          TEXT NOT NULL UNIQUE,
+           nome_da_tabela TEXT,
+           descricao      TEXT,
+           parametro      TEXT,
+           observacoes    TEXT
+         )';
+         EXECUTE 'INSERT INTO ${schema}.parametros (chave, parametro) SELECT chave, valor FROM ${schema}.sync_config';
+         EXECUTE 'DROP TABLE ${schema}.sync_config';
+       END IF;
+     END $$`,
+    `CREATE TABLE IF NOT EXISTS ${schema}.parametros (
+  srv_id         SERIAL PRIMARY KEY,
+  id_parametro   INTEGER,
+  chave          TEXT NOT NULL UNIQUE,
+  nome_da_tabela TEXT,
+  descricao      TEXT,
+  parametro      TEXT,
+  observacoes    TEXT
 )`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('filtro_filial_clientes', NULL)
+    `DO $$ BEGIN
+       ALTER TABLE ${schema}.parametros ADD CONSTRAINT parametros_id_parametro_key UNIQUE (id_parametro);
+     EXCEPTION WHEN OTHERS THEN NULL; END $$`,
+    // Backfill do id_parametro pras chaves que já sincronizam com o Firebird hoje — mesmo
+    // mapa de src/client/infrastructure/config/paramsSyncMap.js (mantenha em sincronia
+    // manual, igual ao resto desse arquivo já faz com CHAVES_ACEITAS/CHAVES_GLOBAIS).
+    `UPDATE ${schema}.parametros SET id_parametro = 67    WHERE chave = 'utilizar_codigo_interno'    AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 122   WHERE chave = 'codigo_interno_unico'       AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 71    WHERE chave = 'venda_saldo_negativo'       AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 45051 WHERE chave = 'modalidade_frete'           AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 91    WHERE chave = 'forma_preenchimento_pedido' AND id_parametro IS NULL`,
+    `UPDATE ${schema}.parametros SET id_parametro = 40000 WHERE chave = 'serie_nfe'                 AND id_parametro IS NULL`,
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('filtro_filial_clientes', NULL, NULL)
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('venda_saldo_negativo', 'N')
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('venda_saldo_negativo', 71, 'N')
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('modalidade_frete', NULL)
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('modalidade_frete', 45051, NULL)
  ON CONFLICT (chave) DO NOTHING`,
-    `INSERT INTO ${schema}.sync_config (chave, valor)
- VALUES ('forma_preenchimento_pedido', 'Pela rotina específica')
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('forma_preenchimento_pedido', 91, 'Pela rotina específica')
  ON CONFLICT (chave) DO NOTHING`,
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, nome_da_tabela, descricao, parametro)
+ VALUES ('serie_nfe', 40000, 'NF-E', 'Série do documento fiscal', '6')
+ ON CONFLICT (chave) DO NOTHING`,
+    // 117 = S: empresa usa lista de preços (padrão N até o client enviar o valor do Firebird).
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('usa_lista_precos', 117, 'N')
+ ON CONFLICT (chave) DO NOTHING`,
+    // 88 (permitir desconto a cada item): vazio = client ainda não enviou; N trava o preço do item no pedido.
+    `INSERT INTO ${schema}.parametros (chave, id_parametro, parametro)
+ VALUES ('desconto_por_item', 88, NULL)
+ ON CONFLICT (chave) DO NOTHING`,
+    // Padrão antigo era 'N': sem descrição = nunca veio do client (que sempre manda a descrição do Firebird).
+    `UPDATE ${schema}.parametros SET parametro = NULL
+ WHERE chave = 'desconto_por_item' AND parametro = 'N' AND descricao IS NULL`,
     `CREATE SEQUENCE IF NOT EXISTS ${schema}.seq_srv_id`,
     `CREATE TABLE IF NOT EXISTS ${schema}.srv_id_map (
       id        SERIAL  PRIMARY KEY,
@@ -292,6 +427,7 @@ async function initializeDatabase() {
 }
 
 async function initializeTenantSchema(schemaName) {
+  if (!schemaTenantValido(schemaName)) throw new Error(`Nome de schema inválido ou reservado: '${schemaName}'`);
   const client = await pool.connect();
   try {
     for (const ddl of ddlTenant(schemaName)) {
@@ -401,4 +537,4 @@ async function migrarTodosSchemas() {
   }
 }
 
-module.exports = { initializeDatabase, initializeTenantSchema, migrarTodosSchemas };
+module.exports = { initializeDatabase, initializeTenantSchema, migrarTodosSchemas, migrarTriggersDelecao, SEED_PERMISSOES_PLANO, SEED_PERMISSOES_ROLE };

@@ -147,7 +147,7 @@ O código segue uma organização em camadas (domain / application / infrastruct
 
 ### 1. Criar o arquivo `.env` na raiz do projeto
 
-Na primeira inicialização sem `.env`, o servidor executa automaticamente um **wizard de configuração** interativo. Para configuração manual, copie o modelo:
+Na primeira inicialização sem `.env`, o servidor executa automaticamente um **wizard de configuração** interativo (URL do PostgreSQL, porta e o endereço do site que pode chamar a API — `CORS_ORIGINS`; `JWT_SECRET` e `ADMIN_TOKEN` são gerados). Para configuração manual, copie o modelo:
 
 ```bash
 cp .env.example .env
@@ -202,7 +202,7 @@ Na primeira inicialização, o servidor cria automaticamente (idempotente — se
 | `permissoes_plano` | Nível (`--`/`r-`/`rw`) de cada módulo por plano — ver [Autenticação e Permissões](#autenticação-e-permissões-api-web) |
 | `permissoes_role` | Nível de cada módulo por role (`dono`/`gerente`/`vendedor`) |
 
-Cada schema de empresa provisionado via `create-empresa.js` recebe também `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map` e as funções de trigger `fn_seq_atualizacao()`/`fn_registrar_delecao()`.
+Cada schema de empresa provisionado via `create-empresa.js` recebe também `seq_atualizacao_matriz`, `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map` e as funções de trigger `fn_seq_atualizacao()`/`fn_registrar_delecao()`.
 
 ### 4. Criar a primeira empresa
 
@@ -273,6 +273,8 @@ npm run client:dev
 | `PORT` | Não | `8080` | Porta HTTP do servidor |
 | `JWT_SECRET` | Sim | — | Segredo para assinar JWTs |
 | `ADMIN_TOKEN` | Não | — | Token para `/admin/reload-empresas` e `/admin/reload-permissoes` |
+| `CORS_ORIGINS` | Não (recomendado em produção) | `*` | Endereços separados por vírgula que podem chamar a API pelo navegador (o do SiriusWebFrontend); `https://*.vercel.app` aceita subdomínios. Não afeta o client das lojas |
+| `TRUST_PROXY` | Não | — | Atrás de proxy reverso: nº de proxies na frente (ex.: `1`), para o servidor ver o IP real do cliente (usado no limite de login) |
 
 ### Cliente (`src/client/.env`, apenas em desenvolvimento)
 
@@ -297,7 +299,9 @@ O servidor suporta múltiplas empresas simultaneamente. Cada empresa tem um **sc
 node scripts/create-empresa.js --schema=empresa_jb --token=NOVO_TOKEN_AQUI --nome="JB Atacado"
 ```
 
-**Regras para `--schema`:** apenas letras minúsculas, números e `_`; deve começar com letra ou `_`.
+**Regras para `--schema`:** apenas letras minúsculas, números e `_`; deve começar com letra ou `_`; `public`, `information_schema` e `pg_*` são reservados (recusados).
+
+**Isolamento entre empresas:** toda query de empresa roda com `search_path` apontando **só** para o schema dela (`withTenantConnection`) — nunca inclui `public`. Assim um nome de tabela vindo do cliente (sync ou CRUD web) só alcança tabelas da própria empresa; tabelas globais (`usuarios`, `sync_tenants`, permissões, `audit_log`) são sempre acessadas com o prefixo `public.` explícito no código. Nomes de tabela, coluna e PK vindos do cliente só são aceitos se forem identificadores simples (`[A-Za-z_][A-Za-z0-9_]*`); qualquer outro é recusado com 400. Cobertura em `tests/seguranca.tenant.integracao.test.js`.
 
 ---
 
@@ -309,13 +313,15 @@ Existe uma camada de autenticação JWT separada do token de sync (`?token=`), u
 
 Três roles por vínculo usuário↔empresa: `dono`, `gerente` (escopo de loja) e `vendedor` (escopo de loja, mais restrito).
 
+**Escopo de loja** (`domain/escopoLoja.js`): gerente e vendedor só leem, criam, editam e excluem registros da loja do vínculo — a loja vem do JWT assinado, nunca da requisição. Vale para as "tabelas de loja", as mesmas que a sincronização separa por filial no `tabelas.js` (`PEDIDOS`, `A_RECEBER`, `A_PAGAR`, `NOTAS_FISCAIS` pela coluna `ID_LOJA`; `PEDIDOS_ITENS`, `PEDIDOS_PARCELAS_PAGAMENTOS`, `NOTAS_FISCAIS_ITENS` pela loja do registro pai) mais `CLIENTES`. Cadastros compartilhados (produtos, auxiliares, vendedores…) não são restringidos, mesmo tendo `ID_LOJA`. O dono vê todas as lojas e pode filtrar com `?filtroLoja=N`. Gerente/vendedor sem loja no vínculo não vê nada dessas tabelas. Cobertura em `tests/escopoLoja.integracao.test.js`.
+
 ### Sistema de permissões por módulo
 
 Cada área do sistema é um **módulo** (`produtos`, `clientes`, `pedidos`, `fornecedores`, `usuarios`, `financeiro`, `faturamento`, `auditoria`, `configuracoes`) ou uma **função** pontual sem tela própria (hoje: `exportacao`, o botão de baixar CSV/Excel). Cada módulo/função tem um nível estilo Unix — `--` (bloqueado), `r-` (só leitura) ou `rw` (leitura + escrita) — definido **por plano** (`permissoes_plano`) e **por role** (`permissoes_role`). A **permissão efetiva** de um usuário é a interseção (o menor dos dois níveis): um plano Lite nunca libera Financeiro, mesmo para o dono; uma role vendedor nunca edita Configurações, mesmo num plano Diamante.
 
 Isso é resolvido a cada requisição (`obterPermissoesEfetivas`, com cache invalidado ao editar permissões pelo superadmin) e aplicado via middleware:
 - `requireModulo(modulo, 'r'|'w')` — rotas cujo módulo é fixo (financeiro, usuários, faturamento, auditoria, configurações).
-- `requireModuloDaTabela('r'|'w')` — rotas do CRUD genérico (`/tabelas/:tabela`), que resolve o módulo a partir do nome da tabela (`domain/tabelaModulo.js`); uma tabela fora desse mapa não é gateada por módulo.
+- `requireModuloDaTabela('r'|'w')` — rotas do CRUD genérico (`/tabelas/:tabela`), que resolve o módulo a partir do nome da tabela (`domain/tabelaModulo.js`); uma tabela fora desse mapa tem leitura liberada e gravação só pelo dono (ou pelo módulo de `TABELA_MODULO_ESCRITA`), e as tabelas internas da sincronização (`TABELAS_INTERNAS`) nunca são acessíveis.
 
 No frontend, o mesmo dado chega em `GET /api/:schema/plano` (campo `modulos`) e alimenta `AUTH.podeLerModulo(modulo)` / `AUTH.podeEscreverModulo(modulo)`, usados tanto pra esconder telas inteiras quanto botões específicos.
 
@@ -344,8 +350,10 @@ POST /auth/redefinir-senha    { "token": "...", "novaSenha": "..." }
 POST /auth/refresh            (Bearer) → reemite o JWT com role/loja/vendedor atuais
 POST /auth/logout             (Bearer) → revoga o token (blacklist em memória, por processo)
 GET  /auth/me                 (Bearer) → { id, schemas }
-GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modulos efetivos
+GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modulos efetivos (só leitura — empresa nova só pelo superadmin)
 ```
+
+**Limite de tentativas no login** (`infrastructure/cache/tentativasLogin.js`, em memória): 5 senhas erradas no mesmo e-mail ou 30 falhas do mesmo IP em 15 min → `429` com `Retry-After` até a janela acabar (nem a senha certa passa). Login certo zera a contagem do e-mail. Atrás de proxy, configure `TRUST_PROXY`.
 
 ---
 
@@ -353,21 +361,23 @@ GET  /user/empresas           (Bearer) → empresas do usuário, com plano/modul
 
 Rotas usadas pela interface **SiriusWebFrontend**. Requerem `Authorization: Bearer <jwt>`; o schema faz parte do path e só é aceito se vinculado à conta do usuário (`checkSchema`).
 
+**Erros** (todas as rotas, via `interfaces/http/erroServidor.js`): erro inesperado responde `500 { erro: "Erro interno do servidor.", id: "SRV-…" }` — o detalhe (SQL, schema, host) fica **só no log do servidor**, procure pelo `id`. Erro de dado do Postgres vira mensagem traduzida (`23505` → 409 "Já existe um registro com esse valor.", `23503` → 409, `22P02`/`23502`/`22001`… → 400). Mensagens nossas (`isValidation` → 400, `isForbidden` → 403) passam como estão. Nas rotas do sync a chave é `message`, e o erro de um registro no push (`ReceberRegistro(s)`) continua detalhado quando é dado inválido do próprio registro.
+
 ### CRUD genérico de tabelas
 
 | Método | Rota | Gate | Descrição |
 |---|---|---|---|
-| GET | `/api/:schema/tabelas/:tabela/colunas` | schema | Introspecção de colunas (nome, tipo, is_generated) |
-| GET | `/api/:schema/tabelas/:tabela/next-pk` | schema | Próximo valor de PK disponível (`?pk=COLUNA`) |
-| GET | `/api/:schema/tabelas/:tabela/by-pk` | schema | Registro único por PK (`?pk=COL&value=VAL`) |
-| GET | `/api/:schema/tabelas/:tabela/distinct/:col` | schema | Valores distintos de uma coluna (máx. 200) |
+| GET | `/api/:schema/tabelas/:tabela/colunas` | módulo `r` | Introspecção de colunas (nome, tipo, is_generated) |
+| GET | `/api/:schema/tabelas/:tabela/next-pk` | módulo `r` | Próximo valor de PK disponível (`?pk=COLUNA`) |
+| GET | `/api/:schema/tabelas/:tabela/by-pk` | módulo `r` | Registro único por PK (`?pk=COL&value=VAL`) |
+| GET | `/api/:schema/tabelas/:tabela/distinct/:col` | módulo `r` | Valores distintos de uma coluna (máx. 200) |
 | GET | `/api/:schema/tabelas/:tabela` | módulo `r` | Listagem paginada com busca e filtros |
 | POST/PUT | `/api/:schema/tabelas/:tabela` | módulo `w` | Upsert — body: `{ pk, registro }` (pk pode ser array) |
 | DELETE | `/api/:schema/tabelas/:tabela` | módulo `w` | Deleção por PK — body: `{ pk, pkValores }` |
 
-O módulo é resolvido a partir da tabela (`PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`); tabelas fora desse mapa não são gateadas por módulo, só por `checkSchema`.
+O módulo é resolvido a partir da tabela (`domain/tabelaModulo.js`: `PRODUTOS`→`produtos`, `CLIENTES`→`clientes`, `PEDIDOS`/`PEDIDOS_ITENS`/`PEDIDOS_PARCELAS_PAGAMENTOS`→`pedidos`, `FORNECEDORES`→`fornecedores`, `MOVIMENTACOES`→`produtos_movimentacao`, `NOTAS_FISCAIS`/`NOTAS_FISCAIS_ITENS`→`notas_fiscais`, `LISTA_PRECOS`/`PRODUTOS_X_LISTA`→`lista_precos`, `A_RECEBER`/`A_PAGAR`→`financeiro`). Fora desse mapa (cadastros auxiliares: `AUX_*`, `FORMAS_DE_PAGAMENTOS`, `UNIDADES`, `TRANSPORTADORES`…): leitura liberada para quem é da empresa, gravação só pelo **dono** — exceto `TABELA_MODULO_ESCRITA` (`VENDEDORES` grava com `pedidos` 'w', cadastro rápido no Pedido). `TABELAS_INTERNAS` (`parametros`, `srv_id_map`, `sync_filiais`, `filiais_bloqueadas`, `registros_deletados`) dão **403 para todos**, até o dono — são controle da sincronização. Pelo isolamento de `search_path`, tudo isso só alcança tabelas da própria empresa.
 
-Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja`, `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
+Todas essas rotas aplicam o [escopo de loja](#roles) nas tabelas de loja (listagem, `by-pk`, `distinct`, gravação e exclusão). Parâmetros de listagem (`GET`): `page`/`pageSize` (máx. 500; `all=true` até 10.000), `q` (busca textual), `cols`, `statusCol`/`statusVal`, `sortCol`/`sortDir`, `filtroLoja` (só vale pro dono nas tabelas de loja), `filtros` (JSON: `{"GRUPO":"BEBIDAS"}` ou range `{"DATA":{"gte":"2024-01-01"}}`).
 
 O upsert incrementa `ID_ULTIMA_ATUALIZACAO_MATRIZ` via `seq_atualizacao_matriz` quando a coluna existe, propagando a alteração às filiais no próximo pull.
 
@@ -435,9 +445,12 @@ Módulo `faturamento` (leitura):
 
 | Método | Rota | Descrição |
 |---|---|---|
-| GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `sync_config` (módulo `configuracoes`) |
-| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`) |
+| GET/PUT | `/api/:schema/admin/sync-config` | Lê/edita `parametros` (era `sync_config`, módulo `configuracoes`) |
+| GET | `/api/:schema/sync-flags` | Flags de sync sem restrição de role (ex. `venda_saldo_negativo`, `usa_lista_precos` = parâmetro 117, `desconto_por_item` = parâmetro 88) |
 | GET | `/api/:schema/filiais` | Filiais registradas em `sync_filiais` |
+| GET | `/superadmin/verificacoes/tabelas` · `POST`/`GET /superadmin/empresas/:schema/verificacoes` · `GET /superadmin/verificacoes/:id` · `POST /superadmin/verificacoes/:id/correcoes` | Verificação servidor × Firebird por loja (superadmin) e correção das divergências (manter servidor / manter loja). O client atende via `/datasnap/rest/TSMVerificacao/{Pendente,Tabela,Detalhes,Concluir,Correcoes}` |
+| GET | `/api/:schema/listas-precos` | Listas de preço (`LISTA_PRECOS`) + `QTD_PRODUTOS` (módulo `lista_precos`) |
+| GET | `/api/:schema/listas-precos/:id/produtos` | Produtos da lista (JOIN com `PRODUTOS`), `q`/`page`/`pageSize`. Vincular/remover = CRUD em `PRODUTOS_X_LISTA` (hook calcula `PRECO` e barra duplicado). Criar/editar lista = CRUD em `LISTA_PRECOS` (hook valida, define A/R pelo sinal e recalcula o `PRECO` dos produtos quando o ajuste muda) |
 | GET | `/api/:schema/plano` | Plano atual + `modulos` (permissão efetiva de cada módulo para o usuário) |
 
 ---
@@ -470,7 +483,7 @@ Após iniciar o cliente, acesse `http://localhost:3001` (login por sessão-cooki
 | Página | Descrição |
 |---|---|
 | `/` — Conflitos | Registros alterados nos dois lados desde a última sync. Ações: **Manter local**, **Manter servidor**, **Mesclar campos** |
-| `/status` | Total no servidor vs. local, cursor sincronizado, pendentes de envio, por tabela |
+| `/status` | Cursor sincronizado × máximo do servidor e pendentes de envio, por tabela (abre na hora); os totais servidor/local (`COUNT(*)`) carregam depois via `/status/totais`, com cache de 1 min |
 | `/auditoria` | Comparação registro a registro servidor × filial; **Aplicar Matriz em Tudo** ou **Resolver um por um** |
 | `/configuracoes` | Ativa/desativa tabelas do sync sem reiniciar; carga inicial/parcial em lote |
 | `/parametros` | Parâmetros globais sincronizados bidirecionalmente entre PDVs |
@@ -502,12 +515,15 @@ A cada ciclo, para cada tabela ativa:
 
 ### Push (Filial → Servidor)
 
-1. Lê todos os registros de `SYNC_ALTERACOES_PENDENTES` para a tabela
-2. Para cada pendente: se não existe mais localmente, envia `{ deletar: true }`; senão envia para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistro` com a última versão conhecida
-3. O servidor compara versões: sem conflito → aplica e retorna `{ ok: true, idAtualizacaoMatriz }`; com conflito → `{ conflito: true, versaoServidor }`
-4. Registros enviados com sucesso saem de `SYNC_ALTERACOES_PENDENTES`
+1. Lê os registros de `SYNC_ALTERACOES_PENDENTES` da tabela (até 2000 por ciclo)
+2. Envia em lotes de até 100 registros / 2 MB para `POST /datasnap/rest/TSMSincronizacao/ReceberRegistros` (cada item com a última versão conhecida; registro que não existe mais localmente vai como `{ deletar: true }`). Servidor antigo sem essa rota (404) → cai para `ReceberRegistro`, um por um
+3. O servidor aplica cada registro isoladamente e devolve um resultado por item: `{ ok }`, `{ conflito: true, versaoServidor }` ou `{ erro }`
+4. Ok e conflito saem de `SYNC_ALTERACOES_PENDENTES`; erro fica na fila para a próxima tentativa
+5. Pausas (`sync-pausa.json`, sobrevivem a reinício): **Pausar sincronização** (barra superior) para envio e recebimento; **Pausar carga** (painel de envio em Configurações) segura só os pendentes da carga inicial/parcial — as alterações do dia a dia continuam subindo e o recebimento continua. Os pendentes da carga são gravados na fila com `TIMESTAMP_ALTERACAO = 1900-01-01` (`src/client/domain/filaCarga.js`); se o registro for alterado no Sirius durante a carga, o trigger grava a data real e ele vira alteração normal. **Parar** remove da fila só os pendentes da carga
 
 FKs marcadas `traduzirSrvId` são resolvidas para o `SRV_ID` do pai antes do envio; um pai ainda sem `SRV_ID` reenfileira a si mesmo automaticamente.
+
+No recebimento é o caminho inverso (SRV_ID → ID local). Se o pai ainda não existe no Firebird (ex.: produto criado na web enquanto um ciclo rodava, e a movimentação chegou antes dele), a tabela para nesse registro sem avançar o cursor e tenta de novo no próximo ciclo, que já começa pelos pais. Depois de 10 minutos sem o pai, aplica com o valor recebido, como antes.
 
 ---
 
@@ -521,32 +537,32 @@ Um conflito ocorre quando um registro foi alterado **tanto na filial quanto no s
 
 ### Passo 1 — `src/client/domain/tabelas.js`
 
-Respeitando a **ordem de FK** (tabelas pai antes das filhas):
+Pela factory `tabela({...})`, **depois** de toda tabela que ela referencia (ordem de FK):
 
 ```js
-{
+tabela({
   nome: 'NOME_DA_TABELA',
-  pk: 'ID_NOME_DA_TABELA',     // string simples ou array para PK composta: ['COL1', 'COL2']
-  temDelete: true,
-  filtroFilial: null,          // nome da coluna pra restringir por loja, ou null
-  endpoint: null,               // só se a tabela usa uma rota não-padrão
+  pk: 'ID_NOME_DA_TABELA',      // string simples ou array para PK composta: ['COL1', 'COL2']
   grupo: 'Cadastros',
+  filtroFilial: null,           // coluna que restringe por loja (ex.: 'ID_LOJA'), ou null
+  filtroFilialViaFK: null,      // tabela filha sem ID_LOJA: coluna FK pro pai (declarado antes, com filtroFilial) + entrada em `fks`
   generator: null,              // generator Firebird; null se a filial não cria registros
+  srvId: false,                 // true = PK global do servidor (SRV_ID), escrita de volta no Firebird
   colunaData: null,             // coluna de data de negócio p/ retenção de 2 anos; null = sem expiração
-}
+})
 ```
 
 **Grupos existentes:** `Auxiliares`, `Cadastros`, `Produtos`, `Clientes`, `Fornecedores`, `Transportadores`, `Vendedores`, `Kits`.
 
-### Passo 2 — `src/server/interfaces/http/routes/datasnap/sincronizacao.js`
+Rode `npx jest tabelas.invariantes` para conferir ordem de FK e o pai do `filtroFilialViaFK`.
 
-Adicione o nome ao `Set` `TABELAS_PERMITIDAS`.
+### Passo 2 — Servidor: nada a cadastrar
 
-### Passo 3 — Garantir a coluna no PostgreSQL
+O servidor aceita qualquer nome de tabela válido e a cria **no schema da empresa**: o client chama `GarantirTabela` ao iniciar, com os tipos reais das colunas do Firebird (cria a tabela, ou só as colunas que faltam), e o primeiro push também cria o que faltar, inferindo tipos pelos valores. `ID_ULTIMA_ATUALIZACAO_MATRIZ` e os triggers de sequência/deleção são criados junto.
 
-A tabela precisa de `ID_ULTIMA_ATUALIZACAO_MATRIZ INTEGER` com trigger incrementando via `nextval('schema.seq_atualizacao_matriz')`. Se a tabela **não existe** ainda, ela é criada automaticamente no primeiro push da filial, com tipos inferidos do primeiro registro.
+Se a tabela tem `colunaData` e filhas, inclua-a em `GRUPOS_LIMPEZA` (`src/limpeza.js`), filhas antes do pai.
 
-### Passo 4 — Reiniciar servidor e cliente
+### Passo 3 — Reiniciar servidor e cliente
 
 O `setup.js` cria o trigger `SYNC_NOME_DA_TABELA` no Firebird automaticamente.
 
@@ -594,6 +610,10 @@ No `.exe` empacotado, o cliente:
 - **Auto-atualiza** sozinho: verifica releases no GitHub a cada ciclo (throttled), aplica entre ciclos com jitter de 0–4h por loja, e tem rollback em duas camadas se a nova versão falhar ao iniciar. Desative com `AUTO_ATUALIZAR=false`.
 
 Push de uma tag `v*` dispara `.github/workflows/build.yml`, que builda os dois executáveis, roda um smoke test em cada um e publica um GitHub Release com os `.zip`.
+
+**Tag estável só da `main`.** O primeiro job do workflow (`verificar-origem`) falha — sem build nem release — se uma tag **sem sufixo** apontar para um commit que não está na `main`, porque ela viraria "Latest" e atualizaria todas as lojas. Fluxo: betas na `dev`; para lançar, juntar na `main` e criar a tag lá.
+
+**Versões beta (teste interno).** Tag com sufixo — `v1.6.0-beta.1`, `v1.6.0-beta.2`… — sai como **Pre-release** e não vira "Latest". As lojas consultam `/releases/latest`, que ignora pre-releases, então **nunca recebem beta**. Para testar, baixe o `client.exe` da beta no GitHub e instale à mão no PC de teste. Um client em versão beta **não atualiza sozinho**: a faixa roxa no topo da web UI (`localhost:3001`) oferece "Atualizar para a beta mais recente" e "Ir para a versão estável" (ou "Voltar…", com aviso, se a estável publicada for anterior à beta). Indo para a estável, o PC sai do modo de teste e volta a se atualizar sozinho como as lojas. A comparação de versões é semver: `1.6.0-beta.2 < 1.6.0-beta.10 < 1.6.0`.
 
 ---
 

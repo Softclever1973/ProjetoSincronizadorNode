@@ -23,7 +23,7 @@ function salvarEstado(estado) {
  *
  * - local: valor atual no Firebird deste PDV (null se vazio/ilegível)
  * - conhecido: último valor que este PDV sabe que está sincronizado (undefined na 1ª vez)
- * - servidor: valor atual em sync_config (undefined se o servidor ainda não tem valor)
+ * - servidor: valor atual em parametros (era sync_config; undefined se o servidor ainda não tem valor)
  *
  * Retorna { acao: 'push'|'pull'|'nenhuma', valor? }.
  * 'push'  -> enviar `valor` (= local) ao servidor via AtualizarParametros.

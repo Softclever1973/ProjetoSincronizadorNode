@@ -1,5 +1,6 @@
-// Mapeia parâmetros do Firebird (PARAMETROS.ID_PARAMETRO) pras chaves de sync_config
-// no servidor — fonte única usada tanto pelo ciclo de sync (index.js) quanto pela tela
+// Mapeia parâmetros do Firebird (PARAMETROS.ID_PARAMETRO) pras chaves da tabela
+// parametros (era sync_config) no servidor — fonte única usada tanto pelo ciclo de
+// sync (index.js) quanto pela tela
 // de Parâmetros (webui.js).
 // `global: true` marca parâmetros que devem convergir pro mesmo valor em todos os PDVs:
 // o servidor grava de volta no Firebird (setParam) quando outro PDV mudou primeiro.
@@ -10,6 +11,9 @@ const paramsSyncMap = [
   { fbId: 71,    chave: 'venda_saldo_negativo',        global: true  },
   { fbId: 45051, chave: 'modalidade_frete',            global: false },
   { fbId: 91,    chave: 'forma_preenchimento_pedido',  global: true  },
+  { fbId: 40000, chave: 'serie_nfe',                   global: true  },
+  { fbId: 117,   chave: 'usa_lista_precos',            global: false },
+  { fbId: 88,    chave: 'desconto_por_item',           global: false },
 ];
 
 module.exports = { paramsSyncMap };

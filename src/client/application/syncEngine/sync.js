@@ -7,7 +7,44 @@ const {
   buscarProdutosParaAtualizar,
 } = require('#client/http.js');
 const { salvarConflito } = require('#client/infrastructure/persistence/conflitos.js');
-const { getFKRefs, gerarNovoPK, renomearPKLocal } = require('#client/infrastructure/firebird/db-utils.js');
+const { getFKRefs, gerarNovoPK, renomearPKLocal, getColunasBlobTexto, lerRegistroLocal } = require('#client/infrastructure/firebird/db-utils.js');
+const { estaPausado } = require('./controle');
+const { camposDivergentes } = require('#client/domain/conflitos.js');
+
+// Traduz FKs do servidor (SRV_ID) pro PK local, pra comparar com o registro do Firebird.
+async function traduzirFKsServidor(db, configTabela, registro) {
+  let r = registro;
+  for (const fkRef of (configTabela.fks || [])) {
+    if (!fkRef.traduzirSrvId || !fkRef.pkRef || r[fkRef.coluna] == null) continue;
+    const rows = await query(db, `SELECT FIRST 1 ${fkRef.pkRef} FROM ${fkRef.tabela} WHERE SRV_ID = ?`, [r[fkRef.coluna]]).catch(() => []);
+    if (rows.length > 0 && rows[0][fkRef.pkRef] != null) r = { ...r, [fkRef.coluna]: rows[0][fkRef.pkRef] };
+  }
+  return r;
+}
+
+// Local e servidor iguais (descontando o que o próprio sync altera): não é conflito, só registra a versão.
+async function resolverSemDiferenca(db, configTabela, idLoja, local, registro, pkValor, log) {
+  const servidorTraduzido = await traduzirFKsServidor(db, configTabela, registro);
+  if (camposDivergentes(local, servidorTraduzido, { idLoja, configTabela }).length > 0) return false;
+  const versao = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+  if (versao) {
+    await execute(db,
+      `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+       VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+      [configTabela.nome, pkValor, versao]
+    ).catch(() => {});
+    await salvarCursor(db, configTabela.nome, versao, 0).catch(() => {});
+  }
+  log(`[${configTabela.nome}] pk=${pkValor} igual ao servidor — sem conflito, versão ${versao} registrada`);
+  return true;
+}
+
+// Registro local para comparar com o do servidor (BLOB de texto lido como string, como o push envia); [] se não existe.
+async function lerLocal(db, configTabela, pks, registro) {
+  const local = await lerRegistroLocal(db, configTabela.nome, pks, pks.map(p => registro[p]),
+    { naoLer: configTabela.blobsNaoEnviados || [] }).catch(() => null);
+  return local ? [local] : [];
+}
 
 // Cache de colunas computadas (read-only) por tabela — evita consultar toda vez
 const cacheColunasComputadas = {};
@@ -35,6 +72,24 @@ async function getTamanhosColunas(db, nomeTabela) {
   cacheTamanhosPorTabela[nomeTabela] = mapa;
   return mapa;
 }
+
+// Colunas DATE (12), TIME (13) e TIMESTAMP (35): ISO com fuso vindo do servidor vira horário local no pull.
+const cacheColunasDataHora = {};
+async function getColunasDataHora(db, nomeTabela) {
+  if (cacheColunasDataHora[nomeTabela]) return cacheColunasDataHora[nomeTabela];
+  const rows = await query(db, `
+    SELECT TRIM(rf.RDB$FIELD_NAME) AS COLUNA
+    FROM RDB$RELATION_FIELDS rf
+    JOIN RDB$FIELDS f ON f.RDB$FIELD_NAME = rf.RDB$FIELD_SOURCE
+    WHERE TRIM(rf.RDB$RELATION_NAME) = ? AND f.RDB$FIELD_TYPE IN (12, 13, 35)
+  `, [nomeTabela]);
+  const set = new Set(rows.map(r => (r.COLUNA || '').trim()));
+  cacheColunasDataHora[nomeTabela] = set;
+  return set;
+}
+
+// Formato do push: "1970-01-01T14:18:39.000Z" / "2026-10-14T03:00:00.000Z".
+const RE_ISO_COM_FUSO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})$/;
 
 /**
  * Retorna o conjunto de colunas computadas (COMPUTED BY) de uma tabela.
@@ -121,11 +176,13 @@ const COLUNAS_SEMPRE_IGNORADAS = new Set([
  * Filtra colunas computadas e colunas exclusivas da matriz automaticamente.
  */
 async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.log) {
-  const [computadas, existentes, naoNulas, tamanhos] = await Promise.all([
+  const [computadas, existentes, naoNulas, tamanhos, dataHora, blobsTexto] = await Promise.all([
     getColunasComputadas(db, nomeTabela),
     getColunasExistentes(db, nomeTabela),
     getColunasNaoNulas(db, nomeTabela),
     getTamanhosColunas(db, nomeTabela),
+    getColunasDataHora(db, nomeTabela),
+    getColunasBlobTexto(db, nomeTabela),
   ]);
   const pks = Array.isArray(pkColuna) ? pkColuna : [pkColuna];
 
@@ -135,6 +192,7 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     !computadas.has(k) &&
     existentes.has(k) &&
     !(registro[k] === null && naoNulas.has(k)) &&  // não escreve null em coluna NOT NULL
+    !(registro[k] == null && blobsTexto.has(k)) &&  // BLOB de texto null no servidor = nunca chegou lá; não apaga o da loja
     !(registro[k] === null && pks.some(p => p.toUpperCase() === k.toUpperCase()))  // não escreve null em coluna PK (NOT NULL via constraint, não via flag)
   );
 
@@ -151,6 +209,8 @@ async function upsertRegistro(db, nomeTabela, pkColuna, registro, log = console.
     // conteúdo cabe.
     if (typeof v === 'string') v = v.trimEnd();
     if (v === undefined || v === '') return null;
+    // Texto ISO direto num TIME/DATE é lido sem o fuso (14:18Z virava 14:18 local, +3h); como Date o driver usa o horário local.
+    if (typeof v === 'string' && dataHora.has(c) && RE_ISO_COM_FUSO.test(v)) return new Date(v);
     const maxLen = tamanhos[c];
     if (typeof v === 'string' && maxLen != null && v.length > maxLen) {
       log(`[AVISO] ${nomeTabela}.${c}: valor truncado de ${v.length} → ${maxLen} char(s) (servidor enviou: "${v}")`);
@@ -203,6 +263,19 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
   await execute(db, `DELETE FROM ${nomeTabela} WHERE ${where}`, valores);
 }
 
+// Generator que não existe no banco da filial é ignorado (avisa uma vez), sem criar nada no Firebird.
+const _generatorExiste = new Map();
+async function generatorExiste(db, nomeGenerator) {
+  if (!_generatorExiste.has(nomeGenerator)) {
+    const rows = await query(db,
+      'SELECT 1 AS OK FROM RDB$GENERATORS WHERE TRIM(RDB$GENERATOR_NAME) = ?', [nomeGenerator]).catch(() => null);
+    if (rows === null) return true; // falha na consulta: mantém o comportamento antigo
+    _generatorExiste.set(nomeGenerator, rows.length > 0);
+    if (!rows.length) console.warn(`[sync] generator '${nomeGenerator}' não existe no Firebird — ignorado`);
+  }
+  return _generatorExiste.get(nomeGenerator);
+}
+
 /**
  * Avança o generator Firebird para pelo menos `novoValor`, se necessário.
  * Evita que o próximo INSERT do Delphi reutilize um ID já ocupado após uma
@@ -210,12 +283,17 @@ async function deletarRegistro(db, nomeTabela, pkColuna, pkValor) {
  */
 async function sincronizarGenerator(db, nomeGenerator, novoValor) {
   if (!nomeGenerator || !Number.isFinite(novoValor)) return;
+  if (!(await generatorExiste(db, nomeGenerator))) return;
   const rows = await query(db, `SELECT GEN_ID(${nomeGenerator}, 0) AS ATUAL FROM RDB$DATABASE`);
   const atual = rows[0]?.ATUAL ?? 0;
   if (atual < novoValor) {
     await execute(db, `SET GENERATOR ${nomeGenerator} TO ${novoValor}`);
   }
 }
+
+// Registro cujo pai (FK por SRV_ID) ainda não chegou na filial: segura a tabela sem avançar o cursor por até 10 min.
+const ESPERA_PAI_MS = 10 * 60 * 1000;
+const _esperandoPai = new Map(); // "tabela|pk|versão" → desde (ms)
 
 /**
  * Sincroniza uma tabela completa: busca atualizações no servidor e aplica no banco local.
@@ -227,7 +305,8 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
   let totalAtualizados = 0;
   let continuar = true;
 
-  while (continuar) {
+  // Cursor é salvo por registro, então interromper no meio do lote retoma do ponto certo.
+  while (continuar && !estaPausado()) {
     const cursor = await getUltimaAtualizacao(db, nome);
 
     let registros;
@@ -248,12 +327,14 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     }
 
     log(`[${nome}] recebendo ${registros.length} registro(s) do servidor`);
+    let aguardandoPai = false;
 
     // Suprime o trigger de SYNC_ALTERACOES_PENDENTES durante o pull para evitar
     // loop circular onde registros recebidos do servidor são re-enfileirados para envio.
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
 
     for (const registro of registros) {
+      if (estaPausado()) break;
       const pks = Array.isArray(pk) ? pk : [pk];
       const pkValor = pks.map(p => String(registro[p] ?? '')).join('|');
 
@@ -275,11 +356,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
           if (versaoConhecida !== null && versaoConhecida.length === 0) {
             // ── Colisão de PK: dois registros criados independentemente com o mesmo PK ──
-            const wherePartsLocal = pks.map(p => `${p} = ?`).join(' AND ');
-            const existeLocal = await query(db,
-              `SELECT * FROM ${nome} WHERE ${wherePartsLocal}`,
-              pks.map(p => registro[p])
-            ).catch(() => []);
+            const existeLocal = await lerLocal(db, configTabela, pks, registro);
 
             const novoIdColisao = registro.ID_ULTIMA_ATUALIZACAO_MATRIZ;
 
@@ -290,6 +367,9 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
               log(`[${nome}] Registro ${pkValor} deletado localmente — aguardando push de deleção`);
               continue;
             }
+
+            // Mesmo registro dos dois lados (ex. após carga inicial): o push pendente segue normal.
+            if (await resolverSemDiferenca(db, configTabela, idLoja, existeLocal[0], registro, pkValor, log)) continue;
 
             // Colisão real: usuário criou um registro e o servidor também criou um com o mesmo PK.
             // Não há precedência automática — salva conflito para resolução manual.
@@ -317,11 +397,10 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
             }
 
             // Servidor tem versão mais nova E cliente tem mudança pendente → conflito real.
-            const whereParts  = pks.map(p => `${p} = ?`).join(' AND ');
-            const whereValores = pks.map(p => registro[p]);
-            const localRows = await query(db,
-              `SELECT * FROM ${nome} WHERE ${whereParts}`, whereValores
-            ).catch(() => []);
+            const localRows = await lerLocal(db, configTabela, pks, registro);
+
+            // Servidor chegou no mesmo estado do local: nada a decidir, o push pendente segue normal.
+            if (localRows.length > 0 && await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;
 
             if (localRows.length > 0) {
               salvarConflito({
@@ -363,13 +442,10 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         // vazia) mas já existe localmente é dado que não passou pelo push — salva
         // conflito em vez de sobrescrever.
         if (versaoConhecida !== null && versaoConhecida.length === 0) {
-          const whereLocal = pks.map(p => `${p} = ?`).join(' AND ');
-          const localRows = await query(db,
-            `SELECT * FROM ${nome} WHERE ${whereLocal}`,
-            pks.map(p => registro[p])
-          ).catch(() => []);
+          const localRows = await lerLocal(db, configTabela, pks, registro);
 
           if (localRows.length > 0) {
+            if (await resolverSemDiferenca(db, configTabela, idLoja, localRows[0], registro, pkValor, log)) continue;
             salvarConflito({
               tabela: nome,
               pk,
@@ -407,6 +483,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
         // Traduz FKs que armazenam SRV_ID pro PK local — registros criados via web
         // referenciam PRODUTOS pelo SRV_ID, não pelo ID_PRODUTO nativo do Firebird
         // (ex: MOVIMENTACOES.ID_PRODUTO).
+        let paiAusente = null;
         for (const fkRef of (configTabela.fks || [])) {
           if (!fkRef.traduzirSrvId || !fkRef.pkRef) continue;
           const valFk = registroParaUpsert[fkRef.coluna];
@@ -417,8 +494,25 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
           if (localRows.length > 0 && localRows[0][fkRef.pkRef] != null) {
             log(`[${nome}] FK ${fkRef.coluna}: SRV_ID=${valFk} → ${fkRef.pkRef}=${localRows[0][fkRef.pkRef]}`);
             registroParaUpsert = { ...registroParaUpsert, [fkRef.coluna]: localRows[0][fkRef.pkRef] };
+          } else if (!paiAusente) {
+            paiAusente = { ...fkRef, valor: valFk };
           }
         }
+
+        // Pai criado logo antes (ex.: produto novo na web + movimentação) pode chegar só no próximo ciclo.
+        const chaveEspera = `${nome}|${pkValor}|${registro.ID_ULTIMA_ATUALIZACAO_MATRIZ}`;
+        if (paiAusente) {
+          const desde = _esperandoPai.get(chaveEspera) ?? Date.now();
+          if (Date.now() - desde < ESPERA_PAI_MS) {
+            _esperandoPai.set(chaveEspera, desde);
+            log(`[${nome}] pk=${pkValor} aguardando ${paiAusente.tabela} SRV_ID=${paiAusente.valor} chegar na filial — tenta de novo no próximo ciclo`);
+            aguardandoPai = true;
+            break;
+          }
+          // Esgotou a espera: segue como antes (valor recebido, pode ser dado antigo com ID local).
+          log(`[${nome}] pk=${pkValor} ${paiAusente.tabela} SRV_ID=${paiAusente.valor} não chegou em ${ESPERA_PAI_MS / 60000} min — aplicando com o valor recebido`);
+        }
+        _esperandoPai.delete(chaveEspera);
 
         // Servidor guarda QTDE sempre positivo (direção via TP.MOV); o Firebird local
         // (Sirius Delphi) espera negativo em Saídas — sem isso o ERP soma ao saldo em
@@ -509,6 +603,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
 
     // Reativa o trigger de SYNC_ALTERACOES_PENDENTES ao fim do lote
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', NULL); END`).catch(() => { });
+    if (aguardandoPai) break;
   }
 
   if (totalAtualizados > 0) {
@@ -534,7 +629,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
   let totalDeletados = 0;
   let continuarDelete = true;
 
-  while (continuarDelete) {
+  while (continuarDelete && !estaPausado()) {
     const cursorDelete = await getUltimaDelecao(db, nome);
 
     let registrosDeletados;
@@ -553,6 +648,7 @@ async function sincronizarTabela(db, baseURI, idLoja, configTabela, log = consol
     await execute(db, `EXECUTE BLOCK AS BEGIN RDB$SET_CONTEXT('USER_SESSION', 'SYNC_SKIP', '1'); END`).catch(() => { });
 
     for (const rd of registrosDeletados) {
+      if (estaPausado()) break;
       try {
         await deletarRegistro(db, nome, pk, rd.ID_REGISTROS);
         totalDeletados++;
@@ -583,6 +679,9 @@ function _resetCachesParaTeste() {
   for (const key of Object.keys(cacheColunasExistentes)) delete cacheColunasExistentes[key];
   for (const key of Object.keys(cacheColunasNaoNulas)) delete cacheColunasNaoNulas[key];
   for (const key of Object.keys(cacheTamanhosPorTabela)) delete cacheTamanhosPorTabela[key];
+  for (const key of Object.keys(cacheColunasDataHora)) delete cacheColunasDataHora[key];
+  _generatorExiste.clear();
+  _esperandoPai.clear();
 }
 
-module.exports = { sincronizarTabela, _resetCachesParaTeste };
+module.exports = { sincronizarTabela, COLUNAS_SEMPRE_IGNORADAS, _resetCachesParaTeste };

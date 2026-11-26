@@ -62,7 +62,7 @@ node scripts/create-empresa.js --schema=empresa_jb --token=TOKEN_NOVO [--nome="J
 
 | Parâmetro | Obrigatório | Descrição |
 |-----------|:-----------:|-----------|
-| `--schema=NAME` | Sim | Nome do schema PostgreSQL. Apenas letras minúsculas, números e underscore. Ex: `empresa_jb` |
+| `--schema=NAME` | Sim | Nome do schema PostgreSQL. Apenas letras minúsculas, números e underscore; `public`, `information_schema` e `pg_*` são reservados. Ex: `empresa_jb` |
 | `--token=STRING` | Sim | Token de sincronização. Deve ser único no sistema. |
 | `--nome=TEXT` | Não | Nome de exibição da empresa. Padrão: mesmo que `--schema` |
 
@@ -70,7 +70,7 @@ node scripts/create-empresa.js --schema=empresa_jb --token=TOKEN_NOVO [--nome="J
 
 - Schema isolado com o nome informado
 - Sequências: `seq_atualizacao_matriz`, `seq_srv_id`
-- Tabelas: `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map`
+- Tabelas: `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map`
 - Funções de trigger: `fn_seq_atualizacao()`, `fn_registrar_delecao()`
 - Registro em `public.sync_tenants`
 
@@ -147,7 +147,7 @@ node scripts/reset-empresa.js --schema=empresa_jb ^
 | Parte | Ação |
 |-------|------|
 | PostgreSQL — tabelas de dados | `DROP TABLE ... CASCADE` para todas as tabelas fora da infraestrutura (PRODUTOS, CLIENTES, etc.) |
-| PostgreSQL — infraestrutura | `TRUNCATE` de `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `sync_config`, `srv_id_map` |
+| PostgreSQL — infraestrutura | `TRUNCATE` de `filiais_bloqueadas`, `registros_deletados`, `sync_filiais`, `parametros` (era `sync_config`), `srv_id_map` |
 | PostgreSQL — sequências | `seq_atualizacao_matriz` e `seq_srv_id` reiniciadas em 1 |
 | Firebird | `DELETE` de `SYNC_ALTERACOES_PENDENTES`, `SYNC_VERSOES_SERVIDOR`, `SYNC_ERROS` |
 | Firebird | `ULTIMOS_REGISTROS_MATRIZ` cursores zerados |
@@ -269,6 +269,8 @@ Retorna status de sync de todas as tabelas do tenant: total de registros e ID m�
 ```bash
 curl "http://localhost:8080/datasnap/rest/TSMSincronizacao/StatusTabelas?token=xyz"
 ```
+
+Parâmetros opcionais: `idLoja` + `filtros` (JSON `[{ nome, filtroFilial, filtroFilialViaFK }]`) restringem à loja; `contar=0` pula o `COUNT(*)` (volta `total: null`, só `maxId`) — é assim que a página Status do client abre rápido em banco grande, buscando os totais depois.
 
 Resposta:
 ```json

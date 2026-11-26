@@ -4,10 +4,13 @@ const bcrypt   = require('bcryptjs');
 const { pool, withTenantConnection, query, execute } = require('#server/infrastructure/db.js');
 const { initializeTenantSchema } = require('#server/infrastructure/db-init.js');
 const { planoValido, listarPlanos, PLANO_PADRAO } = require('#server/domain/planos.js');
+const { schemaTenantValido } = require('#server/domain/validacao.js');
 const { MODULOS, MODULOS_DEF, NIVEL_VALIDO } = require('#server/domain/modulos.js');
 const { recarregarPermissoes } = require('#server/infrastructure/cache/permissoesCache.js');
+const sessoes = require('#server/infrastructure/cache/sessoesCache.js');
 const { colunasTabela, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
 const TABELAS = require('#client/domain/tabelas.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 // ── GET /superadmin/empresas ──────────────────────────────────────────────────
 // Lista todas as empresas com contagem de usuários vinculados.
@@ -24,7 +27,7 @@ router.get('/empresas', async (req, res) => {
     `);
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -73,7 +76,7 @@ router.get('/permissoes', async (req, res) => {
     }
     res.json({ modulos, planos, roles });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -95,7 +98,7 @@ router.put('/permissoes/plano', async (req, res) => {
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -119,7 +122,75 @@ router.put('/permissoes/role', async (req, res) => {
     await recarregarPermissoes();
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
+  }
+});
+
+// ── GET /superadmin/empresas/:schema/permissoes ───────────────────────────────
+// 3ª camada de permissão: overrides específicos de UMA empresa, por role (schema, role,
+// modulo), que vencem plano×role pro módulo marcado. Ausência de linha = sem override
+// (herda plano×role normalmente pra aquele role). Frontend já tem a lista completa de
+// módulos via GET /permissoes — aqui só as linhas.
+
+router.get('/empresas/:schema/permissoes', async (req, res) => {
+  const { schema } = req.params;
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    const { rows } = await pool.query(
+      'SELECT role, modulo, nivel FROM public.permissoes_empresa WHERE schema_name = $1 ORDER BY role, modulo',
+      [schema]
+    );
+    res.json({ overrides: rows });
+  } catch (e) {
+    erroServidor(res, e);
+  }
+});
+
+// ── PUT /superadmin/empresas/:schema/permissoes ───────────────────────────────
+// Upsert de um override (schema, role, modulo) -> nivel.
+
+router.put('/empresas/:schema/permissoes', async (req, res) => {
+  const { schema } = req.params;
+  const { role, modulo, nivel } = req.body;
+  if (!ROLES_VALIDOS_PERMISSOES.includes(role)) return res.status(400).json({ erro: `Role inválido: ${role}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+  if (!NIVEL_VALIDO.has(nivel)) return res.status(400).json({ erro: `Nível inválido: ${nivel}` });
+
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await pool.query(
+      `INSERT INTO public.permissoes_empresa (schema_name, role, modulo, nivel) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (schema_name, role, modulo) DO UPDATE SET nivel = EXCLUDED.nivel`,
+      [schema, role, modulo, nivel]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    erroServidor(res, e);
+  }
+});
+
+// ── DELETE /superadmin/empresas/:schema/permissoes/:role/:modulo ──────────────
+// Remove o override, revertendo o módulo pra herdar plano×role normalmente (pra esse role).
+
+router.delete('/empresas/:schema/permissoes/:role/:modulo', async (req, res) => {
+  const { schema, role, modulo } = req.params;
+  if (!ROLES_VALIDOS_PERMISSOES.includes(role)) return res.status(400).json({ erro: `Role inválido: ${role}` });
+  if (!MODULOS.includes(modulo)) return res.status(400).json({ erro: `Módulo inválido: ${modulo}` });
+
+  try {
+    if (!(await validarEmpresaExiste(schema))) return res.status(404).json({ erro: 'Empresa não encontrada' });
+
+    await pool.query(
+      'DELETE FROM public.permissoes_empresa WHERE schema_name = $1 AND role = $2 AND modulo = $3',
+      [schema, role, modulo]
+    );
+    await recarregarPermissoes();
+    res.json({ ok: true });
+  } catch (e) {
+    erroServidor(res, e);
   }
 });
 
@@ -135,8 +206,8 @@ router.post('/empresas', async (req, res) => {
   if (!dono?.nome || !dono?.email || !dono?.senha)
     return res.status(400).json({ erro: 'dono.nome, email e senha são obrigatórios' });
 
-  if (!/^[a-z_][a-z0-9_]*$/.test(empresa.schema))
-    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore' });
+  if (!schemaTenantValido(empresa.schema))
+    return res.status(400).json({ erro: 'schema inválido: use apenas letras minúsculas, números e underscore (public/pg_* são reservados)' });
 
   if (dono.senha.length < 6)
     return res.status(400).json({ erro: 'Senha do dono deve ter no mínimo 6 caracteres' });
@@ -193,7 +264,7 @@ router.post('/empresas', async (req, res) => {
     res.status(201).json({ ok: true, schema: empresa.schema, idUsuario: novoUsuario.id });
   } catch (e) {
     await client.query('ROLLBACK');
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -217,7 +288,7 @@ router.patch('/empresas/:schema/ativo', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -239,7 +310,7 @@ router.put('/empresas/:schema/plano', async (req, res) => {
     if (rowCount === 0) return res.status(404).json({ erro: 'Empresa não encontrada' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -248,7 +319,7 @@ router.put('/empresas/:schema/plano', async (req, res) => {
 // Requer: body.confirmar === schema E body.senhaReset === RESET_SECRET.
 
 const TABELAS_INFRA = new Set([
-  'filiais_bloqueadas', 'registros_deletados', 'sync_filiais', 'sync_config', 'srv_id_map',
+  'filiais_bloqueadas', 'registros_deletados', 'sync_filiais', 'parametros', 'srv_id_map',
 ]);
 
 router.post('/empresas/:schema/reset', async (req, res) => {
@@ -325,7 +396,7 @@ router.post('/empresas/:schema/reset', async (req, res) => {
 
     res.json({ ok: true, tabelasRemovidas: tabelasDados, comandosFirebird });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
   }
@@ -350,7 +421,7 @@ router.get('/empresas/:schema/filiais', async (req, res) => {
 
     res.json(rows.map(r => ({ id: r.ID_LOJA, nome: r.NOME || `Loja ${r.ID_LOJA}` })));
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -489,7 +560,7 @@ router.get('/empresas/:schema/dados-empresa', async (req, res) => {
     const dados = Object.fromEntries(CAMPOS_EMPRESA.map(c => [c, registro?.[c] ?? null]));
     res.json({ existe: !!registro, idEmpresa: registro?.ID_EMPRESA ?? null, ...dados });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -526,7 +597,7 @@ router.put('/empresas/:schema/dados-empresa', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -561,7 +632,7 @@ router.get('/empresas/:schema/dados-filiais', async (req, res) => {
 
     res.json(lista);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -608,7 +679,7 @@ router.put('/empresas/:schema/dados-filiais/:idLoja', async (req, res) => {
 
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -633,7 +704,7 @@ router.get('/usuarios', async (req, res) => {
     `);
     res.json(rows);
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -686,9 +757,50 @@ router.post('/usuarios', async (req, res) => {
     res.status(201).json({ ok: true, id: novoUsuario.id });
   } catch (e) {
     await client.query('ROLLBACK');
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   } finally {
     client.release();
+  }
+});
+
+// ── GET /superadmin/sessoes ───────────────────────────────────────────────────
+// Usuários com atividade nos últimos 2 minutos (memória do processo; zera ao reiniciar).
+router.get('/sessoes', async (req, res) => {
+  try {
+    const online = sessoes.listarOnline();
+    if (!online.length) return res.json([]);
+    const { rows } = await pool.query(
+      'SELECT id, email, nome, is_super_admin FROM public.usuarios WHERE id = ANY($1::int[])',
+      [online.map(s => s.id)]
+    );
+    const porId = new Map(rows.map(r => [r.id, r]));
+    res.json(online.map(s => ({
+      id:           s.id,
+      email:        porId.get(s.id)?.email ?? null,
+      nome:         porId.get(s.id)?.nome ?? s.nome ?? null,
+      isSuperAdmin: porId.get(s.id)?.is_super_admin === true,
+      schema:       s.schema,
+      ip:           s.ip,
+      userAgent:    s.userAgent,
+      ultimo:       new Date(s.ultimo).toISOString(),
+      voce:         s.id === req.userId,
+    })));
+  } catch (e) {
+    erroServidor(res, e);
+  }
+});
+
+// ── POST /superadmin/usuarios/:id/desconectar ─────────────────────────────────
+// Derruba todas as sessões do usuário (não bloqueia novo login — para isso, desativar o usuário).
+router.post('/usuarios/:id/desconectar', async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(400).json({ erro: 'id inválido' });
+  if (id === req.userId) return res.status(400).json({ erro: 'Você não pode desconectar a si mesmo' });
+  try {
+    if (!await sessoes.revogarSessoes(id)) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    res.json({ ok: true });
+  } catch (e) {
+    erroServidor(res, e);
   }
 });
 
@@ -713,7 +825,7 @@ router.patch('/usuarios/:id/senha', async (req, res) => {
     if (!rowCount) return res.status(404).json({ erro: 'Usuário não encontrado' });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

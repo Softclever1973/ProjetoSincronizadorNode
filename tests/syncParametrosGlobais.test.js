@@ -2,7 +2,7 @@
 // carregar ../db real (exige Firebird real no require) e ../parametrosGlobaisState real
 // (escreve parametros-sync.json em disco).
 jest.mock('../src/client/infrastructure/firebird/db', () => ({
-  getParam: jest.fn(),
+  getParamDetalhado: jest.fn(),
   setParam: jest.fn(),
 }));
 jest.mock('../src/client/http', () => ({
@@ -15,12 +15,12 @@ jest.mock('../src/client/parametrosGlobaisState', () => ({
   decidirAcao: jest.requireActual('../src/client/parametrosGlobaisState').decidirAcao,
 }));
 
-const { getParam, setParam } = require('../src/client/infrastructure/firebird/db');
+const { getParamDetalhado, setParam } = require('../src/client/infrastructure/firebird/db');
 const { buscarParametros, atualizarParametros } = require('../src/client/http');
 const { lerEstado, salvarEstado } = require('../src/client/parametrosGlobaisState');
 const { syncParametrosGlobais } = require('../src/client/application/syncParametrosGlobais');
 
-const db = {}; // opaco pro módulo — só repassado pra getParam/setParam mockados
+const db = {}; // opaco pro módulo — só repassado pra getParamDetalhado/setParam mockados
 const baseURI = 'http://servidor.teste';
 const noopLog = () => {};
 
@@ -29,8 +29,11 @@ const noopLog = () => {};
 const FB_IDS = { utilizar_codigo_interno: 67, codigo_interno_unico: 122, venda_saldo_negativo: 71, modalidade_frete: 45051, forma_preenchimento_pedido: 91 };
 
 function mockFirebird(valoresPorFbId) {
-  getParam.mockImplementation((_db, fbId) => Promise.resolve(valoresPorFbId[fbId] ?? null));
+  getParamDetalhado.mockImplementation((_db, fbId) => Promise.resolve({ valor: valoresPorFbId[fbId] ?? '', nomeDaTabela: null, descricao: null, observacoes: null }));
 }
+
+// O push manda { valor, id_parametro, ...metadados } por chave, não a string crua.
+const comValor = valor => expect.objectContaining({ valor });
 
 function novoContexto() {
   return { parametrosSincronizados: {} };
@@ -67,7 +70,7 @@ describe('syncParametrosGlobais — parâmetro global', () => {
     const contexto = novoContexto();
     await syncParametrosGlobais(db, baseURI, contexto, noopLog);
 
-    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, { venda_saldo_negativo: 'N' });
+    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, { venda_saldo_negativo: comValor('N') });
     expect(setParam).not.toHaveBeenCalled();
     expect(contexto.parametrosSincronizados.venda_saldo_negativo).toMatchObject({ valor: 'N', origem: 'push', status: 'ok' });
   });
@@ -117,7 +120,7 @@ describe('syncParametrosGlobais — parâmetro global', () => {
     const contexto = novoContexto();
     await expect(syncParametrosGlobais(db, baseURI, contexto, noopLog)).resolves.toBeUndefined();
     // sem servidor conhecido e sem estado anterior, local != conhecido(undefined) => push
-    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, { venda_saldo_negativo: 'S' });
+    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, { venda_saldo_negativo: comValor('S') });
   });
 });
 
@@ -128,7 +131,7 @@ describe('syncParametrosGlobais — parâmetro não-global (comportamento legado
     const contexto = novoContexto();
     await syncParametrosGlobais(db, baseURI, contexto, noopLog);
 
-    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, expect.objectContaining({ modalidade_frete: 'S' }));
+    expect(atualizarParametros).toHaveBeenCalledWith(baseURI, expect.objectContaining({ modalidade_frete: comValor('S') }));
     expect(setParam).not.toHaveBeenCalledWith(db, FB_IDS.modalidade_frete, expect.anything());
   });
 

@@ -7,6 +7,7 @@ const jwt = require('jsonwebtoken');
 const adminRouter = require('../src/server/interfaces/http/routes/api/admin');
 const { pool } = require('../src/server/infrastructure/db');
 const { PLANO_PADRAO } = require('../src/server/domain/planos');
+const { nivelEsperado } = require('./helpers/permissoesReais');
 
 const SCHEMA = 'empresa_teste_plano_info';
 
@@ -14,9 +15,7 @@ const app = express();
 app.use(express.json());
 app.use('/api', adminRouter);
 
-// role 'dono' de propósito: é 'rw' em todo módulo na matriz role×módulo, então
-// `modulos.financeiro` do response passa a refletir só a dimensão de plano que este
-// teste quer isolar (permissão efetiva = min(plano, role) = plano, quando role já é o máximo).
+// Esperado calculado da matriz gravada no banco (nivelEsperado): a tela do superadmin a edita.
 function tokenComPlanoClaim(planoNoClaim) {
   return jwt.sign(
     { id: 999999, nome: 'Teste', schemas: [SCHEMA], roles: { [SCHEMA]: 'dono' }, lojas: {}, vendedores: {}, planos: { [SCHEMA]: planoNoClaim } },
@@ -52,11 +51,11 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('DIAMANTE1');
-    expect(res.body.modulos.exportacao).toBe('rw');
-    expect(res.body.modulos.financeiro).toBe('rw');
+    expect(res.body.modulos.exportacao).toBe(await nivelEsperado('DIAMANTE1', 'dono', 'exportacao'));
+    expect(res.body.modulos.financeiro).toBe(await nivelEsperado('DIAMANTE1', 'dono', 'financeiro'));
   });
 
-  test('plano abaixo de Safira não libera o módulo financeiro nem o de exportação', async () => {
+  test('módulos seguem o plano do banco, não o do claim (OURO1 no banco, DIAMANTE1 no claim)', async () => {
     await setPlanoNoBanco('OURO1');
 
     const res = await request(app)
@@ -65,8 +64,8 @@ describe('GET /api/:schema/plano', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.plano).toBe('OURO1');
-    expect(res.body.modulos.exportacao).toBe('--');
-    expect(res.body.modulos.financeiro).toBe('--');
+    expect(res.body.modulos.exportacao).toBe(await nivelEsperado('OURO1', 'dono', 'exportacao'));
+    expect(res.body.modulos.financeiro).toBe(await nivelEsperado('OURO1', 'dono', 'financeiro'));
   });
 
   test('mudança de plano no banco reflete na próxima chamada, mesmo com o mesmo JWT (sem reemitir token)', async () => {
@@ -75,13 +74,13 @@ describe('GET /api/:schema/plano', () => {
 
     const antes = await request(app).get(`/api/${SCHEMA}/plano`).set('Authorization', token);
     expect(antes.body.plano).toBe('LITE1');
-    expect(antes.body.modulos.financeiro).toBe('--');
+    expect(antes.body.modulos.financeiro).toBe(await nivelEsperado('LITE1', 'dono', 'financeiro'));
 
     await setPlanoNoBanco('SAFIRA1');
 
     const depois = await request(app).get(`/api/${SCHEMA}/plano`).set('Authorization', token);
     expect(depois.body.plano).toBe('SAFIRA1');
-    expect(depois.body.modulos.financeiro).toBe('rw');
+    expect(depois.body.modulos.financeiro).toBe(await nivelEsperado('SAFIRA1', 'dono', 'financeiro'));
   });
 
   test('schema sem linha em sync_tenants cai para o plano padrão', async () => {

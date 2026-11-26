@@ -4,8 +4,10 @@ jest.mock('../src/client/infrastructure/firebird/db', () => ({
   query: jest.fn(),
   execute: jest.fn(),
 }));
+// enviarRegistros responde 404 (servidor antigo) → estes testes exercitam o envio unitário.
 jest.mock('../src/client/http', () => ({
   enviarRegistro: jest.fn(),
+  enviarRegistros: jest.fn(() => Promise.reject(Object.assign(new Error('404'), { status: 404 }))),
 }));
 jest.mock('../src/client/infrastructure/persistence/conflitos', () => ({
   atualizarOuSalvarConflito: jest.fn(),

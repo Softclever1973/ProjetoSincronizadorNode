@@ -6,6 +6,7 @@
 const { query } = require('#server/infrastructure/db.js');
 const { COLS_DATA_PEDIDO } = require('#server/domain/validacao.js');
 const { colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { lojaObrigatoria } = require('#server/domain/escopoLoja.js');
 
 /**
  * Resolve o ID da loja efetivo para uma query, respeitando o role do usuário.
@@ -23,7 +24,11 @@ const { colunasTabela } = require('#server/infrastructure/repositories/colunasRe
  */
 function resolveIdLoja(req, schema, { donoPodemFiltrar = false } = {}) {
   const isDono = req.userRoles?.[schema] === 'dono';
-  if (!isDono) return req.userLojas?.[schema] ?? null;
+  if (!isDono) {
+    // Não-dono sem loja no vínculo não vê nada (-1 não é loja), em vez de ver todas.
+    const loja = lojaObrigatoria(req, schema);
+    return Number.isNaN(loja) ? -1 : loja;
+  }
   if (donoPodemFiltrar && req.query.filtroLoja) {
     const parsed = parseInt(req.query.filtroLoja, 10);
     return Number.isInteger(parsed) ? parsed : null;

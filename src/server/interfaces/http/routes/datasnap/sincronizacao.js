@@ -5,8 +5,11 @@ const { withTenantConnection, query, execute, isMissingTableError, pool } = requ
 const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
 const { planoValido } = require('#server/domain/planos.js');
 const { colunasCache, getColunasServidor, getPkServidor } = require('#server/infrastructure/cache/tenantCache.js');
-const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { COLUNAS_IGNORADAS_SERVIDOR, criarTabelaSeNecessario, colunasTabela } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { registrarAuditLog } = require('#server/infrastructure/repositories/auditLogRepository.js');
+const TABELAS = require('#client/domain/tabelas.js');
+const { NOME_VALIDO } = require('#server/domain/validacao.js');
+const { erroServidor, erroSeguro, erroValidacao, ehErroDeDado } = require('#server/interfaces/http/erroServidor.js');
 const {
   alocarSrvId,
   processarDelecao,
@@ -25,6 +28,27 @@ function normalizarBlobs(row) {
       Buffer.isBuffer(v) ? v.toString('utf8') : (typeof v === 'function' ? null : v),
     ])
   );
+}
+
+/**
+ * Garante que uma coluna usada em filtro dinâmico (filtroFilial/filtroFilialViaFK) existe na
+ * tabela antes de montar o WHERE. Sem isso, um cliente novo cujo primeiro registro sincronizado
+ * não trouxe esse campo (NULL/ausente só naquela linha, então a coluna nunca nasceu na criação
+ * automática da tabela) trava o pull pra sempre — foi exatamente esse o sintoma em produção
+ * (NOTAS_FISCAIS.ID_LOJA). Cria a coluna em vez de simplesmente pular o filtro: pular trataria
+ * "coluna ausente" como "sem restrição de loja", vazando dados de outra loja pro cliente.
+ */
+async function garantirColunaFiltro(db, nomeTabela, schemaName, coluna, colunasAtuais) {
+  if (!coluna || colunasAtuais.has(coluna)) return colunasAtuais;
+  const tipo = /^(id_.+|srv_id)$/i.test(coluna) ? 'NUMERIC' : 'TIMESTAMP';
+  try {
+    await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${coluna} ${tipo}`);
+  } catch (e) {
+    if (isMissingTableError(e)) return colunasAtuais;
+    throw e;
+  }
+  colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+  return getColunasServidor(db, nomeTabela, schemaName);
 }
 
 async function registrarFilial(db, idLoja, nomeFilial) {
@@ -51,6 +75,15 @@ function validarNomeTabela(nomeTabela) {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(nomeTabela)) return false;
   if (TABELAS_INTERNAS.has(nomeTabela)) return false;
   return true;
+}
+
+// Pai do filtroFilialViaFK vem do tabelas.js (servidor decide, client.exe antigo não precisa mudar); PEDIDOS se desconhecida.
+const PAI_FILTRO_VIA_FK = new Map(TABELAS.filter(t => t.filtroFilialViaTabela).map(t => [t.nome, t.filtroFilialViaTabela]));
+
+// Filtro de loja de tabela filha: a FK aponta pra PK de mesmo nome no pai, que tem ID_LOJA.
+function sqlFiltroViaFK(nomeTabela, colunaFK, idxParam) {
+  const pai = PAI_FILTRO_VIA_FK.get(nomeTabela) || 'PEDIDOS';
+  return `${colunaFK} IN (SELECT ${colunaFK} FROM ${pai} WHERE ID_LOJA = $${idxParam})`;
 }
 
 /**
@@ -106,8 +139,8 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
       let filtroFilialEfetivo = filtroFilial;
       if (nomeTabela === 'CLIENTES') {
         try {
-          const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
-          filtroFilialEfetivo = cfg?.VALOR ?? null;
+          const [cfg] = await query(db, `SELECT parametro FROM parametros WHERE chave = $1`, ['filtro_filial_clientes']);
+          filtroFilialEfetivo = cfg?.PARAMETRO ?? null;
           if (filtroFilialEfetivo && !/^[A-Za-z_][A-Za-z0-9_]*$/.test(filtroFilialEfetivo)) {
             filtroFilialEfetivo = null;
           }
@@ -116,25 +149,25 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
         }
       }
 
+      let colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
+
       if (filtroFilialEfetivo && idLoja) {
+        colunas = await garantirColunaFiltro(db, nomeTabela, req.schemaName, filtroFilialEfetivo, colunas);
         params.push(idLoja);
         whereExtra += ` AND ${filtroFilialEfetivo} = $${params.length}`;
       }
 
-      // Tabelas filhas sem ID_LOJA próprio: filtra via FK para PEDIDOS
-      // filtroFilialViaFK é a coluna FK local (ex: ID_PEDIDO), sempre apontando para PEDIDOS.ID_PEDIDO
+      // Tabelas filhas sem ID_LOJA próprio: filtra pela loja do pai (PEDIDOS, NOTAS_FISCAIS...)
       if (filtroFilialViaFK && idLoja) {
+        colunas = await garantirColunaFiltro(db, nomeTabela, req.schemaName, filtroFilialViaFK, colunas);
         params.push(idLoja);
-        whereExtra += ` AND ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
+        whereExtra += ` AND ${sqlFiltroViaFK(nomeTabela, filtroFilialViaFK, params.length)}`;
       }
 
       // Política de retenção: aplica o filtro de 2 anos apenas se a coluna realmente existe.
       // Usa o cache de colunas para evitar quebrar quando o nome da coluna difere no banco.
-      if (colunaData) {
-        const colunas = await getColunasServidor(db, nomeTabela, req.schemaName);
-        if (colunas.has(colunaData)) {
-          whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`;
-        }
+      if (colunaData && colunas.has(colunaData)) {
+        whereExtra += ` AND (${colunaData} IS NULL OR ${colunaData}::text::timestamptz >= NOW() - INTERVAL '2 years')`;
       }
 
       const sql = `SELECT * FROM ${nomeTabela}
@@ -164,9 +197,7 @@ router.get('/RegistrosParaAtualizar', auth, async (req, res) => {
     // Tabela ainda não existe no servidor — retorna vazio para não bloquear o pull.
     // Será criada automaticamente no primeiro push via criarTabelaSeNecessario.
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar listar os registros para atualizar. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, `RegistrosParaAtualizar ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -206,15 +237,13 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
     res.json(rows);
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar listar os registros para deletar. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, `RegistrosParaDeletar ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
 /**
  * GET /datasnap/rest/TSMSincronizacao/StatusTabelas
- * Query params: token, idLoja, filtros (JSON: [{ nome, filtroFilial, filtroFilialViaFK }])
+ * Query params: token, idLoja, filtros (JSON: [{ nome, filtroFilial, filtroFilialViaFK }]), contar (0 = total null)
  *
  * Retorna para cada tabela: total de registros e o maior ID_ULTIMA_ATUALIZACAO_MATRIZ.
  * Usado pelo cliente para verificar se está tudo sincronizado. `filtros` restringe o
@@ -224,6 +253,8 @@ router.get('/RegistrosParaDeletar', auth, async (req, res) => {
  */
 router.get('/StatusTabelas', auth, async (req, res) => {
   const idLoja = req.query.idLoja ? parseInt(req.query.idLoja, 10) : null;
+  // contar=0: só MAX (rápido); COUNT(*) varre a tabela inteira e fica pra uma chamada separada.
+  const contar = req.query.contar !== '0';
   let filtrosPorTabela = new Map();
   try {
     const lista = JSON.parse(req.query.filtros || '[]');
@@ -259,29 +290,33 @@ router.get('/StatusTabelas', auth, async (req, res) => {
           const filtroFilialViaFK = filtrosPorTabela.get(tabela)?.filtroFilialViaFK ?? null;
           if (tabela === 'CLIENTES') {
             try {
-              const [cfg] = await query(db, `SELECT valor FROM sync_config WHERE chave = $1`, ['filtro_filial_clientes']);
-              filtroFilial = cfg?.VALOR && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.VALOR) ? cfg.VALOR : null;
+              const [cfg] = await query(db, `SELECT parametro FROM parametros WHERE chave = $1`, ['filtro_filial_clientes']);
+              filtroFilial = cfg?.PARAMETRO && /^[A-Za-z_][A-Za-z0-9_]*$/.test(cfg.PARAMETRO) ? cfg.PARAMETRO : null;
             } catch { filtroFilial = null; }
           }
 
           const params = [];
           let whereFilial = '';
           if (idLoja && filtroFilial) {
+            const colunas = await getColunasServidor(db, tabela, req.schemaName);
+            await garantirColunaFiltro(db, tabela, req.schemaName, filtroFilial, colunas);
             params.push(idLoja);
             whereFilial = ` WHERE ${filtroFilial} = $${params.length}`;
           } else if (idLoja && filtroFilialViaFK) {
+            const colunas = await getColunasServidor(db, tabela, req.schemaName);
+            await garantirColunaFiltro(db, tabela, req.schemaName, filtroFilialViaFK, colunas);
             params.push(idLoja);
-            whereFilial = ` WHERE ${filtroFilialViaFK} IN (SELECT ID_PEDIDO FROM PEDIDOS WHERE ID_LOJA = $${params.length})`;
+            whereFilial = ` WHERE ${sqlFiltroViaFK(tabela, filtroFilialViaFK, params.length)}`;
           }
 
           const rows = await query(db,
-            `SELECT COUNT(*) AS TOTAL, MAX(ID_ULTIMA_ATUALIZACAO_MATRIZ) AS MAX_ID
+            `SELECT ${contar ? 'COUNT(*)' : 'NULL'} AS TOTAL, MAX(ID_ULTIMA_ATUALIZACAO_MATRIZ) AS MAX_ID
              FROM ${tabela}${whereFilial}`,
             params
           );
           status.push({
             tabela,
-            total: rows[0].TOTAL || 0,
+            total: contar ? (rows[0].TOTAL || 0) : null,
             maxId: rows[0].MAX_ID || 0,
           });
         } catch {
@@ -295,7 +330,7 @@ router.get('/StatusTabelas', auth, async (req, res) => {
 
     res.json(resultado);
   } catch (e) {
-    res.status(400).json({ message: e.message });
+    erroServidor(res, e, `StatusTabelas ${req.schemaName}`, 'message');
   }
 });
 
@@ -336,7 +371,7 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
     res.json(rows.map(normalizarBlobs));
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({ message: e.message });
+    erroServidor(res, e, `RegistrosPaginados ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -350,176 +385,265 @@ router.get('/RegistrosPaginados', auth, async (req, res) => {
  * retorna { conflito: true, versaoServidor: {...} } para resolução manual.
  * Se forcar=true, aplica sem verificar conflito.
  */
-router.post('/ReceberRegistro', auth, async (req, res) => {
+// Complementa o erro do Postgres com a coluna/valor culpados quando ele informa (not null, tamanho, FK, unique).
+function detalheErroPg(e, registro) {
+  const partes = [];
+  if (e.column) partes.push(`coluna ${String(e.column).toUpperCase()}${registro && e.column.toUpperCase() in registro ? `="${registro[e.column.toUpperCase()]}"` : ''}`);
+  if (e.constraint) partes.push(`constraint ${e.constraint}`);
+  if (e.detail) partes.push(e.detail);
+  if (e.code === '22001' && registro) {
+    // "valor longo demais": o Postgres não diz a coluna — aponta os textos mais longos do registro.
+    const longos = Object.entries(registro).filter(([, v]) => typeof v === 'string' && v.length > 20)
+      .sort((a, b) => b[1].length - a[1].length).slice(0, 3).map(([k, v]) => `${k}(${v.length})`);
+    if (longos.length) partes.push(`textos mais longos: ${longos.join(', ')}`);
+  }
+  return partes.length ? ` [${partes.join(' | ')}]` : '';
+}
+
+/**
+ * Aplica um registro vindo da filial (upsert, deleção ou conflito). Usado pela rota unitária
+ * (ReceberRegistro) e pela de lote (ReceberRegistros). Lança em erro — quem chama formata.
+ * Retorna { ok, novoId, srvId, avisos? } | { conflito: true, versaoServidor } | { ok } (deleção).
+ */
+async function aplicarRegistroRecebido(db, { schemaName, idLoja, nomeTabela, pk, temSrvId }, { registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false }) {
+  const avisos = [];
+  const pks = Array.isArray(pk) ? pk : [pk];
+  const colunaInvalida = identificadorInvalido(Object.keys(registro));
+  if (colunaInvalida !== undefined) throw erroValidacao(`nome de coluna inválido: '${colunaInvalida}'`);
+
+  // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
+  let srvId = null;
+  if (temSrvId && !deletar) {
+    srvId = await alocarSrvId(db, { schemaName: schemaName, idLoja, nomeTabela, pks, registro });
+  }
+
+  if (deletar) {
+    await processarDelecao(db, { nomeTabela, temSrvId, pks, registro, idLoja });
+    return { ok: true };
+  }
+
+  // Garante que a tabela existe antes de qualquer query nela.
+  // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.
+  let { colunasServidor, computadas, tabelaJaExistia } =
+    await garantirColunasServidor(db, nomeTabela, schemaName, registro, pks, temSrvId);
+
+  await garantirConstraintUnica(db, { schemaName: schemaName, nomeTabela, tabelaJaExistia, temSrvId, pks, colunasServidor });
+
+  // srvIdEhPk: SRV_ID é a PK real, detectado via information_schema (cacheado) — não
+  // via tabelaJaExistia, que dava falso no 1º push e causava ON CONFLICT inválido em
+  // ID_PRODUTO nas chamadas seguintes.
+  let pkReal = await getPkServidor(db, nomeTabela, schemaName);
+  let srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
+
+  // Detecção de conflito: SRV_ID como chave só quando é a PK real da tabela.
+  // Se a tabela não existir (cache obsoleto), limpa, recria e continua com atual=[].
+  let atual;
+  ({ atual, colunasServidor } = await selecionarRegistroAtual(db,
+    { schemaName: schemaName, nomeTabela, srvIdEhPk, srvId, pks, registro, temSrvId, colunasServidor }));
+
+  // Recalcula srvIdEhPk depois do self-heal acima: se a tabela tinha sido dropada (reset
+  // de tenant com o servidor no ar) e o cache de colunas estava obsoleto (achando que a
+  // tabela ainda existia), o pkReal buscado logo acima veio de uma consulta contra uma
+  // tabela que nesse momento não existia (pkReal=null → srvIdEhPk=false), mesmo a tabela
+  // recém-recriada por selecionarRegistroAtual já tendo SRV_ID como PK real. Sem isso, o
+  // INSERT abaixo monta ON CONFLICT (<pks da filial>) — que não corresponde a nenhuma
+  // constraint da tabela nova — e quebra com "no unique or exclusion constraint".
+  pkReal = await getPkServidor(db, nomeTabela, schemaName);
+  srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
+
+  // Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha (srv_id_map foi
+  // limpo/resetado), mas já existe registro com a mesma chave de negócio — reusa o
+  // SRV_ID existente em vez de duplicar.
+  ({ srvId, atual } = await recuperarSrvIdPerdido(db,
+    { schemaName: schemaName, nomeTabela, srvIdEhPk, atual, tabelaJaExistia, pks, registro, idLoja, srvId }));
+
+  if (!forcar && atual.length > 0) {
+    const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
+    if (versaoServidor && ultimaVersaoConhecida > 0 && versaoServidor > ultimaVersaoConhecida) {
+      return { conflito: true, versaoServidor: atual[0] };
+    }
+  }
+
+  const colunas = Object.keys(registro).filter(k =>
+    registro[k] !== undefined &&
+    !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
+    !computadas.has(k) &&
+    colunasServidor.has(k)
+  );
+
+  // Tabelas migradas (SRV_ID como coluna comum): inclui srv_id no UPSERT em vez de
+  // UPDATE separado — evita disparar fn_seq_atualizacao duas vezes, o que geraria
+  // falsos conflitos no próximo pull.
+  const temSrvIdMigrado = temSrvId && srvId != null && !srvIdEhPk && colunasServidor.has('SRV_ID');
+
+  let novoId = null;
+  if (colunas.length > 0 || srvIdEhPk || temSrvIdMigrado) {
+    // SRV_ID: primeiro se PK real, último se coluna migrada; senão só as colunas do registro.
+    const colunasFinais = srvIdEhPk
+      ? ['SRV_ID', ...colunas]
+      : temSrvIdMigrado
+        ? [...colunas, 'srv_id']
+        : colunas;
+    // PostgreSQL TEXT rejeita \x00 (Firebird CHAR/VARCHAR pode ter null bytes). Firebird
+    // TIME vem como Date epoch 1970-01-01 — sem normalizar viraria string ISO inútil;
+    // convertemos para 'HH:MM:SS'.
+    const valoresFinais = colunasFinais.map(c => {
+      if (c === 'SRV_ID' || c === 'srv_id') return srvId;
+      const v = registro[c] === undefined ? null : registro[c];
+      if (typeof v === 'string') return v.replace(/\x00/g, '');
+      if (v instanceof Date) {
+        const ms = v.getTime();
+        if (ms >= 0 && ms < 86_400_000) {
+          // É um valor TIME do Firebird (epoch + HH:MM:SS sem parte de data)
+          const hh = String(Math.floor(ms / 3_600_000)).padStart(2, '0');
+          const mm = String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0');
+          const ss = String(Math.floor((ms % 60_000) / 1_000)).padStart(2, '0');
+          return `${hh}:${mm}:${ss}`;
+        }
+      }
+      return v;
+    });
+    const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
+    const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
+    // srvIdEhPk resolve conflito por SRV_ID, não pelos pks da filial (ID_CLIENTE) — por
+    // isso eles precisam entrar no UPDATE SET, senão o servidor nunca grava o PK local e
+    // reenviaria ID_CLIENTE=null em loop infinito.
+    const nonConflictCols = colunasFinais.filter(c =>
+      c !== 'SRV_ID' && (srvIdEhPk || !pks.includes(c))
+    );
+    const updateSet = nonConflictCols.length > 0
+      ? nonConflictCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
+      : `${conflictTarget} = EXCLUDED.${conflictTarget}`;
+    const sqlUpsert = `INSERT INTO ${nomeTabela} (${colunasFinais.join(', ')}) VALUES (${placeholders})
+       ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`;
+    try {
+      await execute(db, sqlUpsert, valoresFinais);
+    } catch (e) {
+      // 22P02: texto numa coluna NUMERIC do Postgres (coluna texto no Firebird). '' vira NULL; o resto é nomeado no erro.
+      if (e.code !== '22P02') throw e;
+      const numericas = new Set((await colunasTabela(db, schemaName, nomeTabela))
+        .filter(c => ['numeric', 'integer', 'bigint', 'smallint', 'double precision', 'real'].includes(c.DATA_TYPE))
+        .map(c => c.COLUMN_NAME));
+      const naoNumericos = [];
+      const vazios = [];
+      colunasFinais.forEach((c, i) => {
+        const v = valoresFinais[i];
+        if (!numericas.has(c.toUpperCase()) || typeof v !== 'string') return;
+        if (v.trim() === '') { valoresFinais[i] = null; vazios.push(c); }
+        else if (!Number.isFinite(Number(v))) naoNumericos.push(`${c}="${v}"`);
+      });
+      if (naoNumericos.length > 0) {
+        throw erroValidacao(`coluna(s) ${naoNumericos.join(', ')}: texto em coluna numérica no servidor (no Firebird a coluna é texto)`);
+      }
+      if (vazios.length > 0) {
+        const aviso = `coluna(s) ${vazios.join(', ')}: texto vazio ('') em coluna numérica no servidor — gravado como NULL`;
+        avisos.push(aviso);
+        console.warn(`[ReceberRegistro] ${schemaName}.${nomeTabela} ${pks.map(p => `${p}=${registro[p]}`).join(',')}: ${aviso}`);
+      }
+      await execute(db, sqlUpsert, valoresFinais);
+    }
+
+    dispararEfeitosPosUpsert(schemaName, { nomeTabela, atual, registro });
+
+    // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
+    if (srvIdEhPk) {
+      const [linha] = await query(db,
+        `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]
+      ).catch(() => [null]);
+      novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
+    } else {
+      const whereValores2 = pks.map(p => registro[p]);
+      const whereParts2   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
+      const [linha] = await query(db,
+        `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE ${whereParts2}`,
+        whereValores2
+      ).catch(() => [null]);
+      novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
+    }
+  }
+
+  return { ok: true, novoId, srvId, ...(avisos.length > 0 ? { avisos } : {}) };
+}
+
+// Mensagem de erro de um registro; tabela sumida limpa o cache pra o próximo push recriá-la.
+function mensagemErroRegistro(e, schemaName, nomeTabela, registro) {
+  if (isMissingTableError(e) && nomeTabela && schemaName) colunasCache.invalidate(schemaName, nomeTabela);
+  // Erro do próprio registro (dado inválido/validação nossa) vai detalhado pro client; o resto só com ID (detalhe no log).
+  if (e?.isValidation || ehErroDeDado(e)) return `Erro ao aplicar registro: ${e.message}${detalheErroPg(e, registro)}`;
+  const { mensagem, id } = erroSeguro(e, `ReceberRegistro ${schemaName}.${nomeTabela}`);
+  return `Erro ao aplicar registro: ${mensagem} (${id})`;
+}
+
+// Nome de coluna/PK vira SQL (DDL, WHERE, ON CONFLICT): só identificador simples.
+function identificadorInvalido(nomes) {
+  return nomes.find(n => typeof n !== 'string' || !NOME_VALIDO.test(n));
+}
+
+// Validação comum às duas rotas de recebimento; devolve o contexto ou { erro }.
+function contextoRecebimento(req) {
   const idLoja = parseInt(req.query.idLoja, 10);
-  const idPDV = req.query.idPDV ? parseInt(req.query.idPDV, 10) : null; // eslint-disable-line no-unused-vars
+  const { tabela, pk, temSrvId = false } = req.body || {};
+  if (!idLoja) return { erro: 'idLoja não informado' };
+  if (!tabela || !pk) return { erro: 'tabela e pk são obrigatórios' };
+  const nomeTabela = String(tabela).toUpperCase().trim();
+  if (!validarNomeTabela(nomeTabela)) return { erro: `Tabela '${nomeTabela}' não permitida` };
+  const pkInvalida = identificadorInvalido(Array.isArray(pk) ? pk : [pk]);
+  if (pkInvalida !== undefined) return { erro: `pk inválida: '${pkInvalida}'` };
   const nomeFilial = req.query.nomeFilial ? String(req.query.nomeFilial).trim() : null;
-  const { tabela, pk, registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false, temSrvId = false } = req.body || {};
+  return { schemaName: req.schemaName, idLoja, nomeTabela, pk, temSrvId, nomeFilial };
+}
 
-  if (!idLoja) {
-    return res.status(400).json({ message: 'idLoja não informado' });
-  }
-  if (!tabela || !pk || !registro) {
-    return res.status(400).json({ message: 'tabela, pk e registro são obrigatórios' });
-  }
-
-  const nomeTabela = tabela.toUpperCase().trim();
-  if (!validarNomeTabela(nomeTabela)) {
-    return res.status(400).json({ message: `Tabela '${nomeTabela}' não permitida` });
-  }
+router.post('/ReceberRegistro', auth, async (req, res) => {
+  const ctx = contextoRecebimento(req);
+  if (ctx.erro) return res.status(400).json({ message: ctx.erro });
+  const { registro, ultimaVersaoConhecida = 0, forcar = false, deletar = false } = req.body;
+  if (!registro) return res.status(400).json({ message: 'tabela, pk e registro são obrigatórios' });
 
   try {
     await withTenantConnection(req.schemaName, async (db) => {
-      try { await registrarFilial(db, idLoja, nomeFilial); } catch { /* não bloqueia a resposta */ }
-
-      if (await isFilialBloqueada(idLoja, db)) {
-        res.status(401).send();
-        return;
-      }
-
-      const pks = Array.isArray(pk) ? pk : [pk];
-
-      // SRV_ID é a PK real no PostgreSQL p/ tabelas srvId — obtido antes de qualquer operação.
-      let srvId = null;
-      if (temSrvId && !deletar) {
-        srvId = await alocarSrvId(db, { schemaName: req.schemaName, idLoja, nomeTabela, pks, registro });
-      }
-
-      if (deletar) {
-        await processarDelecao(db, { nomeTabela, temSrvId, pks, registro, idLoja });
-        res.json({ ok: true });
-        return;
-      }
-
-      // Garante que a tabela existe antes de qualquer query nela.
-      // Na carga inicial, a tabela é criada com tipos inferidos do primeiro registro.
-      let { colunasServidor, computadas, tabelaJaExistia } =
-        await garantirColunasServidor(db, nomeTabela, req.schemaName, registro, pks, temSrvId);
-
-      await garantirConstraintUnica(db, { schemaName: req.schemaName, nomeTabela, tabelaJaExistia, temSrvId, pks, colunasServidor });
-
-      // srvIdEhPk: SRV_ID é a PK real, detectado via information_schema (cacheado) — não
-      // via tabelaJaExistia, que dava falso no 1º push e causava ON CONFLICT inválido em
-      // ID_PRODUTO nas chamadas seguintes.
-      let pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
-      let srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
-
-      // Detecção de conflito: SRV_ID como chave só quando é a PK real da tabela.
-      // Se a tabela não existir (cache obsoleto), limpa, recria e continua com atual=[].
-      let atual;
-      ({ atual, colunasServidor } = await selecionarRegistroAtual(db,
-        { schemaName: req.schemaName, nomeTabela, srvIdEhPk, srvId, pks, registro, temSrvId, colunasServidor }));
-
-      // Recalcula srvIdEhPk depois do self-heal acima: se a tabela tinha sido dropada (reset
-      // de tenant com o servidor no ar) e o cache de colunas estava obsoleto (achando que a
-      // tabela ainda existia), o pkReal buscado logo acima veio de uma consulta contra uma
-      // tabela que nesse momento não existia (pkReal=null → srvIdEhPk=false), mesmo a tabela
-      // recém-recriada por selecionarRegistroAtual já tendo SRV_ID como PK real. Sem isso, o
-      // INSERT abaixo monta ON CONFLICT (<pks da filial>) — que não corresponde a nenhuma
-      // constraint da tabela nova — e quebra com "no unique or exclusion constraint".
-      pkReal = await getPkServidor(db, nomeTabela, req.schemaName);
-      srvIdEhPk = temSrvId && srvId != null && pkReal != null && pkReal.length === 1 && pkReal[0] === 'SRV_ID';
-
-      // Recuperação de mapeamento perdido: SRV_ID recém-alocado sem linha (srv_id_map foi
-      // limpo/resetado), mas já existe registro com a mesma chave de negócio — reusa o
-      // SRV_ID existente em vez de duplicar.
-      ({ srvId, atual } = await recuperarSrvIdPerdido(db,
-        { schemaName: req.schemaName, nomeTabela, srvIdEhPk, atual, tabelaJaExistia, pks, registro, idLoja, srvId }));
-
-      if (!forcar && atual.length > 0) {
-        const versaoServidor = atual[0].ID_ULTIMA_ATUALIZACAO_MATRIZ;
-        if (versaoServidor && ultimaVersaoConhecida > 0 && versaoServidor > ultimaVersaoConhecida) {
-          res.json({ conflito: true, versaoServidor: atual[0] });
-          return;
-        }
-      }
-
-      const colunas = Object.keys(registro).filter(k =>
-        registro[k] !== undefined &&
-        !COLUNAS_IGNORADAS_SERVIDOR.has(k) &&
-        !computadas.has(k) &&
-        colunasServidor.has(k)
-      );
-
-      // Tabelas migradas (SRV_ID como coluna comum): inclui srv_id no UPSERT em vez de
-      // UPDATE separado — evita disparar fn_seq_atualizacao duas vezes, o que geraria
-      // falsos conflitos no próximo pull.
-      const temSrvIdMigrado = temSrvId && srvId != null && !srvIdEhPk && colunasServidor.has('SRV_ID');
-
-      let novoId = null;
-      if (colunas.length > 0 || srvIdEhPk || temSrvIdMigrado) {
-        // SRV_ID: primeiro se PK real, último se coluna migrada; senão só as colunas do registro.
-        const colunasFinais = srvIdEhPk
-          ? ['SRV_ID', ...colunas]
-          : temSrvIdMigrado
-            ? [...colunas, 'srv_id']
-            : colunas;
-        // PostgreSQL TEXT rejeita \x00 (Firebird CHAR/VARCHAR pode ter null bytes). Firebird
-        // TIME vem como Date epoch 1970-01-01 — sem normalizar viraria string ISO inútil;
-        // convertemos para 'HH:MM:SS'.
-        const valoresFinais = colunasFinais.map(c => {
-          if (c === 'SRV_ID' || c === 'srv_id') return srvId;
-          const v = registro[c] === undefined ? null : registro[c];
-          if (typeof v === 'string') return v.replace(/\x00/g, '');
-          if (v instanceof Date) {
-            const ms = v.getTime();
-            if (ms >= 0 && ms < 86_400_000) {
-              // É um valor TIME do Firebird (epoch + HH:MM:SS sem parte de data)
-              const hh = String(Math.floor(ms / 3_600_000)).padStart(2, '0');
-              const mm = String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0');
-              const ss = String(Math.floor((ms % 60_000) / 1_000)).padStart(2, '0');
-              return `${hh}:${mm}:${ss}`;
-            }
-          }
-          return v;
-        });
-        const placeholders = colunasFinais.map((_, i) => `$${i + 1}`).join(', ');
-        const conflictTarget = srvIdEhPk ? 'SRV_ID' : pks.join(', ');
-        // srvIdEhPk resolve conflito por SRV_ID, não pelos pks da filial (ID_CLIENTE) — por
-        // isso eles precisam entrar no UPDATE SET, senão o servidor nunca grava o PK local e
-        // reenviaria ID_CLIENTE=null em loop infinito.
-        const nonConflictCols = colunasFinais.filter(c =>
-          c !== 'SRV_ID' && (srvIdEhPk || !pks.includes(c))
-        );
-        const updateSet = nonConflictCols.length > 0
-          ? nonConflictCols.map(c => `${c} = EXCLUDED.${c}`).join(', ')
-          : `${conflictTarget} = EXCLUDED.${conflictTarget}`;
-        await execute(db,
-          `INSERT INTO ${nomeTabela} (${colunasFinais.join(', ')}) VALUES (${placeholders})
-           ON CONFLICT (${conflictTarget}) DO UPDATE SET ${updateSet}`,
-          valoresFinais
-        );
-
-        dispararEfeitosPosUpsert(req.schemaName, { nomeTabela, atual, registro });
-
-        // Lê o ID atribuído pelo trigger para que o cliente possa detectar o eco no próximo pull
-        if (srvIdEhPk) {
-          const [linha] = await query(db,
-            `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE SRV_ID = $1`, [srvId]
-          ).catch(() => [null]);
-          novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
-        } else {
-          const whereValores2 = pks.map(p => registro[p]);
-          const whereParts2   = pks.map((p, i) => `${p} = $${i + 1}`).join(' AND ');
-          const [linha] = await query(db,
-            `SELECT ID_ULTIMA_ATUALIZACAO_MATRIZ FROM ${nomeTabela} WHERE ${whereParts2}`,
-            whereValores2
-          ).catch(() => [null]);
-          novoId = linha?.ID_ULTIMA_ATUALIZACAO_MATRIZ ?? null;
-        }
-      }
-
-      res.json({ ok: true, novoId, srvId });
+      try { await registrarFilial(db, ctx.idLoja, ctx.nomeFilial); } catch { /* não bloqueia a resposta */ }
+      if (await isFilialBloqueada(ctx.idLoja, db)) return res.status(401).send();
+      res.json(await aplicarRegistroRecebido(db, ctx, { registro, ultimaVersaoConhecida, forcar, deletar }));
     });
   } catch (e) {
-    if (isMissingTableError(e)) {
-      // Garante que o próximo push vai recriar a tabela (limpa cache obsoleto).
-      const nomeTabela = ((req.body?.tabela) || '').toUpperCase().trim();
-      if (nomeTabela && req.schemaName) {
-        colunasCache.invalidate(req.schemaName, nomeTabela);
+    res.status(400).json({ message: mensagemErroRegistro(e, req.schemaName, ctx.nomeTabela, registro) });
+  }
+});
+
+const MAX_LOTE_RECEBER = 200;
+
+/**
+ * POST /datasnap/rest/TSMSincronizacao/ReceberRegistros
+ * Body: { tabela, pk, temSrvId, registros: [{ registro, ultimaVersaoConhecida, deletar, temSrvId? }] }
+ * Lote de uma tabela, aplicado registro a registro na mesma conexão: um erro não derruba os
+ * outros. Resposta: { resultados: [...] } na mesma ordem — cada item como o de ReceberRegistro
+ * ou { erro: 'mensagem' }.
+ */
+router.post('/ReceberRegistros', auth, async (req, res) => {
+  const ctx = contextoRecebimento(req);
+  if (ctx.erro) return res.status(400).json({ message: ctx.erro });
+  const itens = req.body.registros;
+  if (!Array.isArray(itens) || itens.length === 0) return res.status(400).json({ message: 'registros (array não vazio) é obrigatório' });
+  if (itens.length > MAX_LOTE_RECEBER) return res.status(400).json({ message: `Lote acima do máximo de ${MAX_LOTE_RECEBER} registros` });
+
+  try {
+    await withTenantConnection(req.schemaName, async (db) => {
+      try { await registrarFilial(db, ctx.idLoja, ctx.nomeFilial); } catch { /* não bloqueia a resposta */ }
+      if (await isFilialBloqueada(ctx.idLoja, db)) return res.status(401).send();
+      const resultados = [];
+      for (const item of itens) {
+        if (!item?.registro) { resultados.push({ erro: 'registro ausente no item do lote' }); continue; }
+        try {
+          // temSrvId por item: deleções vão sem ele, igual ao envio unitário.
+          resultados.push(await aplicarRegistroRecebido(db, { ...ctx, temSrvId: item.temSrvId ?? ctx.temSrvId }, { ...item, forcar: false }));
+        } catch (e) {
+          resultados.push({ erro: mensagemErroRegistro(e, req.schemaName, ctx.nomeTabela, item.registro) });
+        }
       }
-    }
-    res.status(400).json({ message: `Erro ao aplicar registro: ${e.message}` });
+      res.json({ resultados });
+    });
+  } catch (e) {
+    erroServidor(res, e, `ReceberRegistros ${req.schemaName}.${ctx.nomeTabela}`, 'message');
   }
 });
 
@@ -533,6 +657,21 @@ const TIPO_PG_POR_TAG = {
   binario: 'BYTEA',
 };
 
+// Tabela já existe: cria as colunas que faltam com o tipo real do Firebird e aponta texto no Firebird × numérico aqui.
+async function completarColunas(db, schemaName, nomeTabela, colunasServidor, colunasTipadas) {
+  const faltantes = colunasTipadas.filter(c => !COLUNAS_IGNORADAS_SERVIDOR.has(c.nome) && !colunasServidor.has(c.nome));
+  for (const { nome, tipoPg } of faltantes) {
+    await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${nome} ${tipoPg}`);
+  }
+  if (faltantes.length > 0) colunasCache.invalidate(schemaName, nomeTabela, ['colunas', 'pk']);
+
+  const tipoPg = new Map((await colunasTabela(db, schemaName, nomeTabela)).map(c => [c.COLUMN_NAME, c.DATA_TYPE]));
+  const divergentes = colunasTipadas
+    .filter(c => c.tipoPg === 'TEXT' && tipoPg.get(c.nome) === 'numeric')
+    .map(c => c.nome);
+  return { criada: false, adicionadas: faltantes.map(c => c.nome), divergentes };
+}
+
 /**
  * POST /datasnap/rest/TSMSincronizacao/GarantirTabela
  * Body: { tabela, colunas: [{ nome, tipo }], pks, temSrvId }
@@ -540,8 +679,8 @@ const TIPO_PG_POR_TAG = {
  * Cria a tabela no servidor com a estrutura correta mesmo sem nenhum registro pra inferir
  * tipo por valor — necessário pra tabelas que existem na filial mas estão vazias (instalação
  * nova, sem dados ainda): sem isso, criarTabelaSeNecessario só roda dentro de ReceberRegistro,
- * que nunca é chamado se não há nada pra empurrar, e a tabela nunca nasce no servidor. No-op
- * se a tabela já existe (idempotente, mesma checagem de colunasServidor usada em ReceberRegistro).
+ * que nunca é chamado se não há nada pra empurrar, e a tabela nunca nasce no servidor. Se a
+ * tabela já existe, só completa as colunas faltantes (ver completarColunas).
  */
 router.post('/GarantirTabela', auth, async (req, res) => {
   const { tabela, colunas, pks, temSrvId = false } = req.body || {};
@@ -556,6 +695,8 @@ router.post('/GarantirTabela', auth, async (req, res) => {
   }
 
   const pksArr = (Array.isArray(pks) ? pks : [pks]).map(p => String(p).toUpperCase().trim());
+  const pkInvalida = identificadorInvalido(pksArr);
+  if (pkInvalida !== undefined) return res.status(400).json({ message: `pk inválida: '${pkInvalida}'` });
   const colunasTipadas = colunas
     .map(c => ({ nome: String(c?.nome || '').toUpperCase().trim(), tipoPg: TIPO_PG_POR_TAG[c?.tipo] || 'TEXT' }))
     .filter(c => /^[A-Za-z_][A-Za-z0-9_]*$/.test(c.nome));
@@ -565,16 +706,18 @@ router.post('/GarantirTabela', auth, async (req, res) => {
   }
 
   try {
-    await withTenantConnection(req.schemaName, async (db) => {
+    const resultado = await withTenantConnection(req.schemaName, async (db) => {
       const colunasServidor = await getColunasServidor(db, nomeTabela, req.schemaName);
       if (colunasServidor.size === 0) {
         await criarTabelaSeNecessario(db, nomeTabela, req.schemaName, colunasTipadas, pksArr, temSrvId);
         colunasCache.invalidate(req.schemaName, nomeTabela);
+        return { criada: true, adicionadas: [], divergentes: [] };
       }
+      return completarColunas(db, req.schemaName, nomeTabela, colunasServidor, colunasTipadas);
     });
-    res.json({ ok: true });
+    res.json({ ok: true, ...resultado });
   } catch (e) {
-    res.status(500).json({ message: `Erro ao garantir tabela: ${e.message}` });
+    erroServidor(res, e, `GarantirTabela ${req.schemaName}.${nomeTabela}`, 'message');
   }
 });
 
@@ -603,7 +746,7 @@ router.post('/AtualizarRegime', auth, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -623,7 +766,7 @@ router.post('/AtualizarPlano', auth, async (req, res) => {
     );
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -636,7 +779,7 @@ router.get('/StatusReset', auth, async (req, res) => {
     );
     res.json(rows[0] ?? {});
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -644,7 +787,7 @@ router.get('/StatusReset', auth, async (req, res) => {
 // Mantenha em sincronia manual com src/client/paramsSyncMap.js (deploys separados).
 const CHAVES_ACEITAS = new Set([
   'codigo_interno_unico', 'utilizar_codigo_interno', 'venda_saldo_negativo',
-  'modalidade_frete', 'forma_preenchimento_pedido',
+  'modalidade_frete', 'forma_preenchimento_pedido', 'serie_nfe', 'usa_lista_precos', 'desconto_por_item',
 ]);
 
 // Subconjunto de CHAVES_ACEITAS que reconcilia pro mesmo valor em todos os PDVs de um
@@ -653,7 +796,7 @@ const CHAVES_ACEITAS = new Set([
 // sincronia manual com `global: true` em paramsSyncMap.js.
 const CHAVES_GLOBAIS = new Set([
   'forma_preenchimento_pedido', 'venda_saldo_negativo',
-  'codigo_interno_unico', 'utilizar_codigo_interno',
+  'codigo_interno_unico', 'utilizar_codigo_interno', 'serie_nfe',
 ]);
 
 router.get('/BuscarParametros', auth, async (req, res) => {
@@ -661,14 +804,14 @@ router.get('/BuscarParametros', auth, async (req, res) => {
     const chaves = [...CHAVES_GLOBAIS];
     const placeholders = chaves.map((_, i) => `$${i + 1}`).join(', ');
     const parametros = await withTenantConnection(req.schemaName, async (db) => {
-      const rows = await query(db, `SELECT chave, valor FROM sync_config WHERE chave IN (${placeholders})`, chaves);
-      // valor IS NULL vira chave ausente no JSON (não `null`) — o cliente usa
+      const rows = await query(db, `SELECT chave, parametro FROM parametros WHERE chave IN (${placeholders})`, chaves);
+      // parametro IS NULL vira chave ausente no JSON (não `null`) — o cliente usa
       // "servidor === undefined" pra saber que o servidor ainda não tem valor.
-      return Object.fromEntries(rows.filter(r => r.VALOR !== null).map(r => [r.CHAVE, r.VALOR]));
+      return Object.fromEntries(rows.filter(r => r.PARAMETRO !== null).map(r => [r.CHAVE, r.PARAMETRO]));
     });
     res.json({ parametros });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 
@@ -678,16 +821,37 @@ router.post('/AtualizarParametros', auth, async (req, res) => {
   const schema = req.schemaName;
   try {
     await withTenantConnection(schema, async (db) => {
-      for (const [chave, valor] of Object.entries(parametros)) {
+      for (const [chave, dado] of Object.entries(parametros)) {
         if (!CHAVES_ACEITAS.has(chave)) continue;
-        const valorStr = String(valor);
-        const rows = await query(db, 'SELECT valor FROM sync_config WHERE chave = $1', [chave]);
-        const dadosAntes = rows.length > 0 ? { chave, valor: rows[0].VALOR } : null;
-        if (dadosAntes?.valor === valorStr) continue;
+        // Cliente antigo manda só o valor (string/número); cliente novo manda um objeto
+        // com os campos descritivos também (id_parametro, nome_da_tabela, descricao,
+        // observacoes), lidos da linha inteira do PARAMETROS no Firebird — não só a coluna
+        // PARAMETRO. Mantém compatível com client.exe ainda não recompilado (deploys
+        // separados entre cliente e servidor).
+        const ehObjeto     = dado && typeof dado === 'object';
+        const valorStr     = String(ehObjeto ? dado.valor : dado);
+        const idParametro  = ehObjeto ? (dado.id_parametro ?? null) : null;
+        const nomeDaTabela = ehObjeto ? (dado.nome_da_tabela ?? null) : null;
+        const descricao    = ehObjeto ? (dado.descricao ?? null) : null;
+        const observacoes  = ehObjeto ? (dado.observacoes ?? null) : null;
+
+        const rows = await query(db, 'SELECT parametro FROM parametros WHERE chave = $1', [chave]);
+        const dadosAntes = rows.length > 0 ? { chave, valor: rows[0].PARAMETRO } : null;
+        // Cliente antigo (sem objeto): mantém o atalho de pular write sem mudança real.
+        // Cliente novo: sempre grava, pra descrição/observações no Firebird não ficarem
+        // desatualizadas no Postgres só porque o valor não mudou.
+        if (!ehObjeto && dadosAntes?.valor === valorStr) continue;
+
         await execute(db,
-          `INSERT INTO sync_config (chave, valor) VALUES ($1, $2)
-           ON CONFLICT (chave) DO UPDATE SET valor = EXCLUDED.valor`,
-          [chave, valorStr]
+          `INSERT INTO parametros (chave, id_parametro, nome_da_tabela, descricao, parametro, observacoes)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (chave) DO UPDATE SET
+             parametro      = EXCLUDED.parametro,
+             id_parametro   = COALESCE(EXCLUDED.id_parametro, parametros.id_parametro),
+             nome_da_tabela = COALESCE(EXCLUDED.nome_da_tabela, parametros.nome_da_tabela),
+             descricao      = COALESCE(EXCLUDED.descricao, parametros.descricao),
+             observacoes    = COALESCE(EXCLUDED.observacoes, parametros.observacoes)`,
+          [chave, idParametro, nomeDaTabela, descricao, valorStr, observacoes]
         );
         registrarAuditLog(req, schema, 'SYNC_CONFIG', dadosAntes ? 'UPDATE' : 'INSERT', chave,
           { chave, valor: valorStr, _fonte: 'sync_client' }, dadosAntes);
@@ -695,7 +859,7 @@ router.post('/AtualizarParametros', auth, async (req, res) => {
     });
     res.json({ ok: true });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

@@ -5,9 +5,47 @@ const { gerarNovoPK: utilGerarPK } = require('#client/infrastructure/firebird/db
 const { aplicarRegistroLocal } = require('#client/application/syncEngine/resolverConflito.js');
 const { enviarRegistro } = require('#client/http.js');
 const { renderCampos } = require('#client/interfaces/webui/viewHelpers.js');
+const { camposDivergentes } = require('#client/domain/conflitos.js');
+const TABELAS = require('#client/domain/tabelas.js');
 
 function criarConflitosRouter(contexto) {
   const router = express.Router();
+
+  const _opcoesDiff = c => ({ idLoja: contexto.idLoja, configTabela: TABELAS.find(t => t.nome === c.tabela) });
+  // Só conta com as duas versões presentes — conflito antigo sem versaoLocal precisa de decisão manual.
+  const _semDiferenca = c => c.versaoLocal && c.versaoServidor
+    && camposDivergentes(c.versaoLocal, c.versaoServidor, _opcoesDiff(c)).length === 0;
+
+  // Descarta conflitos sem diferença real: registra a versão do servidor e não mexe em dado nenhum.
+  router.post('/conflitos/descartar-sem-diferenca', async (_req, res) => {
+    const alvos = listarPendentes().filter(_semDiferenca);
+    if (alvos.length === 0) return res.json({ ok: true, descartados: 0 });
+    let db;
+    try { db = await getConnection(); } catch (e) {
+      return res.status(503).json({ ok: false, message: `Firebird indisponível: ${e.message}` });
+    }
+    let descartados = 0;
+    try {
+      for (const c of alvos) {
+        const versao = c.versaoServidor.ID_ULTIMA_ATUALIZACAO_MATRIZ;
+        if (versao) {
+          await dbExecute(db,
+            `UPDATE OR INSERT INTO SYNC_VERSOES_SERVIDOR (NOME_TABELA, PK_VALOR, ID_ULTIMA_ATUALIZACAO_MATRIZ)
+             VALUES (?, ?, ?) MATCHING (NOME_TABELA, PK_VALOR)`,
+            [c.tabela, c.pkValor, versao]
+          );
+        }
+        resolverConflito(c.id, 'sem_diferenca');
+        descartados++;
+      }
+      console.log(`[Conflitos] ${descartados} conflito(s) sem diferença real descartado(s) pela web UI`);
+      res.json({ ok: true, descartados });
+    } catch (e) {
+      res.status(500).json({ ok: false, message: `${e.message} (${descartados} já descartado(s))` });
+    } finally {
+      await closeConnection(db);
+    }
+  });
 
   // ── CONFLITOS ────────────────────────────────────────────────────────────
   router.get('/', (req, res) => {
@@ -44,10 +82,11 @@ function criarConflitosRouter(contexto) {
       return `<div style="display:flex;align-items:center;gap:6px;margin-top:20px;flex-wrap:wrap">${partes.join('')}<span style="margin-left:8px;font-size:12px;color:#888">${inicio + 1}–${fim} de ${total}</span>${irParaForm}</div>`;
     })();
 
-    const conflitos = lista.map(c => ({ ...c, rendered: renderCampos(c.versaoLocal, c.versaoServidor, c.id) }));
+    const conflitos = lista.map(c => ({ ...c, rendered: renderCampos(c.versaoLocal, c.versaoServidor, c.id, _opcoesDiff(c)) }));
 
     res.render('conflitos', {
       conflitos, numPendentes: pendentes.length,
+      numSemDiferenca: pendentes.filter(_semDiferenca).length, idLoja: contexto.idLoja,
       total, totalGeral, pagina, totalPaginas, inicio,
       mostrarResolvidos, paginacaoHTML,
     });

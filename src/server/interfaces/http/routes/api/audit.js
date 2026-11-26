@@ -10,6 +10,7 @@ const authJwt         = require('#server/interfaces/http/middleware/authJwt.js')
 const { requireModulo } = require('#server/interfaces/http/middleware/requireModulo.js');
 const { checkSchema } = require('#server/interfaces/http/middleware/checkSchema.js');
 const { pool }        = require('#server/infrastructure/db.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /* ── GET /api/:schema/audit-log ── */
 router.get('/:schema/audit-log', authJwt, checkSchema, requireModulo('auditoria', 'r'), async (req, res) => {
@@ -68,7 +69,7 @@ router.get('/:schema/audit-log', authJwt, checkSchema, requireModulo('auditoria'
 
     res.json({ registros: rows.rows, total: parseInt(countRow.rows[0].count) });
   } catch (e) {
-    res.status(500).json({ erro: e.message });
+    erroServidor(res, e);
   }
 });
 

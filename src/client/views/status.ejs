@@ -16,6 +16,9 @@
     &nbsp;|&nbsp;
     <a href="/" style="font-size:12px">Ver conflitos</a>
   </p>
+  <p id="totais-info" style="margin:-8px 0 16px;font-size:12px;color:#888">
+    Contando registros (servidor e local)… a tabela já pode ser usada.
+  </p>
 
   <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.1)">
     <thead style="background:#f0f0f0;font-size:12px;text-transform:uppercase;color:#555">
@@ -31,10 +34,10 @@
     </thead>
     <tbody style="font-size:13px">
       <% for (const t of tabelas) { %>
-        <tr>
+        <tr data-tabela="<%= t.nome %>">
           <td><%= t.nome %></td>
-          <td style="text-align:right"><%= t.totalServidor != null ? t.totalServidor : '—' %></td>
-          <td style="text-align:right"><%= t.totalLocal || '—' %></td>
+          <td style="text-align:right" data-total="servidor"><%= t.totalServidor != null ? t.totalServidor : '…' %></td>
+          <td style="text-align:right" data-total="local">…</td>
           <td style="text-align:right"><%= t.maxId != null ? t.maxId : '—' %></td>
           <td style="text-align:right"><%= t.cursorLocal || 0 %></td>
           <td style="text-align:right;color:#e74c3c;font-weight:bold"><%= t.pendentesEnvio > 0 ? t.pendentesEnvio : '—' %></td>
@@ -43,6 +46,31 @@
       <% } %>
     </tbody>
   </table>
+
+  <script>
+    // COUNT(*) é lento em banco grande: preenche Servidor/Local depois que a página abriu.
+    async function carregarTotais(recalcular) {
+      const info = document.getElementById('totais-info');
+      info.textContent = 'Contando registros (servidor e local)… a tabela já pode ser usada.';
+      try {
+        const r = await fetch('/status/totais' + (recalcular ? '?recalcular=1' : ''));
+        const d = await r.json();
+        if (!r.ok) throw new Error(d.erro || r.status);
+        document.querySelectorAll('tr[data-tabela]').forEach(tr => {
+          const nome = tr.dataset.tabela;
+          const fmt = v => v == null ? '—' : String(v);
+          tr.querySelector('[data-total="servidor"]').textContent = fmt(d.servidor[nome]);
+          tr.querySelector('[data-total="local"]').textContent = fmt(d.local[nome]);
+        });
+        info.innerHTML = 'Totais contados às ' + new Date(d.calculadoEm).toLocaleTimeString() +
+          ' &nbsp;<a href="#" onclick="carregarTotais(true);return false">Recontar</a>';
+      } catch (e) {
+        info.innerHTML = 'Não foi possível contar os registros: ' + String(e.message).replace(/[<>&]/g, '') +
+          ' &nbsp;<a href="#" onclick="carregarTotais(true);return false">Tentar de novo</a>';
+      }
+    }
+    carregarTotais(false);
+  </script>
 
 <% } %>
 

@@ -3,6 +3,7 @@ const router = express.Router();
 const auth = require('#server/interfaces/http/middleware/auth.js');
 const { withTenantConnection, query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
 const { isFilialBloqueada } = require('#server/interfaces/http/middleware/filialBloqueada.js');
+const { erroServidor } = require('#server/interfaces/http/erroServidor.js');
 
 /**
  * GET /datasnap/rest/TSMPedidos/getPedidos
@@ -51,9 +52,7 @@ router.get('/getPedidos', auth, async (req, res) => {
       res.json(rows);
     });
   } catch (e) {
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar buscar os pedidos. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 
@@ -99,9 +98,7 @@ router.get('/getPedidosSincronizadosByFilial', auth, async (req, res) => {
     res.json(rows.map((r) => ({ idPedido: r.ID_PEDIDO_LOJA })));
   } catch (e) {
     if (isMissingTableError(e)) return res.json([]);
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar buscar os pedidos. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 
@@ -159,9 +156,7 @@ router.post('/updatePedido', auth, async (req, res) => {
       }
     });
   } catch (e) {
-    res.status(400).json({
-      message: `Ocorreu um erro ao tentar sincronizar o pedido. Erro: ${e.message}`,
-    });
+    erroServidor(res, e, undefined, 'message');
   }
 });
 

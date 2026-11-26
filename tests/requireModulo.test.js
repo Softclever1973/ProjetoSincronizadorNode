@@ -52,7 +52,8 @@ describe('requireModulo', () => {
     expect(pool.query).toHaveBeenCalledWith(
       'SELECT plano FROM public.sync_tenants WHERE schema_name = $1', ['empresa_kr']
     );
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('SAFIRA1', 'dono', 'financeiro');
+    // 4º argumento: schema, pro override por empresa.
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('SAFIRA1', 'dono', 'financeiro', 'empresa_kr');
     expect(next).toHaveBeenCalled();
   });
 
@@ -81,23 +82,64 @@ describe('requireModuloDaTabela', () => {
 
     await middleware(req, res, next);
 
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'produtos');
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'produtos', 'empresa_kr');
     expect(res.status).toHaveBeenCalledWith(403);
     expect(next).not.toHaveBeenCalled();
   });
 
-  test('tabela não mapeada chama next() sem tocar pool nem cache', async () => {
-    const middleware = requireModuloDaTabela('w');
-    const req = { params: { schema: 'empresa_kr', tabela: 'AUX_GENERICA' }, userRoles: { empresa_kr: 'vendedor' } };
+  async function rodar(nivelExigido, tabela, role) {
+    const req = { params: { schema: 'empresa_kr', tabela }, userRoles: { empresa_kr: role } };
     const res = mockRes();
     const next = jest.fn();
+    await requireModuloDaTabela(nivelExigido)(req, res, next);
+    return { res, next };
+  }
 
-    await middleware(req, res, next);
+  test('tabela não mapeada: leitura liberada sem tocar pool nem cache', async () => {
+    const { res, next } = await rodar('r', 'AUX_GENERICA', 'vendedor');
 
     expect(next).toHaveBeenCalled();
     expect(res.status).not.toHaveBeenCalled();
     expect(pool.query).not.toHaveBeenCalled();
     expect(obterNivelEfetivo).not.toHaveBeenCalled();
+  });
+
+  test.each([['vendedor', false], ['gerente', false], ['dono', true]])(
+    'tabela não mapeada: gravação por %s -> autorizado=%s', async (role, autorizado) => {
+      const { res, next } = await rodar('w', 'AUX_GENERICA', role);
+
+      if (autorizado) expect(next).toHaveBeenCalled();
+      else { expect(res.status).toHaveBeenCalledWith(403); expect(next).not.toHaveBeenCalled(); }
+      expect(obterNivelEfetivo).not.toHaveBeenCalled();
+    });
+
+  test('VENDEDORES: leitura liberada, gravação negada até para o dono (vendedor nasce no Sirius)', async () => {
+    expect((await rodar('r', 'VENDEDORES', 'vendedor')).next).toHaveBeenCalled();
+    expect(obterNivelEfetivo).not.toHaveBeenCalled();
+
+    for (const role of ['vendedor', 'gerente', 'dono']) {
+      const { res, next } = await rodar('w', 'VENDEDORES', role);
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(next).not.toHaveBeenCalled();
+    }
+  });
+
+  test.each(['parametros', 'SRV_ID_MAP', 'sync_filiais', 'filiais_bloqueadas', 'registros_deletados'])(
+    'tabela interna %s: 403 até para o dono, leitura ou gravação', async tabela => {
+      for (const nivel of ['r', 'w']) {
+        const { res, next } = await rodar(nivel, tabela, 'dono');
+        expect(res.status).toHaveBeenCalledWith(403);
+        expect(next).not.toHaveBeenCalled();
+      }
+    });
+
+  test('A_RECEBER e A_PAGAR seguem o módulo financeiro', async () => {
+    pool.query.mockResolvedValue({ rows: [{ plano: 'LITE1' }] });
+    obterNivelEfetivo.mockResolvedValue('--');
+    for (const tabela of ['A_RECEBER', 'A_PAGAR']) {
+      expect((await rodar('r', tabela, 'vendedor')).res.status).toHaveBeenCalledWith(403);
+      expect(obterNivelEfetivo).toHaveBeenLastCalledWith('LITE1', 'vendedor', 'financeiro', 'empresa_kr');
+    }
   });
 
   test('comparação do nome da tabela é case-insensitive', async () => {
@@ -110,7 +152,7 @@ describe('requireModuloDaTabela', () => {
 
     await middleware(req, res, next);
 
-    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'pedidos');
+    expect(obterNivelEfetivo).toHaveBeenCalledWith('LITE1', 'vendedor', 'pedidos', 'empresa_kr');
     expect(next).toHaveBeenCalled();
   });
 });

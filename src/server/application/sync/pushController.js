@@ -1,6 +1,6 @@
 const { query, execute, isMissingTableError } = require('#server/infrastructure/db.js');
 const { colunasCache, getColunasServidor, getColunasComputadas, seqsSrvIdInicializadas, constraintsUqAdicionadas } = require('#server/infrastructure/cache/tenantCache.js');
-const { criarTabelaSeNecessario, COLUNAS_IGNORADAS_SERVIDOR } = require('#server/infrastructure/repositories/colunasRepository.js');
+const { criarTabelaSeNecessario, exigirIdentificadores, COLUNAS_IGNORADAS_SERVIDOR } = require('#server/infrastructure/repositories/colunasRepository.js');
 const { chaveNegocioTabela, colunasTipadasDeRegistro } = require('#server/domain/schema.js');
 const { gerarContasReceberDoPedido } = require('#server/application/financeiro/gerarContasReceberDoPedido.js');
 
@@ -145,6 +145,7 @@ async function garantirColunasServidor(db, nomeTabela, schemaName, registro, pks
   const colunasFaltantes = colunasTipadasDeRegistro(registro)
     .filter(({ nome }) => !COLUNAS_IGNORADAS_SERVIDOR.has(nome) && !colunasServidor.has(nome));
   if (colunasFaltantes.length > 0) {
+    exigirIdentificadores([nomeTabela, ...colunasFaltantes.map(c => c.nome)]);
     for (const { nome, tipoPg } of colunasFaltantes) {
       await execute(db, `ALTER TABLE ${nomeTabela} ADD COLUMN IF NOT EXISTS ${nome} ${tipoPg}`);
     }
